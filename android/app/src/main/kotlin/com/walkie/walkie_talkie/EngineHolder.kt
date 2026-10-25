@@ -26,6 +26,7 @@ object EngineHolder {
         val app = context.applicationContext
         val e = FlutterEngine(app)
         NetUpdateBridge(app).attach(e)
+        RelayBridge(app).attach(e)
         BgBridge.attach(app, e)
         e.dartExecutor.executeDartEntrypoint(DartExecutor.DartEntrypoint.createDefault())
         FlutterEngineCache.getInstance().put(ENGINE_ID, e)

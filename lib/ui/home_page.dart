@@ -146,6 +146,7 @@ class _HomePageState extends State<HomePage> {
                   onDismiss: () => c.dismissRing(r),
                 ),
               _TransportBar(transports: c.transports),
+              _InternetStatusLine(controller: c),
               _DebugBar(
                 transports: c.transports,
                 playbackDropped: c.playbackDropped,
@@ -767,6 +768,7 @@ class _PeerList extends StatelessWidget {
                       fontWeight: FontWeight.w600,
                     ),
                   ),
+                _PeerLinks(peer: p, now: now, timeout: linkTimeout),
                 Text(
                   peerDebugLine(p, now),
                   style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
@@ -1030,4 +1032,99 @@ Future<void> showPrivacySheet(BuildContext context, WalkieController c) async {
       },
     ),
   );
+}
+
+/// "Internet: connected via mobile data (brion-walkie-relay.onrender.com)".
+class _InternetStatusLine extends StatelessWidget {
+  const _InternetStatusLine({required this.controller});
+  final WalkieController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = controller.internetStatus;
+    final color = switch (s.status) {
+      TransportStatus.running => Colors.green,
+      TransportStatus.starting => Colors.orange,
+      _ => Colors.red,
+    };
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+      child: Row(
+        children: [
+          Icon(
+            s.status == TransportStatus.running
+                ? Icons.cloud_done
+                : s.status == TransportStatus.starting
+                ? Icons.cloud_sync
+                : Icons.cloud_off,
+            size: 18,
+            color: color,
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              s.text,
+              style: TextStyle(color: color, fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Which paths a peer is reachable on right now: Wi-Fi / Bluetooth /
+/// Internet icons, the one in use highlighted.
+class _PeerLinks extends StatelessWidget {
+  const _PeerLinks({
+    required this.peer,
+    required this.now,
+    required this.timeout,
+  });
+  final Peer peer;
+  final DateTime now;
+  final Duration timeout;
+
+  @override
+  Widget build(BuildContext context) {
+    final live = [
+      for (final k in TransportKind.values)
+        if (peer.lastSeen[k] != null &&
+            now.difference(peer.lastSeen[k]!) <= timeout)
+          k,
+    ];
+    if (live.isEmpty) return const Text('No path right now');
+    final active = peer.activeLink;
+    final primary = Theme.of(context).colorScheme.primary;
+    return Wrap(
+      spacing: 10,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        for (final k in live)
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                _iconFor(k),
+                size: 16,
+                color: k == active ? primary : Colors.grey,
+              ),
+              const SizedBox(width: 2),
+              Text(
+                switch (k) {
+                  TransportKind.lan => 'Wi-Fi',
+                  TransportKind.ble => 'Bluetooth',
+                  TransportKind.internet => 'Internet',
+                },
+                style: TextStyle(
+                  fontSize: 12,
+                  color: k == active ? primary : Colors.grey,
+                  fontWeight: k == active ? FontWeight.w700 : null,
+                ),
+              ),
+            ],
+          ),
+      ],
+    );
+  }
 }

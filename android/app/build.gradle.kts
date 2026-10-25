@@ -58,4 +58,6 @@ flutter {
 dependencies {
     // FileProvider for handing the downloaded update APK to the installer
     implementation("androidx.core:core:1.13.1")
+    // Internet relay WebSocket bound to a network that has internet (see RelayBridge.kt)
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }

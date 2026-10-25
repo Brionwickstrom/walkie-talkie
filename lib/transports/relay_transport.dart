@@ -1,10 +1,9 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:web_socket_channel/web_socket_channel.dart';
-
 import '../core/frame.dart';
 import '../core/transport.dart';
+import 'relay_socket.dart';
 
 /// Internet transport: a WebSocket to a tiny relay server that fans each
 /// binary frame out to every other phone joined to the same channel.
@@ -27,13 +26,17 @@ import '../core/transport.dart';
 class RelayTransport extends Transport {
   RelayTransport({
     this._serverUri,
+    RelayConnector? connector,
     this.minBackoff = const Duration(seconds: 2),
-    this.maxBackoff = const Duration(seconds: 60),
+    this.maxBackoff = const Duration(seconds: 30),
     this.connectTimeout = const Duration(seconds: 75),
     this.pingInterval = const Duration(seconds: 25),
-  });
+  }) : connector = connector ?? IoRelayConnector() {
+    _netSub = this.connector.networkChanges.listen(_onNetworkChanged);
+  }
 
   Uri? _serverUri;
+  final RelayConnector connector;
   final Duration minBackoff;
   final Duration maxBackoff;
 
@@ -45,14 +48,17 @@ class RelayTransport extends Transport {
   int _channel = 1;
   bool _wanted = false;
   bool _connecting = false;
-  WebSocketChannel? _ws;
-  StreamSubscription<dynamic>? _sub;
+  RelaySocket? _ws;
+  StreamSubscription<Object>? _sub;
+  StreamSubscription<String>? _netSub;
   Timer? _retry;
   Timer? _ping;
   Duration _backoff = Duration.zero;
   DateTime _lastRx = DateTime.now();
+  DateTime? _connectedAt;
   int _connects = 0;
   int _attempt = 0;
+  String? _lastError;
   TransportStatus _status = TransportStatus.stopped;
   String? _detail;
   final _statusCtl = StreamController<TransportStatus>.broadcast();
@@ -71,11 +77,21 @@ class RelayTransport extends Transport {
 
   Uri? get serverUri => _serverUri;
 
+  /// Network the open socket uses ("Wi-Fi", "mobile data"), when known.
+  String? get network => _ws?.network;
+
+  /// Why the last connection attempt / connection failed.
+  String? get lastError => _lastError;
+
+  /// When the next retry happens, while waiting.
+  Duration? get retryIn => _retry == null ? null : _backoff;
+
   @override
   String? get debugInfo {
     final host = _serverUri?.host;
     if (host == null) return null;
     return '$host room ${roomFor(_channel)}'
+        '${network != null ? ' via $network' : ''}'
         '${_connects > 1 ? ' · reconnects ${_connects - 1}' : ''}'
         '${_status != TransportStatus.running && _retry != null ? ' · retry in ${_backoff.inSeconds}s' : ''}';
   }
@@ -139,45 +155,41 @@ class RelayTransport extends Transport {
     final attempt = ++_attempt;
     _setStatus(
       TransportStatus.starting,
-      'Connecting (a sleeping relay can take up to a minute to wake)',
+      _connects == 0
+          ? 'Connecting (a sleeping relay can take up to a minute to wake)'
+          : 'Reconnecting',
     );
-    WebSocketChannel? ws;
     try {
-      ws = WebSocketChannel.connect(channelUri(base, _channel, _localNodeId));
-      await ws.ready.timeout(connectTimeout);
+      final ws = await connector.connect(
+        channelUri(base, _channel, _localNodeId),
+        timeout: connectTimeout,
+      );
       if (attempt != _attempt || !_wanted) {
-        await ws.sink.close();
+        await ws.close();
         return;
       }
       _ws = ws;
       _connects++;
+      _connectedAt = DateTime.now();
       _lastRx = DateTime.now();
-      final mine = ws;
-      _sub = ws.stream.listen(
-        (data) {
-          _lastRx = DateTime.now();
-          if (data is List<int>) {
-            final f = Frame.tryDecode(data);
-            if (f != null && !_framesCtl.isClosed) {
-              _framesCtl.add(InboundFrame(f, TransportKind.internet));
-            }
+      _lastError = null;
+      _sub = ws.messages.listen((data) {
+        _lastRx = DateTime.now();
+        if (data is Uint8List) {
+          final f = Frame.tryDecode(data);
+          if (f != null && !_framesCtl.isClosed) {
+            _framesCtl.add(InboundFrame(f, TransportKind.internet));
           }
-          // Text ("pong") only refreshes liveness.
-        },
-        onDone: () => _onLost(mine),
-        onError: (_) => _onLost(mine),
-        cancelOnError: true,
-      );
-      _backoff = Duration.zero;
+        }
+        // Text ("pong") only refreshes liveness.
+      }, onDone: () => _onLost(ws, ws.closeReason ?? 'connection closed'));
       _ping?.cancel();
       _ping = Timer.periodic(pingInterval, (_) => _keepAlive());
       _setStatus(TransportStatus.running);
     } catch (e) {
-      try {
-        await ws?.sink.close();
-      } catch (_) {}
       if (attempt == _attempt) {
-        _setStatus(TransportStatus.error, 'Relay unreachable');
+        _lastError = '$e';
+        _setStatus(TransportStatus.error, 'Relay unreachable: $e');
         _scheduleRetry();
       }
     } finally {
@@ -191,17 +203,17 @@ class RelayTransport extends Transport {
     // No pong (or anything) for 2.5 ping periods: the socket is dead
     // (network switched, NAT timed out). Reconnect.
     if (DateTime.now().difference(_lastRx) > pingInterval * 2.5) {
-      _onLost(ws);
+      _onLost(ws, 'no answer from relay');
       return;
     }
     try {
-      ws.sink.add('ping');
-    } catch (_) {
-      _onLost(ws);
+      ws.sendText('ping');
+    } catch (e) {
+      _onLost(ws, '$e');
     }
   }
 
-  void _onLost(WebSocketChannel which) {
+  void _onLost(RelaySocket which, String why) {
     if (!identical(which, _ws)) return;
     _ping?.cancel();
     _ping = null;
@@ -209,13 +221,29 @@ class RelayTransport extends Transport {
     _sub = null;
     _ws = null;
     unawaited(sub?.cancel());
-    try {
-      unawaited(which.sink.close());
-    } catch (_) {}
+    unawaited(which.close());
+    // A connection that lived a while was fine: retry fast.
+    final lived =
+        _connectedAt != null &&
+        DateTime.now().difference(_connectedAt!) > const Duration(seconds: 30);
+    if (lived) _backoff = Duration.zero;
+    _lastError = why;
     if (_wanted) {
-      _setStatus(TransportStatus.error, 'Relay connection lost');
+      _setStatus(TransportStatus.error, 'Relay connection lost: $why');
       _scheduleRetry();
     }
+  }
+
+  void _onNetworkChanged(String net) {
+    if (!_wanted) return;
+    // The phone switched networks (left Wi-Fi, mobile data back, ...). The
+    // old socket is probably dead or on the wrong network: replace it now
+    // instead of waiting for pings to time out.
+    unawaited(() async {
+      await _disconnect();
+      _backoff = Duration.zero;
+      await _connect();
+    }());
   }
 
   void _scheduleRetry() {
@@ -242,9 +270,7 @@ class RelayTransport extends Transport {
     final ws = _ws;
     _ws = null;
     await sub?.cancel();
-    try {
-      await ws?.sink.close();
-    } catch (_) {}
+    await ws?.close();
   }
 
   /// Retry now (e.g. the phone just came back online).
@@ -268,7 +294,9 @@ class RelayTransport extends Transport {
   @override
   Future<void> send(Uint8List frame, {Set<int>? peerIds}) async {
     // The relay fans out to the whole room; the receiver filters.
-    _ws?.sink.add(frame);
+    try {
+      _ws?.send(frame);
+    } catch (_) {}
   }
 
   void _setStatus(TransportStatus s, [String? detail]) {
@@ -287,6 +315,7 @@ class RelayTransport extends Transport {
   @override
   Future<void> dispose() async {
     await stop();
+    await _netSub?.cancel();
     await _statusCtl.close();
     await _framesCtl.close();
   }
@@ -304,7 +333,10 @@ class MultiRelayTransport extends Transport {
   MultiRelayTransport({
     List<Uri> serverUris = const [],
     RelayTransport Function(Uri uri)? factory,
-  }) : _factory = factory ?? ((u) => RelayTransport(serverUri: u)) {
+    RelayConnector? connector,
+  }) : _factory =
+           factory ??
+           ((u) => RelayTransport(serverUri: u, connector: connector)) {
     _build(serverUris);
   }
 

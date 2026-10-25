@@ -22,6 +22,7 @@ import '../platform/background_bridge.dart';
 import '../transports/ble_transport.dart';
 import '../transports/lan_transport.dart';
 import '../transports/mdns_discovery.dart';
+import '../transports/relay_socket.dart';
 import '../transports/relay_transport.dart';
 import 'call_signs.dart';
 import 'config.dart';
@@ -43,7 +44,10 @@ class WalkieController extends ChangeNotifier {
     this.settingsStore = const SharedPrefsSettingsStore(),
     ChannelKey? channelKey,
   }) : nodeId = settings.nodeId,
-       _relay = MultiRelayTransport(serverUris: relayUrisFor(settings)) {
+       _relay = MultiRelayTransport(
+         serverUris: relayUrisFor(settings),
+         connector: RelayConnector.platform(),
+       ) {
     name = settings.name;
     manager = TransportManager(
       transports: [
@@ -171,6 +175,45 @@ class WalkieController extends ChangeNotifier {
   final Map<String, ChannelKey> _keys = {};
   int _channelToken = 0;
   List<Uri> get relayUris => _relay.serverUris;
+
+  /// One line for the UI: "Internet: connected via mobile data", ...
+  ({TransportStatus status, String text}) get internetStatus {
+    final rs = _relay.relays;
+    if (rs.isEmpty) {
+      return (
+        status: TransportStatus.unavailable,
+        text: 'Internet: off (no relay set in Settings)',
+      );
+    }
+    String host(RelayTransport r) => r.serverUri?.host ?? '';
+    final up = rs.where((r) => r.status == TransportStatus.running).toList();
+    if (up.isNotEmpty) {
+      final r = up.first;
+      final others = up.length > 1 ? ' +${up.length - 1} more' : '';
+      return (
+        status: TransportStatus.running,
+        text:
+            'Internet: connected${r.network != null ? ' via ${r.network}' : ''}'
+            ' (${host(r)}$others)',
+      );
+    }
+    final starting = rs.where((r) => r.status == TransportStatus.starting);
+    if (starting.isNotEmpty) {
+      return (
+        status: TransportStatus.starting,
+        text:
+            'Internet: connecting... (${starting.first.statusDetail ?? host(starting.first)})',
+      );
+    }
+    final r = rs.first;
+    final why = r.lastError ?? r.statusDetail ?? 'not connected';
+    final retry = r.retryIn;
+    return (
+      status: TransportStatus.error,
+      text:
+          'Internet: offline ($why)${retry != null ? ', retrying in ${retry.inSeconds}s' : ''}',
+    );
+  }
 
   /// What the Settings field shows: the saved override, or empty (= default).
   String get relayOverride => settings.relayUrl?.trim() ?? '';
