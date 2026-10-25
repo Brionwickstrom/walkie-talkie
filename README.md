@@ -171,6 +171,39 @@ audio. The relay scopes by channel server-side.
   messages wait in the outbox.
 * Older (1.1.x) phones ignore rings and voice messages.
 
+## Private channels and the internet relay (v1.3)
+
+**Private channels.** Tap the lock next to the channel picker, type a passcode
+(6+ characters) and tap *Make private*. Others join by picking the same channel
+number, tapping the lock and typing the same passcode (shown as text + QR code,
+with a short "check code" that matches on every phone with the right passcode).
+
+* Key: PBKDF2-HMAC-SHA256, 120k rounds, salt `WalkieTalkie/private-channel/v1/ch=<n>`,
+  then HMAC sub-keys for AES-256-GCM and a 16-bit tag (`lib/core/channel_crypto.dart`).
+* Every frame (audio, hello/presence, ping, ring/beep/ack, voice-message chunks/acks)
+  becomes a `FrameType.sealed` frame: 12-byte header (channel field = tag,
+  authenticated as AAD) + 12-byte random nonce + ciphertext + 16-byte GCM tag
+  (29 bytes overhead incl. the inner type byte). BLE voice chunks shrink to
+  121 bytes so a sealed chunk still fits one 185-MTU packet.
+* Frames that fail to decrypt are dropped silently; private phones ignore plain
+  frames and public phones ignore sealed ones (v1.2 phones do not know type 4).
+* Voice messages recorded on a private channel are only sent while on that
+  same private channel.
+
+**Relay.** `relay/` is a standalone pure-Dart server (Dockerfile, `PORT` env,
+`GET /healthz`, WebSocket on `/ws?ch=<room>&id=<hex>`), deployed on Render via
+`render.yaml` (`brion-walkie-relay`). It also runs in Synology Container
+Manager unchanged. Limits: 4 KB max message, ~150 msg/s and 64 KB/s per socket,
+silent sockets dropped after 3 min, max 64 per room. Private channels use room
+`p<tag>`, so the relay only ever sees ciphertext.
+
+The app keeps an ordered list of relays (default
+`wss://brion-walkie-relay.onrender.com/ws`; Settings accepts a comma separated
+list, empty = default, `off` = none), connects to all of them in parallel, sends
+every frame to each connected relay and de-duplicates on receive. Reconnects
+with 2 s..60 s backoff, 75 s first-connect timeout (Render cold start), text
+`ping` every 25 s.
+
 ## Android <-> iPhone limits (important)
 * **No shared Wi-Fi Direct.** Android's Wi-Fi Direct / Wi-Fi Aware and
   Apple's AWDL / MultipeerConnectivity do not interoperate. Google Nearby

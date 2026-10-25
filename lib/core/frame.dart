@@ -11,7 +11,13 @@ enum FrameType {
 
   /// Binary payload for reliable transfers (voice message chunks / acks),
   /// see `messaging/voice_transfer.dart`. Ignored by v1.1.x phones.
-  data(3);
+  data(3),
+
+  /// Encrypted frame of a private channel (see `core/channel_crypto.dart`):
+  /// the real type and payload are inside the ciphertext and the channel
+  /// field holds a key-derived tag. v1.2.x phones do not know this type and
+  /// drop it.
+  sealed(4);
 
   const FrameType(this.code);
   final int code;

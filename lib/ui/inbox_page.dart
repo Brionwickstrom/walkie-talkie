@@ -28,7 +28,7 @@ class InboxPage extends StatelessWidget {
                     leading: Icon(o.sending ? Icons.upload : Icons.schedule),
                     title: Text(
                       'To ${c.nameOf(o.peer)}'
-                      '${o.entry.isChannel ? ' (CH ${o.entry.channel})' : ''}'
+                      '${o.entry.isChannel ? ' (${c.labelFor(o.entry.channel)})' : ''}'
                       ' - ${formatDuration(o.entry.durationMs)}',
                     ),
                     subtitle: Text(
@@ -47,7 +47,7 @@ class InboxPage extends StatelessWidget {
                   ListTile(
                     leading: const Icon(Icons.schedule),
                     title: Text(
-                      'To channel ${e.channel} - ${formatDuration(e.durationMs)}',
+                      'To ${c.labelFor(e.channel)} - ${formatDuration(e.durationMs)}',
                     ),
                     subtitle: Text(
                       'Nobody on that channel yet (${_expires(e.createdAt)})',
@@ -90,7 +90,7 @@ class InboxPage extends StatelessWidget {
                   ),
                   subtitle: Text(
                     '${_when(e.receivedAt)}'
-                    '${e.channelMessage ? ' - to channel ${e.channel}' : ''}',
+                    '${e.channelMessage ? ' - to ${c.labelFor(e.channel)}' : ''}',
                   ),
                   trailing: IconButton(
                     tooltip: 'Delete',

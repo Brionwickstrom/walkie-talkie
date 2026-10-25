@@ -17,6 +17,13 @@ abstract class MessengerLink {
   bool isReachable(int peerId);
   TransportKind? bestLinkTo(int peerId);
   Set<int> reachablePeersOn(int channel);
+
+  /// Where we are now ([TransportManager.scope]): a channel number, or a
+  /// private-channel scope (>= 0x10000).
+  int get scope;
+
+  /// Extra bytes per frame on the current channel (encryption).
+  int get frameOverhead;
   Future<bool> sendData(int peerId, Uint8List payload);
   Stream<InboundData> get data;
   String nameOf(int peerId);
@@ -34,6 +41,10 @@ class ManagerMessengerLink implements MessengerLink {
   TransportKind? bestLinkTo(int peerId) => m.bestLinkTo(peerId);
   @override
   Set<int> reachablePeersOn(int channel) => m.reachablePeersOn(channel);
+  @override
+  int get scope => m.scope;
+  @override
+  int get frameOverhead => m.frameOverhead;
   @override
   Future<bool> sendData(int peerId, Uint8List payload) =>
       m.sendData(peerId, payload);
@@ -77,6 +88,7 @@ class Messenger {
   final Inbox inbox;
   final Clock _clock;
   final Random _random;
+
   /// Chunk size on Wi-Fi / internet; Bluetooth always uses [bleChunkSize].
   final int chunkSize;
   final Duration tickInterval;
@@ -209,6 +221,10 @@ class Messenger {
       for (final p in e.pending.toList()) {
         final key = (e.msgId, p);
         if (_sessions.containsKey(key)) continue;
+        // A message recorded on a private channel only goes out while we
+        // are on that same private channel (encrypted with its key), and
+        // vice versa, so nothing private ever leaks onto a public channel.
+        if (!scopeMatches(e.channel, link.scope)) continue;
         if (!link.isReachable(p)) continue;
         final retry = _retryAt[key];
         if (retry != null && now.isBefore(retry)) continue;
@@ -226,7 +242,7 @@ class Messenger {
           channelMessage: e.isChannel,
           now: now,
           chunkSize: link.bestLinkTo(p) == TransportKind.ble
-              ? bleChunkSize
+              ? bleChunkSize - link.frameOverhead
               : chunkSize,
         );
         changed = true;
@@ -371,4 +387,13 @@ class Messenger {
   void _changed() {
     if (!_changes.isClosed) _changes.add(null);
   }
+}
+
+/// Whether an outbox entry made on [entryScope] may be sent while we are on
+/// [current]: any public channel to any public channel (as before), but a
+/// private channel only to exactly the same private channel.
+bool scopeMatches(int entryScope, int current) {
+  const private = 0x10000;
+  if (entryScope < private && current < private) return true;
+  return entryScope == current;
 }

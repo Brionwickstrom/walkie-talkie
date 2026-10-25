@@ -157,8 +157,8 @@ class RelayServer {
 
 class _Client {
   _Client(this.ws, this.room, this.server)
-    : _msgTokens = server.maxMessagesPerSecond.toDouble(),
-      _byteTokens = server.maxBytesPerSecond.toDouble();
+      : _msgTokens = server.maxMessagesPerSecond.toDouble(),
+        _byteTokens = server.maxBytesPerSecond.toDouble();
 
   final WebSocket ws;
   final String room;

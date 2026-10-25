@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../audio/audio_engine.dart';
+import '../core/channel_crypto.dart';
 import '../core/frame.dart';
 import '../core/peer.dart';
 import '../core/transport.dart';
@@ -40,8 +41,9 @@ class WalkieController extends ChangeNotifier {
   WalkieController({
     required this.settings,
     this.settingsStore = const SharedPrefsSettingsStore(),
+    ChannelKey? channelKey,
   }) : nodeId = settings.nodeId,
-       _relay = RelayTransport(serverUri: _relayUri(settings)) {
+       _relay = MultiRelayTransport(serverUris: relayUrisFor(settings)) {
     name = settings.name;
     manager = TransportManager(
       transports: [
@@ -58,7 +60,12 @@ class WalkieController extends ChangeNotifier {
       localNodeId: nodeId,
       localName: name,
       channel: settings.channel,
+      channelKey: channelKey,
     );
+    if (channelKey != null) {
+      _keys['${channelKey.channel}\u0000${settings.passcodeFor(channelKey.channel)}'] =
+          channelKey;
+    }
     ringer = Ringer(link: ManagerRingLink(manager));
   }
 
@@ -68,12 +75,23 @@ class WalkieController extends ChangeNotifier {
     SettingsStore store = const SharedPrefsSettingsStore(),
   }) async {
     final s = await store.load(defaultChannel: AppConfig.defaultChannel);
-    return WalkieController(settings: s, settingsStore: store);
+    final pass = s.passcodeFor(s.channel);
+    ChannelKey? key;
+    if (pass != null) {
+      try {
+        key = await ChannelKey.derive(s.channel, pass);
+      } catch (_) {}
+    }
+    return WalkieController(settings: s, settingsStore: store, channelKey: key);
   }
 
-  static Uri? _relayUri(AppSettings s) {
-    final url = (s.relayUrl ?? AppConfig.relayUrl).trim();
-    return url.isEmpty ? null : Uri.tryParse(url);
+  /// Ordered relay list: the saved override (comma separated, "off" =
+  /// none), or the app default when nothing / an empty string is saved.
+  static List<Uri> relayUrisFor(AppSettings s) {
+    final saved = s.relayUrl?.trim() ?? '';
+    return MultiRelayTransport.parseList(
+      saved.isEmpty ? AppConfig.relayUrl : saved,
+    );
   }
 
   /// How long an incoming ring rings before it counts as missed.
@@ -86,7 +104,7 @@ class WalkieController extends ChangeNotifier {
   late final TransportManager manager;
   late final Ringer ringer;
   Messenger? messenger;
-  final RelayTransport _relay;
+  final MultiRelayTransport _relay;
   final AudioEngine _audio = AudioEngine();
   final BackgroundBridge bridge = BackgroundBridge();
   final List<StreamSubscription<dynamic>> _subs = [];
@@ -127,7 +145,35 @@ class WalkieController extends ChangeNotifier {
   Stream<String> get uiRequests => _uiRequests.stream;
 
   int get channel => manager.channel;
-  Uri? get relayUri => _relay.serverUri;
+
+  /// Channel number, or a private-channel scope; see [TransportManager.scope].
+  int get scope => manager.scope;
+
+  /// Current channel is private (encrypted, passcode protected).
+  bool get isPrivate => manager.isPrivate;
+
+  /// e.g. "CH 3" or "CH 3 (private)".
+  String get channelLabel => 'CH $channel${isPrivate ? ' (private)' : ''}';
+
+  /// Label for a scope stored with a ring / message.
+  String labelFor(int scope) {
+    if (!TransportManager.isPrivateScope(scope)) return 'CH $scope';
+    return scope == this.scope ? channelLabel : 'a private channel';
+  }
+
+  /// Channel number to show / switch to for [scope] (private scopes are
+  /// only ever the current channel).
+  int displayChannel(int scope) =>
+      TransportManager.isPrivateScope(scope) ? channel : scope;
+
+  /// True while a passcode key is being derived (takes ~1 s).
+  bool switchingChannel = false;
+  final Map<String, ChannelKey> _keys = {};
+  int _channelToken = 0;
+  List<Uri> get relayUris => _relay.serverUris;
+
+  /// What the Settings field shows: the saved override, or empty (= default).
+  String get relayOverride => settings.relayUrl?.trim() ?? '';
   List<Transport> get transports => manager.transports;
   int get playbackDropped => _audio.playbackDropped;
   List<InboxEntry> get inbox => messenger?.inbox.entries ?? const [];
@@ -138,7 +184,7 @@ class WalkieController extends ChangeNotifier {
 
   int? get talkingPeer {
     for (final p in peers) {
-      if (p.talking && p.channel == channel) return p.id;
+      if (p.talking && p.channel == scope) return p.id;
     }
     return null;
   }
@@ -271,7 +317,7 @@ class WalkieController extends ChangeNotifier {
     notifyListeners();
   }
 
-  String get _serviceTitle => 'Walkie Talkie is listening on CH $channel';
+  String get _serviceTitle => 'Walkie Talkie is listening on $channelLabel';
   String get _serviceBody {
     final n = peers.length;
     return n == 0
@@ -349,7 +395,9 @@ class WalkieController extends ChangeNotifier {
         final r = ringer.incomingById(n('from'), n('id'));
         if (r != null) {
           await answerRing(r);
-        } else if (n('channel') > 0 && n('channel') != channel) {
+        } else if (n('channel') > 0 &&
+            n('channel') <= 0xFFFF &&
+            n('channel') != channel) {
           await setChannel(n('channel'));
         }
       case 'dismiss':
@@ -372,7 +420,7 @@ class WalkieController extends ChangeNotifier {
     peers = list;
     final talking = {
       for (final p in list)
-        if (p.talking && p.channel == channel) p.id,
+        if (p.talking && p.channel == scope) p.id,
     };
     for (final id in talking.difference(_talkingPrev)) {
       if (!foreground) {
@@ -423,14 +471,14 @@ class WalkieController extends ChangeNotifier {
     final what = beep ? 'Beep' : 'Ring';
     if (r.status.isEmpty) {
       _notice(
-        'Nobody on channel $channel to ${beep ? 'beep' : 'ring'} right now.',
+        'Nobody on $channelLabel to ${beep ? 'beep' : 'ring'} right now.',
       );
     } else if (toPeer != null && r.status[toPeer] == RingStatus.unreachable) {
       _notice('${nameOf(toPeer)} is out of reach right now.');
     } else {
       _notice(
         toPeer == null
-            ? '$what sent to ${r.status.length} on channel $channel'
+            ? '$what sent to ${r.status.length} on $channelLabel'
             : '$what sent to ${nameOf(toPeer)}',
       );
     }
@@ -445,7 +493,12 @@ class WalkieController extends ChangeNotifier {
       return;
     }
     activeRings.add(r);
-    bridge.showRing(from: r.from, id: r.id, name: from, channel: r.channel);
+    bridge.showRing(
+      from: r.from,
+      id: r.id,
+      name: from,
+      channel: displayChannel(r.channel),
+    );
     _ringTimers[(r.from, r.id)] = Timer(ringDuration, () async {
       if (r.status != RingStatus.delivered) return;
       await ringer.respond(r, RingStatus.missed);
@@ -454,7 +507,7 @@ class WalkieController extends ChangeNotifier {
       await bridge.showInfo(
         nid: r.from & 0xFFFF,
         title: 'Missed ring from $from',
-        text: 'Channel ${r.channel}',
+        text: labelFor(r.channel),
       );
       notifyListeners();
     });
@@ -466,7 +519,11 @@ class WalkieController extends ChangeNotifier {
     activeRings.remove(r);
     await bridge.stopRing(from: r.from, id: r.id);
     await ringer.respond(r, RingStatus.answered);
-    if (r.channel != channel && r.channel > 0) await setChannel(r.channel);
+    if (!TransportManager.isPrivateScope(r.channel) &&
+        r.channel != scope &&
+        r.channel > 0) {
+      await setChannel(r.channel);
+    }
     notifyListeners();
   }
 
@@ -538,8 +595,8 @@ class WalkieController extends ChangeNotifier {
     }
     final m = messenger;
     if (m == null) return;
-    final e = await m.send(clip, toPeer: rec.toPeer, channel: channel);
-    final who = rec.toPeer == null ? 'channel $channel' : nameOf(rec.toPeer!);
+    final e = await m.send(clip, toPeer: rec.toPeer, channel: scope);
+    final who = rec.toPeer == null ? channelLabel : nameOf(rec.toPeer!);
     final reachable = rec.toPeer == null
         ? e.recipients.isNotEmpty
         : manager.isReachable(rec.toPeer!);
@@ -602,11 +659,46 @@ class WalkieController extends ChangeNotifier {
   // ---------------------------------------------------------------- settings
 
   Future<void> setChannel(int ch) async {
-    await manager.setChannel(ch);
+    final token = ++_channelToken;
+    final pass = settings.passcodeFor(ch);
+    ChannelKey? key;
+    if (pass != null) {
+      final cacheKey = '$ch\u0000$pass';
+      key = _keys[cacheKey];
+      if (key == null) {
+        switchingChannel = true;
+        notifyListeners();
+        try {
+          key = await ChannelKey.derive(ch, pass);
+          _keys[cacheKey] = key;
+        } finally {
+          if (token == _channelToken) switchingChannel = false;
+        }
+      }
+    }
+    if (token != _channelToken) return; // a newer switch won
+    await manager.setChannel(ch, key: key);
     settings.channel = ch;
     unawaited(settingsStore.save(settings));
     _updateServiceText();
     notifyListeners();
+  }
+
+  /// Make [ch] private with [passcode], or public again with null. Applies
+  /// right away when [ch] is the current channel.
+  Future<void> setChannelPrivacy(int ch, String? passcode) async {
+    final p = passcode == null ? null : ChannelKey.normalize(passcode);
+    if (p == null || p.isEmpty) {
+      settings.privateChannels.remove(ch);
+    } else {
+      settings.privateChannels[ch] = p;
+    }
+    await settingsStore.save(settings);
+    if (ch == channel) {
+      await setChannel(ch);
+    } else {
+      notifyListeners();
+    }
   }
 
   /// Empty resets to the call sign.
@@ -630,11 +722,13 @@ class WalkieController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Comma separated relay URLs, "off" to disable, empty for the default.
   Future<void> setRelayUrl(String url) async {
-    final uri = url.trim().isEmpty ? null : Uri.tryParse(url.trim());
-    settings.relayUrl = url.trim();
+    final t = url.trim();
+    if (t == (settings.relayUrl?.trim() ?? '')) return;
+    settings.relayUrl = t.isEmpty ? null : t;
     unawaited(settingsStore.save(settings));
-    await _relay.setServerUri(uri);
+    await _relay.setServerUris(relayUrisFor(settings));
     notifyListeners();
   }
 

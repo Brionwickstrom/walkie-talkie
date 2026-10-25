@@ -1,7 +1,10 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
+import '../app/config.dart';
 import '../app/walkie_controller.dart';
 import '../core/peer.dart';
 import '../core/transport.dart';
@@ -108,8 +111,22 @@ class _HomePageState extends State<HomePage> {
               ),
               onPressed: () => _openInbox(context),
             ),
+            IconButton(
+              tooltip: c.isPrivate
+                  ? 'Private channel (tap for passcode)'
+                  : 'Make this channel private',
+              icon: c.switchingChannel
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Icon(c.isPrivate ? Icons.lock : Icons.lock_open),
+              onPressed: () => showPrivacySheet(context, c),
+            ),
             _ChannelPicker(
               channel: c.channel,
+              isPrivate: c.settings.isPrivate,
               onChanged: (ch) => c.setChannel(ch),
             ),
             IconButton(
@@ -124,7 +141,7 @@ class _HomePageState extends State<HomePage> {
               for (final r in List.of(c.activeRings))
                 _RingBanner(
                   name: c.nameOf(r.from),
-                  channel: r.channel,
+                  channel: c.labelFor(r.channel),
                   onAnswer: () => c.answerRing(r),
                   onDismiss: () => c.dismissRing(r),
                 ),
@@ -147,7 +164,7 @@ class _HomePageState extends State<HomePage> {
                 child: _PeerList(
                   controller: c,
                   peers: c.peers,
-                  channel: c.channel,
+                  channel: c.scope,
                   linkTimeout: c.manager.linkTimeout,
                   onRecordFor: (p) => _openRecordSheet(context, p),
                 ),
@@ -222,7 +239,7 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _openSettings(BuildContext context) async {
     final nameCtl = TextEditingController(text: c.settings.customName ?? '');
-    final relayCtl = TextEditingController(text: c.relayUri?.toString() ?? '');
+    final relayCtl = TextEditingController(text: c.relayOverride);
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -276,9 +293,13 @@ class _HomePageState extends State<HomePage> {
                 const SizedBox(height: 12),
                 TextField(
                   controller: relayCtl,
-                  decoration: const InputDecoration(
-                    labelText: 'Internet relay URL',
-                    hintText: 'wss://relay.example.com/',
+                  decoration: InputDecoration(
+                    labelText: 'Internet relays (optional)',
+                    hintText: AppConfig.relayUrl,
+                    helperText:
+                        'Empty = default. Several: comma separated, first '
+                        'is preferred. "off" = no internet relay.',
+                    helperMaxLines: 3,
                   ),
                 ),
                 const SizedBox(height: 16),
@@ -441,7 +462,7 @@ class _RingBanner extends StatelessWidget {
     required this.onDismiss,
   });
   final String name;
-  final int channel;
+  final String channel;
   final VoidCallback onAnswer;
   final VoidCallback onDismiss;
 
@@ -459,7 +480,7 @@ class _RingBanner extends StatelessWidget {
             const SizedBox(width: 12),
             Expanded(
               child: Text(
-                '$name is ringing you (CH $channel)',
+                '$name is ringing you ($channel)',
                 style: Theme.of(context).textTheme.titleMedium,
               ),
             ),
@@ -565,8 +586,13 @@ class _RecordButton extends StatelessWidget {
 }
 
 class _ChannelPicker extends StatelessWidget {
-  const _ChannelPicker({required this.channel, required this.onChanged});
+  const _ChannelPicker({
+    required this.channel,
+    required this.isPrivate,
+    required this.onChanged,
+  });
   final int channel;
+  final bool Function(int channel) isPrivate;
   final ValueChanged<int> onChanged;
 
   @override
@@ -576,7 +602,19 @@ class _ChannelPicker extends StatelessWidget {
       underline: const SizedBox.shrink(),
       items: [
         for (var i = 1; i <= 16; i++)
-          DropdownMenuItem(value: i, child: Text('CH $i')),
+          DropdownMenuItem(
+            value: i,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('CH $i'),
+                if (isPrivate(i)) ...[
+                  const SizedBox(width: 4),
+                  const Icon(Icons.lock, size: 14),
+                ],
+              ],
+            ),
+          ),
       ],
       onChanged: (v) => v == null ? null : onChanged(v),
     );
@@ -719,7 +757,7 @@ class _PeerList extends StatelessWidget {
                 Text(
                   p.channel == channel
                       ? 'On your channel'
-                      : 'On channel ${p.channel}',
+                      : 'On ${c.labelFor(p.channel)}',
                 ),
                 if (c.ringStatusText(p.id) != null)
                   Text(
@@ -839,4 +877,157 @@ class _PttButton extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Make the current channel private / public, and show its passcode with a
+/// QR code so others can join.
+Future<void> showPrivacySheet(BuildContext context, WalkieController c) async {
+  final ch = c.channel;
+  final passCtl = TextEditingController();
+  var show = false;
+  String? err;
+  await showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setSheet) {
+        final pass = c.settings.passcodeFor(ch);
+        final theme = Theme.of(ctx);
+        final key = c.manager.channelKey;
+        return Padding(
+          padding: EdgeInsets.fromLTRB(
+            16,
+            16,
+            16,
+            MediaQuery.of(ctx).viewInsets.bottom + 16,
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Icon(pass != null ? Icons.lock : Icons.lock_open),
+                    const SizedBox(width: 8),
+                    Text(
+                      pass != null ? 'CH $ch is private' : 'CH $ch is public',
+                      style: theme.textTheme.titleLarge,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                if (pass == null) ...[
+                  const Text(
+                    'Set a passcode to make this channel private. Everything '
+                    'on it (talk, rings, beeps, voice messages, who is here) '
+                    'is encrypted. Only phones on the same channel number '
+                    'with the same passcode can hear or see each other.',
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: passCtl,
+                    obscureText: !show,
+                    autocorrect: false,
+                    enableSuggestions: false,
+                    decoration: InputDecoration(
+                      labelText: 'Passcode (at least 6 characters)',
+                      errorText: err,
+                      suffixIcon: IconButton(
+                        icon: Icon(
+                          show ? Icons.visibility_off : Icons.visibility,
+                        ),
+                        onPressed: () => setSheet(() => show = !show),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  FilledButton.icon(
+                    icon: const Icon(Icons.lock),
+                    label: const Text('Make private'),
+                    onPressed: () async {
+                      final p = passCtl.text.trim();
+                      if (p.length < 6) {
+                        setSheet(() => err = 'Use at least 6 characters');
+                        return;
+                      }
+                      await c.setChannelPrivacy(ch, p);
+                      setSheet(() => err = null);
+                    },
+                  ),
+                ] else ...[
+                  const Text(
+                    'To join: on the other phone pick the same channel '
+                    'number, tap the lock and type this passcode.',
+                  ),
+                  const SizedBox(height: 12),
+                  Center(
+                    child: Container(
+                      color: Colors.white,
+                      padding: const EdgeInsets.all(8),
+                      child: QrImageView(
+                        data:
+                            'Walkie Talkie private channel\nCH $ch\nPasscode: $pass',
+                        size: 180,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  SelectableText(
+                    show ? pass : '\u2022' * pass.length,
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.headlineSmall,
+                  ),
+                  if (key != null && key.channel == ch)
+                    Text(
+                      'Check code ${key.fingerprint} (same on every phone '
+                      'with the right passcode)',
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodySmall,
+                    ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      TextButton.icon(
+                        icon: Icon(
+                          show ? Icons.visibility_off : Icons.visibility,
+                        ),
+                        label: Text(show ? 'Hide' : 'Show'),
+                        onPressed: () => setSheet(() => show = !show),
+                      ),
+                      TextButton.icon(
+                        icon: const Icon(Icons.copy),
+                        label: const Text('Copy'),
+                        onPressed: () {
+                          Clipboard.setData(
+                            ClipboardData(
+                              text:
+                                  'Walkie Talkie private channel: CH $ch, '
+                                  'passcode: $pass',
+                            ),
+                          );
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Copied')),
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.lock_open),
+                    label: const Text('Make public again'),
+                    onPressed: () async {
+                      await c.setChannelPrivacy(ch, null);
+                      setSheet(() {});
+                    },
+                  ),
+                ],
+              ],
+            ),
+          ),
+        );
+      },
+    ),
+  );
 }

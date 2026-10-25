@@ -4,7 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:walkie_talkie/core/frame.dart';
 import 'package:walkie_talkie/core/transport.dart';
-import 'package:walkie_talkie/relay/relay_server.dart';
+import 'package:walkie_relay/relay_server.dart';
 import 'package:walkie_talkie/transports/lan_transport.dart';
 import 'package:walkie_talkie/transports/relay_transport.dart';
 

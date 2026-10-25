@@ -18,7 +18,7 @@ class ManagerRingLink implements RingLink {
   ManagerRingLink(this.m);
   final TransportManager m;
   @override
-  int get channel => m.channel;
+  int get channel => m.scope;
   @override
   Set<int> reachablePeersOn(int channel) => m.reachablePeersOn(channel);
   @override

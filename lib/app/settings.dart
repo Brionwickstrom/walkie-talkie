@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:shared_preferences/shared_preferences.dart';
@@ -17,7 +18,8 @@ class AppSettings {
     this.stayReachable = true,
     this.startOnBoot = false,
     this.batteryPromptShown = false,
-  }) {
+    Map<int, String>? privateChannels,
+  }) : privateChannels = privateChannels ?? {} {
     // v1.1.x prefilled the name box with "Phone 38EA", so pressing Save
     // stored it as if typed. Treat that as "never customized".
     if (customName != null &&
@@ -48,6 +50,30 @@ class AppSettings {
 
   /// The battery-optimization explanation was shown once already.
   bool batteryPromptShown;
+
+  /// Passcodes of the channels marked private (channel -> passcode).
+  /// Channels not in the map are public.
+  final Map<int, String> privateChannels;
+
+  String? passcodeFor(int channel) => privateChannels[channel];
+  bool isPrivate(int channel) => privateChannels.containsKey(channel);
+
+  static String encodePrivate(Map<int, String> m) =>
+      jsonEncode({for (final e in m.entries) '${e.key}': e.value});
+
+  static Map<int, String> decodePrivate(String? s) {
+    if (s == null || s.isEmpty) return {};
+    try {
+      final m = jsonDecode(s) as Map<String, dynamic>;
+      return {
+        for (final e in m.entries)
+          if (int.tryParse(e.key) != null && e.value is String)
+            int.parse(e.key): e.value as String,
+      };
+    } catch (_) {
+      return {};
+    }
+  }
 
   /// Name used by v1.1.x before call signs existed.
   static String legacyDefaultNameFor(int nodeId) =>
@@ -94,6 +120,7 @@ class SharedPrefsSettingsStore implements SettingsStore {
   static const _kReach = 'stay_reachable';
   static const _kBoot = 'start_on_boot';
   static const _kBattery = 'battery_prompt_shown';
+  static const _kPrivate = 'private_channels';
 
   @override
   Future<AppSettings> load({required int defaultChannel}) async {
@@ -117,6 +144,7 @@ class SharedPrefsSettingsStore implements SettingsStore {
       stayReachable: prefs?.getBool(_kReach) ?? true,
       startOnBoot: prefs?.getBool(_kBoot) ?? false,
       batteryPromptShown: prefs?.getBool(_kBattery) ?? false,
+      privateChannels: AppSettings.decodePrivate(prefs?.getString(_kPrivate)),
     );
   }
 
@@ -142,6 +170,10 @@ class SharedPrefsSettingsStore implements SettingsStore {
       await prefs.setBool(_kReach, s.stayReachable);
       await prefs.setBool(_kBoot, s.startOnBoot);
       await prefs.setBool(_kBattery, s.batteryPromptShown);
+      await prefs.setString(
+        _kPrivate,
+        AppSettings.encodePrivate(s.privateChannels),
+      );
     } catch (_) {}
   }
 }

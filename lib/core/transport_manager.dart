@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:typed_data';
 
+import 'channel_crypto.dart';
 import 'frame.dart';
 import 'peer.dart';
 import 'transport.dart';
@@ -60,12 +61,14 @@ class TransportManager {
     required this.localNodeId,
     required this.localName,
     this._channel = 1,
+    ChannelKey? channelKey,
     this.linkTimeout = const Duration(seconds: 4),
     this.helloInterval = const Duration(seconds: 1),
     this.staleAfter = const Duration(milliseconds: 1600),
     Clock? clock,
   }) : _transports = List.unmodifiable(transports),
-       _clock = clock ?? DateTime.now;
+       _clock = clock ?? DateTime.now,
+       _key = channelKey;
 
   final List<Transport> _transports;
   final int localNodeId;
@@ -79,6 +82,10 @@ class TransportManager {
   /// Display name sent in hello beacons.
   String localName;
   int _channel;
+
+  /// Set while on a private channel: every frame we send is sealed with it,
+  /// and only sealed frames that open with it are accepted.
+  ChannelKey? _key;
   int _seq = 0;
 
   /// Audio has its own sequence so the receiver's loss concealment only
@@ -104,7 +111,32 @@ class TransportManager {
   final _transportChanges = StreamController<void>.broadcast();
 
   List<Transport> get transports => _transports;
+
+  /// Channel number the user picked (1..16).
   int get channel => _channel;
+
+  /// Private channel key, or null on a public channel.
+  ChannelKey? get channelKey => _key;
+  bool get isPrivate => _key != null;
+
+  /// Identifies "where we are" for peers, rings and voice messages: the
+  /// channel number on a public channel, or [privateScopeBit] | tag on a
+  /// private one (never equal to a public channel number).
+  int get scope => scopeFor(_channel, _key);
+
+  static const int privateScopeBit = 0x10000;
+  static int scopeFor(int channel, ChannelKey? key) =>
+      key == null ? channel : (privateScopeBit | key.tag);
+  static bool isPrivateScope(int scope) => scope >= privateScopeBit;
+
+  /// Extra bytes per frame on the current channel (encryption overhead).
+  int get frameOverhead => _key == null ? 0 : ChannelKey.overhead;
+
+  /// Channel number written in outgoing frame headers.
+  int get _wireChannel => _key?.tag ?? _channel;
+
+  /// Encode [f] for the air: plain on public channels, sealed on private.
+  Uint8List _wire(Frame f) => _key?.seal(f) ?? f.encode();
   bool get isRunning => _running;
 
   Stream<ReceivedAudio> get audio => _audio.stream;
@@ -135,7 +167,7 @@ class TransportManager {
     await Future.wait(
       _transports.map((t) async {
         try {
-          await t.start(localNodeId: localNodeId, channel: _channel);
+          await t.start(localNodeId: localNodeId, channel: scope);
         } catch (_) {
           // Transport reports its own status; keep going.
         }
@@ -179,11 +211,24 @@ class TransportManager {
     await _transportChanges.close();
   }
 
-  Future<void> setChannel(int channel) async {
+  /// Switch channel. Pass [key] for a private channel, null for public.
+  Future<void> setChannel(int channel, {ChannelKey? key}) async {
+    final oldScope = scope;
+    final wasPrivate = _key != null;
     _channel = channel;
+    _key = key;
+    final newScope = scope;
+    if (oldScope != newScope && (wasPrivate || key != null)) {
+      // Entering / leaving / changing a private channel: forget everyone so
+      // nothing meant for the old group is sent in the new mode (they
+      // reappear within a second if they are in the same group).
+      _peers.clear();
+      _seen.clear();
+      _seenAudio.clear();
+    }
     for (final t in _transports) {
       try {
-        await t.setChannel(channel);
+        await t.setChannel(newScope);
       } catch (_) {}
     }
     _recomputeAll();
@@ -221,16 +266,18 @@ class TransportManager {
     final futures = <Future<void>>[];
     for (final p in _peers.values) {
       for (final kind in usableLinks(p, now)) {
-        final bytes = Frame.control(
-          senderId: localNodeId,
-          channel: _channel,
-          seq: _nextSeq(),
-          message: ControlMessage(
-            ControlKind.ping,
-            to: p.id,
-            time: now.millisecondsSinceEpoch,
+        final bytes = _wire(
+          Frame.control(
+            senderId: localNodeId,
+            channel: _wireChannel,
+            seq: _nextSeq(),
+            message: ControlMessage(
+              ControlKind.ping,
+              to: p.id,
+              time: now.millisecondsSinceEpoch,
+            ),
           ),
-        ).encode();
+        );
         futures.add(_safeSend(_transportOf(kind)!, bytes, {p.id}));
       }
     }
@@ -243,7 +290,7 @@ class TransportManager {
     await _sendToChannel(
       Frame.control(
         senderId: localNodeId,
-        channel: _channel,
+        channel: _wireChannel,
         seq: _nextSeq(),
         message: ControlMessage(
           talking ? ControlKind.talkStart : ControlKind.talkEnd,
@@ -257,7 +304,7 @@ class TransportManager {
     Frame(
       type: FrameType.audio,
       senderId: localNodeId,
-      channel: _channel,
+      channel: _wireChannel,
       seq: _nextAudioSeq(),
       payload: opus,
     ),
@@ -301,7 +348,7 @@ class TransportManager {
   Future<bool> sendFrameTo(int peerId, Frame frame) async {
     final route = routeTo(peerId);
     if (route.isEmpty) return false;
-    final bytes = frame.encode();
+    final bytes = _wire(frame);
     await Future.wait(
       route.map((k) => _safeSend(_transportOf(k)!, bytes, {peerId})),
     );
@@ -312,7 +359,7 @@ class TransportManager {
     peerId,
     Frame.control(
       senderId: localNodeId,
-      channel: _channel,
+      channel: _wireChannel,
       seq: _nextSeq(),
       message: msg,
     ),
@@ -320,11 +367,11 @@ class TransportManager {
 
   /// Send [msg] to every reachable peer on our channel. Returns their ids.
   Future<Set<int>> sendControlToChannel(ControlMessage msg) async {
-    final targets = reachablePeersOn(_channel);
+    final targets = reachablePeersOn(scope);
     await _sendToChannel(
       Frame.control(
         senderId: localNodeId,
-        channel: _channel,
+        channel: _wireChannel,
         seq: _nextSeq(),
         message: msg,
       ),
@@ -338,19 +385,21 @@ class TransportManager {
     Frame(
       type: FrameType.data,
       senderId: localNodeId,
-      channel: _channel,
+      channel: _wireChannel,
       seq: _nextSeq(),
       payload: payload,
     ),
   );
 
   Future<void> _broadcastControl(ControlMessage msg) async {
-    final bytes = Frame.control(
-      senderId: localNodeId,
-      channel: _channel,
-      seq: _nextSeq(),
-      message: msg,
-    ).encode();
+    final bytes = _wire(
+      Frame.control(
+        senderId: localNodeId,
+        channel: _wireChannel,
+        seq: _nextSeq(),
+        message: msg,
+      ),
+    );
     await Future.wait(
       _transports
           .where((t) => t.status == TransportStatus.running)
@@ -364,7 +413,7 @@ class TransportManager {
     final now = _clock();
     final routes = <TransportKind, Set<int>>{};
     for (final p in _peers.values) {
-      if (p.channel != _channel) continue;
+      if (p.channel != scope) continue;
       final links = usableLinks(p, now);
       if (links.isEmpty) continue;
       routes.putIfAbsent(links.first, () => <int>{}).add(p.id);
@@ -379,7 +428,7 @@ class TransportManager {
   }
 
   Future<void> _sendToChannel(Frame frame) async {
-    final bytes = frame.encode();
+    final bytes = _wire(frame);
     final routes = routeForChannel();
     await Future.wait(
       routes.entries.map((e) {
@@ -428,13 +477,28 @@ class TransportManager {
   void handleInbound(InboundFrame inbound) => _onInbound(inbound);
 
   void _onInbound(InboundFrame inbound) {
-    final f = inbound.frame;
+    var f = inbound.frame;
     if (f.senderId == localNodeId) return; // our own broadcast echoed back
+
+    // Private channels: only frames that decrypt with our key count. Plain
+    // frames are ignored while private, sealed ones while public, so phones
+    // without the passcode never show up, ring or play audio (and vice
+    // versa). Nothing is recorded about rejected frames.
+    final key = _key;
+    if (f.type == FrameType.sealed) {
+      if (key == null) return;
+      final opened = key.open(f);
+      if (opened == null) return;
+      f = opened;
+    } else if (key != null) {
+      return;
+    }
+    final frameScope = key == null ? f.channel : scope;
 
     final now = _clock();
     final peer = _peers.putIfAbsent(f.senderId, () => Peer(f.senderId));
     peer.lastSeen[inbound.transport] = now;
-    peer.channel = f.channel;
+    peer.channel = frameScope;
 
     final window = (f.type == FrameType.audio ? _seenAudio : _seen).putIfAbsent(
       f.senderId,
@@ -469,16 +533,18 @@ class TransportManager {
                   if (t != null) {
                     _safeSend(
                       t,
-                      Frame.control(
-                        senderId: localNodeId,
-                        channel: _channel,
-                        seq: _nextSeq(),
-                        message: ControlMessage(
-                          ControlKind.pong,
-                          to: peer.id,
-                          time: msg.time,
+                      _wire(
+                        Frame.control(
+                          senderId: localNodeId,
+                          channel: _wireChannel,
+                          seq: _nextSeq(),
+                          message: ControlMessage(
+                            ControlKind.pong,
+                            to: peer.id,
+                            time: msg.time,
+                          ),
                         ),
-                      ).encode(),
+                      ),
                       {peer.id},
                     );
                   }
@@ -505,7 +571,7 @@ class TransportManager {
                     _controls.add(
                       InboundControl(
                         f.senderId,
-                        f.channel,
+                        frameScope,
                         msg,
                         inbound.transport,
                       ),
@@ -515,15 +581,17 @@ class TransportManager {
             }
           }
         case FrameType.audio:
-          if (f.channel == _channel) {
+          if (frameScope == scope) {
             _audio.add(ReceivedAudio(f.senderId, f.seq, f.payload));
           }
         case FrameType.data:
           if (!_data.isClosed) {
             _data.add(
-              InboundData(f.senderId, f.channel, f.payload, inbound.transport),
+              InboundData(f.senderId, frameScope, f.payload, inbound.transport),
             );
           }
+        case FrameType.sealed:
+          break; // never nested
       }
     }
     if (changed || before == null) _emitPeers();

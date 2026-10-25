@@ -49,6 +49,12 @@ class FakeNode implements MessengerLink, RingLink {
   int get localNodeId => id;
 
   @override
+  int get scope => channel;
+
+  @override
+  int get frameOverhead => 0;
+
+  @override
   bool isReachable(int peerId) =>
       net.nodes.containsKey(peerId) &&
       peerId != id &&
