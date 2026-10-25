@@ -19,6 +19,12 @@ class AppSettings {
     this.startOnBoot = false,
     this.batteryPromptShown = false,
     this.showDiagnostics = false,
+    this.powerSaver = false,
+    this.volumeKeyPtt = false,
+    this.headsetPtt = false,
+    this.toggleTalk = false,
+    this.notificationTalk = false,
+    this.urgentLoud = true,
     Map<int, String>? privateChannels,
     Map<int, double>? peerVolumes,
   }) : privateChannels = privateChannels ?? {},
@@ -76,6 +82,25 @@ class AppSettings {
 
   /// Home screen "Details" (link diagnostics) expanded.
   bool showDiagnostics;
+
+  /// Battery saver: slower beacons / scans / keep-alives.
+  bool powerSaver;
+
+  /// Hold volume-down to talk (app open; background with the optional
+  /// accessibility service).
+  bool volumeKeyPtt;
+
+  /// Bluetooth / wired headset play-pause button talks (while listening).
+  bool headsetPtt;
+
+  /// Tap the talk button to start, tap again to stop.
+  bool toggleTalk;
+
+  /// "Talk" button on the listening notification (lock screen).
+  bool notificationTalk;
+
+  /// Urgent rings play at alarm volume, even in silent mode.
+  bool urgentLoud;
 
   /// Passcodes of the channels marked private (channel -> passcode).
   /// Channels not in the map are public.
@@ -149,6 +174,12 @@ class SharedPrefsSettingsStore implements SettingsStore {
   static const _kPrivate = 'private_channels';
   static const _kDiag = 'show_diagnostics';
   static const _kVolumes = 'peer_volumes';
+  static const _kSaver = 'power_saver';
+  static const _kVolPtt = 'vol_ptt';
+  static const _kHeadset = 'headset_ptt';
+  static const _kToggle = 'toggle_talk';
+  static const _kNotifTalk = 'notif_talk';
+  static const _kUrgent = 'urgent_loud';
 
   @override
   Future<AppSettings> load({required int defaultChannel}) async {
@@ -175,6 +206,12 @@ class SharedPrefsSettingsStore implements SettingsStore {
       privateChannels: AppSettings.decodePrivate(prefs?.getString(_kPrivate)),
       showDiagnostics: prefs?.getBool(_kDiag) ?? false,
       peerVolumes: AppSettings.decodeVolumes(prefs?.getString(_kVolumes)),
+      powerSaver: prefs?.getBool(_kSaver) ?? false,
+      volumeKeyPtt: prefs?.getBool(_kVolPtt) ?? false,
+      headsetPtt: prefs?.getBool(_kHeadset) ?? false,
+      toggleTalk: prefs?.getBool(_kToggle) ?? false,
+      notificationTalk: prefs?.getBool(_kNotifTalk) ?? false,
+      urgentLoud: prefs?.getBool(_kUrgent) ?? true,
     );
   }
 
@@ -201,6 +238,12 @@ class SharedPrefsSettingsStore implements SettingsStore {
       await prefs.setBool(_kBoot, s.startOnBoot);
       await prefs.setBool(_kBattery, s.batteryPromptShown);
       await prefs.setBool(_kDiag, s.showDiagnostics);
+      await prefs.setBool(_kSaver, s.powerSaver);
+      await prefs.setBool(_kVolPtt, s.volumeKeyPtt);
+      await prefs.setBool(_kHeadset, s.headsetPtt);
+      await prefs.setBool(_kToggle, s.toggleTalk);
+      await prefs.setBool(_kNotifTalk, s.notificationTalk);
+      await prefs.setBool(_kUrgent, s.urgentLoud);
       await prefs.setString(
         _kVolumes,
         AppSettings.encodeVolumes(s.peerVolumes),

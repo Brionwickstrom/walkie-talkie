@@ -35,9 +35,18 @@ class ManagerRingLink implements RingLink {
 
 /// A ring or beep we sent.
 class OutgoingRing {
-  OutgoingRing(this.id, this.beep, this.toPeer, this.sentAt);
+  OutgoingRing(
+    this.id,
+    this.beep,
+    this.toPeer,
+    this.sentAt, {
+    this.urgent = false,
+  });
   final int id;
   final bool beep;
+
+  /// Urgent ring: rings up to 60 s and may sound in silent mode.
+  final bool urgent;
   final int? toPeer;
   final DateTime sentAt;
   final Map<int, RingStatus> status = {};
@@ -47,10 +56,18 @@ class OutgoingRing {
 
 /// A ring or beep someone sent us.
 class IncomingRing {
-  IncomingRing(this.from, this.id, this.beep, this.channel, this.at);
+  IncomingRing(
+    this.from,
+    this.id,
+    this.beep,
+    this.channel,
+    this.at, {
+    this.urgent = false,
+  });
   final int from;
   final int id;
   final bool beep;
+  final bool urgent;
   final int channel;
   final DateTime at;
   RingStatus status = RingStatus.delivered;
@@ -73,6 +90,7 @@ class Ringer {
   final Random _random;
   final Duration retryInterval;
   final int maxAttempts;
+  static const int urgentAttempts = 60;
 
   final List<OutgoingRing> _out = [];
   final Map<(int, int), IncomingRing> _in = {};
@@ -110,9 +128,19 @@ class Ringer {
   OutgoingRing? get last => _out.isEmpty ? null : _out.last;
 
   /// Ring (or beep) [toPeer], or everyone on our channel when null.
-  Future<OutgoingRing> ring({int? toPeer, bool beep = false}) async {
+  Future<OutgoingRing> ring({
+    int? toPeer,
+    bool beep = false,
+    bool urgent = false,
+  }) async {
     final now = _clock();
-    final r = OutgoingRing(_random.nextInt(0x7FFFFFFF) + 1, beep, toPeer, now);
+    final r = OutgoingRing(
+      _random.nextInt(0x7FFFFFFF) + 1,
+      beep,
+      toPeer,
+      now,
+      urgent: urgent && !beep,
+    );
     _out.add(r);
     if (_out.length > 20) _out.removeAt(0);
     final kind = beep ? ControlKind.beep : ControlKind.ring;
@@ -120,12 +148,14 @@ class Ringer {
     if (toPeer != null) {
       final ok = await link.sendControlTo(
         toPeer,
-        ControlMessage(kind, to: toPeer, id: r.id),
+        ControlMessage(kind, to: toPeer, id: r.id, urgent: r.urgent),
       );
-      r.status[toPeer] = ok ? RingStatus.sending : RingStatus.unreachable;
+      r.status[toPeer] = ok || r.urgent
+          ? RingStatus.sending
+          : RingStatus.unreachable;
     } else {
       final targets = await link.sendControlToChannel(
-        ControlMessage(kind, id: r.id),
+        ControlMessage(kind, id: r.id, urgent: r.urgent),
       );
       for (final p in targets) {
         r.status[p] = RingStatus.sending;
@@ -146,7 +176,9 @@ class Ringer {
       r.attempts++;
       for (final e in r.status.entries.toList()) {
         if (e.value != RingStatus.sending) continue;
-        if (r.attempts > maxAttempts) {
+        // Urgent rings keep trying for a minute (someone walking back
+        // into range still gets it).
+        if (r.attempts > (r.urgent ? urgentAttempts : maxAttempts)) {
           r.status[e.key] = RingStatus.unreachable;
           changed = true;
           continue;
@@ -158,6 +190,7 @@ class Ringer {
             r.beep ? ControlKind.beep : ControlKind.ring,
             to: e.key,
             id: r.id,
+            urgent: r.urgent,
           ),
         );
       }
@@ -187,6 +220,7 @@ class Ringer {
           m.kind == ControlKind.beep,
           c.channel,
           _clock(),
+          urgent: m.urgent && m.kind == ControlKind.ring,
         );
         _in[key] = r;
         if (_in.length > 50) _in.remove(_in.keys.first);

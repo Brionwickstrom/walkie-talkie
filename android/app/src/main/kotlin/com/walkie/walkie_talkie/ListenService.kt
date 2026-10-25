@@ -29,15 +29,34 @@ class ListenService : Service() {
 
         private var title = "Walkie Talkie is listening"
         private var text = "Tap to open"
+        private var talkAction = false
+        private var talking = false
 
-        /** Returns false if Android refused to start it. */
-        fun start(ctx: Context, t: String, x: String): Boolean {
+        /** Mic allowed for this service run (talk from notification /
+         *  headset / volume key while the app is in the background). */
+        @Volatile
+        var micType = false
+            private set
+        private var wantMic = false
+
+        /**
+         * Returns false if Android refused to start it. [mic]: also claim
+         * the microphone type; only allowed while the app is on screen
+         * (Android 11+), so pass it from the foreground.
+         */
+        fun start(ctx: Context, t: String, x: String, mic: Boolean, talk: Boolean, isTalking: Boolean): Boolean {
             if (t.isNotEmpty()) title = t
             text = x
-            if (running) {
-                update(ctx, t, x)
+            talkAction = talk
+            talking = isTalking
+            val micOk = mic && ContextCompat.checkSelfPermission(
+                ctx, android.Manifest.permission.RECORD_AUDIO,
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            if (running && (!micOk || micType)) {
+                update(ctx, t, x, talk, isTalking)
                 return true
             }
+            wantMic = micOk
             return try {
                 ContextCompat.startForegroundService(ctx, Intent(ctx, ListenService::class.java))
                 true
@@ -46,13 +65,15 @@ class ListenService : Service() {
             }
         }
 
-        fun update(ctx: Context, t: String, x: String) {
+        fun update(ctx: Context, t: String, x: String, talk: Boolean, isTalking: Boolean) {
             if (t.isNotEmpty()) title = t
             text = x
+            talkAction = talk
+            talking = isTalking
             if (!running) return
             try {
                 val nm = ctx.getSystemService(NotificationManager::class.java)
-                nm.notify(NOTIF_ID, Notifier.listening(ctx, title, text))
+                nm.notify(NOTIF_ID, Notifier.listening(ctx, title, text, talkAction, talking))
             } catch (_: Exception) {
             }
         }
@@ -74,25 +95,49 @@ class ListenService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val n = Notifier.listening(this, title, text)
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                ServiceCompat.startForeground(
-                    this,
-                    NOTIF_ID,
-                    n,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
-                )
-            } else {
-                startForeground(NOTIF_ID, n)
+        val n = Notifier.listening(this, title, text, talkAction, talking)
+        var ok = false
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            if (wantMic) {
+                // Microphone type: lets you talk with the app in the
+                // background. Android refuses it unless the app is on screen.
+                try {
+                    ServiceCompat.startForeground(
+                        this, NOTIF_ID, n,
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
+                            ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+                    )
+                    micType = true
+                    ok = true
+                } catch (_: Exception) {
+                }
             }
-        } catch (_: Exception) {
+            if (!ok) {
+                try {
+                    ServiceCompat.startForeground(
+                        this, NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
+                    )
+                    if (!running) micType = false
+                    ok = true
+                } catch (_: Exception) {
+                }
+            }
+        } else {
+            try {
+                startForeground(NOTIF_ID, n)
+                micType = true
+                ok = true
+            } catch (_: Exception) {
+            }
+        }
+        if (!ok) {
             running = false
             stopSelf()
             return START_NOT_STICKY
         }
         running = true
         acquireWakeLock()
+        PttKeys.updateSession(this)
         return START_STICKY
     }
 
@@ -112,6 +157,8 @@ class ListenService : Service() {
 
     override fun onDestroy() {
         running = false
+        micType = false
+        PttKeys.updateSession(this)
         try {
             wakeLock?.let { if (it.isHeld) it.release() }
         } catch (_: Exception) {

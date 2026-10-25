@@ -26,6 +26,13 @@ class MainActivity : FlutterActivity() {
         if (savedInstanceState == null) handle(intent)
     }
 
+    // Hold volume-down to talk (setting). The accessibility service, when
+    // enabled, sees the key first and handles it everywhere.
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        if (!PttKeys.a11yConnected && PttKeys.onVolumeKey(this, event)) return true
+        return super.dispatchKeyEvent(event)
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)

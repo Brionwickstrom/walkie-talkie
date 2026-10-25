@@ -183,8 +183,7 @@ class RelayTransport extends Transport {
         }
         // Text ("pong") only refreshes liveness.
       }, onDone: () => _onLost(ws, ws.closeReason ?? 'connection closed'));
-      _ping?.cancel();
-      _ping = Timer.periodic(pingInterval, (_) => _keepAlive());
+      _startPing();
       _setStatus(TransportStatus.running);
     } catch (e) {
       if (attempt == _attempt) {
@@ -197,12 +196,30 @@ class RelayTransport extends Transport {
     }
   }
 
+  bool _saver = false;
+
+  /// Battery saver pings half as often (our hellos still keep the server
+  /// side busy; a dead socket is noticed a bit later).
+  Duration get currentPingInterval => _saver ? pingInterval * 2 : pingInterval;
+
+  @override
+  void setPowerSaver(bool on) {
+    if (on == _saver) return;
+    _saver = on;
+    if (_ping != null) _startPing();
+  }
+
+  void _startPing() {
+    _ping?.cancel();
+    _ping = Timer.periodic(currentPingInterval, (_) => _keepAlive());
+  }
+
   void _keepAlive() {
     final ws = _ws;
     if (ws == null) return;
     // No pong (or anything) for 2.5 ping periods: the socket is dead
     // (network switched, NAT timed out). Reconnect.
-    if (DateTime.now().difference(_lastRx) > pingInterval * 2.5) {
+    if (DateTime.now().difference(_lastRx) > currentPingInterval * 2.5) {
       _onLost(ws, 'no answer from relay');
       return;
     }
@@ -366,9 +383,19 @@ class MultiRelayTransport extends Transport {
   List<Uri> get serverUris => [for (final r in _relays) r.serverUri!];
   List<RelayTransport> get relays => List.unmodifiable(_relays);
 
+  bool _saver = false;
+
+  @override
+  void setPowerSaver(bool on) {
+    _saver = on;
+    for (final r in _relays) {
+      r.setPowerSaver(on);
+    }
+  }
+
   void _build(List<Uri> uris) {
     for (final u in uris) {
-      final r = _factory(u);
+      final r = _factory(u)..setPowerSaver(_saver);
       _relays.add(r);
       _subs.add(
         r.frames.listen((f) {

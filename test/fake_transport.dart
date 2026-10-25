@@ -24,6 +24,10 @@ class FakeTransport extends Transport {
   final unreachable = <int>{};
   final learned = <int, List<String>>{};
   List<String> addresses = const [];
+  bool saver = false;
+
+  @override
+  void setPowerSaver(bool on) => saver = on;
 
   @override
   bool canReach(int peerId) => !unreachable.contains(peerId);

@@ -59,6 +59,9 @@ object BgBridge {
     private fun int(call: MethodCall, key: String): Int =
         (call.argument<Any>(key) as? Number)?.toInt() ?: 0
 
+    private fun bool(call: MethodCall, key: String): Boolean =
+        call.argument<Boolean>(key) ?: false
+
     private fun str(call: MethodCall, key: String): String =
         call.argument<String>(key) ?: ""
 
@@ -71,10 +74,17 @@ object BgBridge {
                 result.success(list)
             }
             "startService" -> {
-                result.success(ListenService.start(ctx, str(call, "title"), str(call, "text")))
+                result.success(
+                    ListenService.start(
+                        ctx, str(call, "title"), str(call, "text"),
+                        bool(call, "mic"), bool(call, "talk"), bool(call, "talking"),
+                    ),
+                )
             }
             "updateService" -> {
-                ListenService.update(ctx, str(call, "title"), str(call, "text"))
+                ListenService.update(
+                    ctx, str(call, "title"), str(call, "text"), bool(call, "talk"), bool(call, "talking"),
+                )
                 result.success(null)
             }
             "stopService" -> {
@@ -82,9 +92,28 @@ object BgBridge {
                 result.success(null)
             }
             "serviceRunning" -> result.success(ListenService.running)
+            "micInBackground" -> result.success(ListenService.running && ListenService.micType)
+            "setPttConfig" -> {
+                PttKeys.configure(ctx, bool(call, "volume"), bool(call, "headset"))
+                result.success(null)
+            }
+            "a11yEnabled" -> result.success(PttKeys.a11yEnabled(ctx))
+            "openA11ySettings" -> {
+                open(ctx, Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                result.success(null)
+            }
+            "dndAccess" -> {
+                val nm = ctx.getSystemService(NotificationManager::class.java)
+                result.success(nm.isNotificationPolicyAccessGranted)
+            }
+            "openDndSettings" -> {
+                open(ctx, Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
+                result.success(null)
+            }
             "showRing" -> {
                 Notifier.showRing(
                     ctx, long(call, "from"), long(call, "id"), str(call, "name"), int(call, "channel"),
+                    bool(call, "urgent"), call.argument<Boolean>("loud") ?: true,
                 )
                 result.success(null)
             }

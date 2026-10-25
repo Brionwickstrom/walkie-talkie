@@ -179,6 +179,25 @@ class BleTransport extends Transport {
       }
     }
     _peripheralPeers.removeWhere((_, t) => now.difference(t) > silentLinkDrop);
+    if (_saver) {
+      // Battery saver: scan in short bursts (duty cycle) instead of
+      // continuously. Existing links stay up; new phones take longer to
+      // be found over Bluetooth.
+      final cycle = _links.isEmpty ? saverScanCycleIdle : saverScanCycleLinked;
+      final since = _lastScanStart == null
+          ? null
+          : now.difference(_lastScanStart!);
+      try {
+        if (fbp.FlutterBluePlus.isScanningNow) {
+          if (since == null || since >= saverScanOn) {
+            await fbp.FlutterBluePlus.stopScan();
+          }
+        } else if (since == null || since >= cycle) {
+          await _startCentral();
+        }
+      } catch (_) {}
+      return;
+    }
     final wantMode = _links.isEmpty
         ? fbp.AndroidScanMode.lowLatency
         : fbp.AndroidScanMode.lowPower;
@@ -234,8 +253,20 @@ class BleTransport extends Transport {
     _peripheralUp = true;
   }
 
+  bool _saver = false;
+  static const saverScanOn = Duration(seconds: 8);
+  static const saverScanCycleIdle = Duration(seconds: 30);
+  static const saverScanCycleLinked = Duration(seconds: 90);
+
+  @override
+  void setPowerSaver(bool on) => _saver = on;
+
   Future<void> _startCentral() async {
-    final mode = _links.isEmpty
+    final mode = _saver
+        ? (_links.isEmpty
+              ? fbp.AndroidScanMode.balanced
+              : fbp.AndroidScanMode.lowPower)
+        : _links.isEmpty
         ? fbp.AndroidScanMode.lowLatency
         : fbp.AndroidScanMode.lowPower;
     _lastScanStart = DateTime.now();
@@ -267,7 +298,9 @@ class BleTransport extends Transport {
       if (Platform.isAndroid) {
         try {
           await device.requestConnectionPriority(
-            connectionPriorityRequest: fbp.ConnectionPriority.high,
+            connectionPriorityRequest: _saver
+                ? fbp.ConnectionPriority.balanced
+                : fbp.ConnectionPriority.high,
           );
         } catch (_) {}
       }

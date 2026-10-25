@@ -85,6 +85,145 @@ String agoText(Duration d) {
   return '${d.inMinutes}m ago';
 }
 
+/// A recorded transmission in the "recent" strip / History (presentation).
+class TakeView {
+  const TakeView({
+    required this.id,
+    required this.sender,
+    required this.name,
+    required this.at,
+    required this.durationMs,
+    this.mine = false,
+    this.heard = true,
+    this.playing = false,
+    this.positionMs = 0,
+  });
+  final int id;
+  final int sender;
+  final String name;
+  final DateTime at;
+  final int durationMs;
+  final bool mine;
+  final bool heard;
+  final bool playing;
+  final int positionMs;
+
+  String get who => mine ? 'You' : name;
+}
+
+/// "0:07"
+String clipLength(int ms) {
+  final s = (ms / 1000).round();
+  return '${s ~/ 60}:${(s % 60).toString().padLeft(2, '0')}';
+}
+
+/// "14:05" today, "Mon 09:12" otherwise.
+String clockText(DateTime t, {DateTime? now}) {
+  final n = now ?? DateTime.now();
+  final hm =
+      '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+  if (t.year == n.year && t.month == n.month && t.day == n.day) return hm;
+  const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  return '${days[t.weekday - 1]} $hm';
+}
+
+/// Last few transmissions on this channel, one tap to replay; "Missed"
+/// plays everything not heard yet; History opens the full list.
+class RecentStrip extends StatelessWidget {
+  const RecentStrip({
+    super.key,
+    required this.takes,
+    required this.unheard,
+    required this.onPlay,
+    required this.onPlayMissed,
+    required this.onOpenHistory,
+  });
+  final List<TakeView> takes;
+  final int unheard;
+  final ValueChanged<TakeView> onPlay;
+  final VoidCallback onPlayMissed;
+  final VoidCallback onOpenHistory;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    return SizedBox(
+      height: 44,
+      child: Row(
+        children: [
+          IconButton(
+            key: const Key('open-history'),
+            tooltip: 'History: replay what was said',
+            icon: Badge(
+              isLabelVisible: unheard > 0,
+              label: Text('$unheard'),
+              child: const Icon(Icons.history),
+            ),
+            onPressed: onOpenHistory,
+          ),
+          if (unheard > 0)
+            Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: FilledButton.tonalIcon(
+                style: FilledButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                ),
+                icon: const Icon(Icons.playlist_play, size: 18),
+                label: const Text('Missed'),
+                onPressed: onPlayMissed,
+              ),
+            ),
+          Expanded(
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.only(right: 8),
+              itemCount: takes.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 6),
+              itemBuilder: (context, i) {
+                final t = takes[i];
+                return ActionChip(
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.symmetric(horizontal: 2),
+                  backgroundColor: t.playing ? cs.primaryContainer : null,
+                  avatar: Icon(
+                    t.playing ? Icons.pause : Icons.play_arrow,
+                    size: 18,
+                    color: !t.heard ? cs.primary : null,
+                  ),
+                  label: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 160),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Flexible(
+                          child: Text(
+                            t.who,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontWeight: t.heard
+                                  ? FontWeight.normal
+                                  : FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        Text(' · ${clipLength(t.durationMs)}'),
+                      ],
+                    ),
+                  ),
+                  onPressed: () => onPlay(t),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// The whole home screen below the app bar.
 class HomeBody extends StatelessWidget {
   const HomeBody({
@@ -107,9 +246,13 @@ class HomeBody extends StatelessWidget {
     this.onEditMe,
     this.error,
     this.queued,
+    this.recent,
     required this.actions,
     required this.ptt,
   });
+
+  /// The "recent talk" strip (replay), or null when there is none.
+  final Widget? recent;
 
   final List<Widget> banners;
   final List<(TransportKind, TransportStatus)> links;
@@ -165,6 +308,7 @@ class HomeBody extends StatelessWidget {
             ),
           ),
         ?notice,
+        ?recent,
         if (error != null)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
@@ -669,11 +813,33 @@ class PttButton extends StatelessWidget {
     required this.busy,
     required this.onChanged,
     this.size = 160,
+    this.toggle = false,
+    this.onTap,
   });
   final bool transmitting;
   final bool busy;
   final ValueChanged<bool> onChanged;
   final double size;
+
+  /// Toggle mode: tap to start, tap to stop ([onTap]).
+  final bool toggle;
+  final VoidCallback? onTap;
+
+  Widget _gesture(Widget child) {
+    if (toggle) {
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: child,
+      );
+    }
+    return Listener(
+      onPointerDown: (_) => onChanged(true),
+      onPointerUp: (_) => onChanged(false),
+      onPointerCancel: (_) => onChanged(false),
+      child: child,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -687,11 +853,8 @@ class PttButton extends StatelessWidget {
       width: size * 1.08,
       height: size * 1.08,
       child: Center(
-        child: Listener(
-          onPointerDown: (_) => onChanged(true),
-          onPointerUp: (_) => onChanged(false),
-          onPointerCancel: (_) => onChanged(false),
-          child: AnimatedContainer(
+        child: _gesture(
+          AnimatedContainer(
             duration: const Duration(milliseconds: 120),
             width: d,
             height: d,
@@ -719,10 +882,10 @@ class PttButton extends StatelessWidget {
                     ),
                     Text(
                       transmitting
-                          ? 'TALKING'
+                          ? (toggle ? 'TAP TO STOP' : 'TALKING')
                           : busy
                           ? 'RECEIVING'
-                          : 'HOLD TO TALK',
+                          : (toggle ? 'TAP TO TALK' : 'HOLD TO TALK'),
                       style: const TextStyle(
                         color: Colors.white,
                         fontWeight: FontWeight.bold,

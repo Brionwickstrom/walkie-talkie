@@ -19,6 +19,10 @@ class Peer {
   /// LAN endpoints the peer advertised in its hello ("ip:port").
   List<String> lanAddrs = const [];
 
+  /// Hello interval the peer announced (battery saver), if longer than
+  /// normal.
+  Duration? helloInterval;
+
   /// Transport currently used to send to this peer (best live link).
   TransportKind? activeLink;
 

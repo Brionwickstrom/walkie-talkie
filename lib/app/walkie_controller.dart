@@ -12,6 +12,7 @@ import '../core/frame.dart';
 import '../core/peer.dart';
 import '../core/transport.dart';
 import '../core/transport_manager.dart';
+import '../history/talk_history.dart';
 import '../messaging/inbox.dart';
 import '../messaging/messenger.dart';
 import '../messaging/outbox.dart';
@@ -101,6 +102,9 @@ class WalkieController extends ChangeNotifier {
   /// How long an incoming ring rings before it counts as missed.
   static const ringDuration = Duration(seconds: 15);
 
+  /// Urgent rings repeat until answered, up to this long.
+  static const urgentRingDuration = Duration(seconds: 60);
+
   final AppSettings settings;
   final SettingsStore settingsStore;
   final int nodeId;
@@ -134,6 +138,28 @@ class WalkieController extends ChangeNotifier {
 
   /// Inbox key of the message playing now.
   String? playingKey;
+
+  /// Replay missed talk (see [TalkHistory]).
+  TalkHistory? history;
+
+  /// Transmission being replayed now, and where it is (ms).
+  TalkTake? playingTake;
+  int playingPosMs = 0;
+
+  /// 1, 1.5 or 2.
+  double playbackSpeed = 1;
+
+  /// "Play all missed" is running.
+  bool playingAll = false;
+  final Map<int, int> _resumeAt = {};
+  int _replayToken = 0;
+  DateTime _lastPosNotify = DateTime(0);
+
+  /// Talking started by a tap (toggle mode / headset / notification):
+  /// stops on the next tap, or after [toggleTalkLimit].
+  bool talkLatched = false;
+  static const toggleTalkLimit = Duration(minutes: 2);
+  Timer? _talkLimit;
 
   Set<int> _talkingPrev = {};
   String _serviceText = '';
@@ -265,15 +291,38 @@ class WalkieController extends ChangeNotifier {
     _subs.add(manager.transportChanges.listen((_) => notifyListeners()));
     _subs.add(
       manager.audio.listen((a) {
-        if (transmitting || recording != null) return;
+        final live = !transmitting && recording == null;
+        history?.addPacket(
+          scope: scope,
+          sender: a.peerId,
+          name: nameOf(a.peerId),
+          opus: a.opus,
+          heard: live && foreground,
+        );
+        if (!live) return;
         if (_audio.playingClip) {
+          _stopReplay();
           _audio.stopClip();
           playingKey = null;
         }
         _audio.play(a.peerId, a.seq, a.opus);
       }),
     );
+    await manager.setPowerSaver(settings.powerSaver);
     await manager.start();
+
+    // Replay missed talk.
+    try {
+      final h = TalkHistory(
+        storage: FileMessageStorage(
+          Directory('${(await _messageDir()).parent.path}/history'),
+        ),
+      );
+      await h.load();
+      history = h;
+      _subs.add(h.changes.listen((_) => notifyListeners()));
+      _timers.add(Timer.periodic(const Duration(seconds: 1), (_) => h.tick()));
+    } catch (_) {}
 
     // Voice messages.
     try {
@@ -306,6 +355,7 @@ class WalkieController extends ChangeNotifier {
     );
 
     await applyBackgroundSettings();
+    await _applyPttConfig();
     notifyListeners();
   }
 
@@ -352,8 +402,13 @@ class WalkieController extends ChangeNotifier {
       serviceRunning = await bridge.startService(
         title: _serviceTitle,
         text: _serviceBody,
+        // Claim the mic while on screen so talking from the notification,
+        // a headset or volume-down also works in the background.
+        mic: foreground,
+        talk: settings.notificationTalk,
+        talking: transmitting,
       );
-      _serviceText = '$_serviceTitle|$_serviceBody';
+      _serviceText = '$_serviceTitle|$_serviceBody|$transmitting';
     } else {
       await bridge.stopService();
       serviceRunning = false;
@@ -371,10 +426,15 @@ class WalkieController extends ChangeNotifier {
 
   void _updateServiceText() {
     if (!settings.stayReachable) return;
-    final t = '$_serviceTitle|$_serviceBody';
+    final t = '$_serviceTitle|$_serviceBody|$transmitting';
     if (t == _serviceText) return;
     _serviceText = t;
-    bridge.updateService(title: _serviceTitle, text: _serviceBody);
+    bridge.updateService(
+      title: _serviceTitle,
+      text: _serviceBody,
+      talk: settings.notificationTalk,
+      talking: transmitting,
+    );
   }
 
   Future<void> setStayReachable(bool on) async {
@@ -404,6 +464,7 @@ class WalkieController extends ChangeNotifier {
         bridge.cancelTalking(id);
       }
       if (settings.stayReachable) unawaited(applyBackgroundSettings());
+      unawaited(_applyPttConfig());
     }
     if (s == AppLifecycleState.detached &&
         _wasVisible &&
@@ -452,7 +513,131 @@ class WalkieController extends ChangeNotifier {
         if (e != null) await playMessage(e);
       case 'openInbox':
         _uiRequests.add('inbox');
+      case 'hwKey':
+        await onHardwareKey(a['src'] as String? ?? '', a['down'] == true);
     }
+  }
+
+  // ------------------------------------------------------ hardware talk keys
+
+  bool _hwStarted = false;
+  DateTime? _hwDownAt;
+
+  /// A hardware talk button: volume-down ('vol'), headset play/pause
+  /// ('headset') or the notification's Talk button ('notif', taps only).
+  /// Holding talks while held; a quick tap latches talking on (always for
+  /// headsets and the notification, for volume-down only in toggle mode)
+  /// and the next tap stops it.
+  Future<void> onHardwareKey(String src, bool down) async {
+    if (src == 'notif') {
+      await _hwTalk(!transmitting, latched: true);
+      return;
+    }
+    if (down) {
+      if (transmitting) {
+        _hwStarted = false;
+        await pushToTalk(false);
+        return;
+      }
+      _hwStarted = true;
+      _hwDownAt = DateTime.now();
+      await _hwTalk(true, latched: false);
+      return;
+    }
+    if (!_hwStarted) return;
+    _hwStarted = false;
+    final held =
+        DateTime.now().difference(_hwDownAt ?? DateTime.now()) >=
+        const Duration(milliseconds: 500);
+    final tapLatches = src == 'headset' || settings.toggleTalk;
+    if (held || !tapLatches) {
+      await pushToTalk(false);
+    } else {
+      _latch();
+    }
+  }
+
+  Future<void> _hwTalk(bool on, {required bool latched}) async {
+    if (on && !foreground && !await bridge.micInBackground()) {
+      await bridge.showInfo(
+        nid: 77,
+        title: 'Open Walkie Talkie once to talk from here',
+        text:
+            'Android only lets the app use the mic in the background after '
+            'it was opened with "Stay reachable" on.',
+      );
+      return;
+    }
+    await pushToTalk(on);
+    if (on && latched) _latch();
+  }
+
+  void _latch() {
+    if (!transmitting) return;
+    talkLatched = true;
+    _talkLimit?.cancel();
+    _talkLimit = Timer(toggleTalkLimit, () {
+      if (talkLatched) {
+        pushToTalk(false);
+        _notice('Stopped talking after 2 minutes.');
+      }
+    });
+    notifyListeners();
+  }
+
+  /// Toggle mode: tap to start, tap to stop.
+  Future<void> toggleTalk() async {
+    if (transmitting) {
+      await pushToTalk(false);
+    } else {
+      await pushToTalk(true);
+      _latch();
+    }
+  }
+
+  Future<void> _applyPttConfig() => bridge.setPttConfig(
+    volume: settings.volumeKeyPtt,
+    headset: settings.headsetPtt,
+  );
+
+  Future<void> setVolumeKeyPtt(bool on) async {
+    settings.volumeKeyPtt = on;
+    await _saveAndApplyPtt();
+  }
+
+  Future<void> setHeadsetPtt(bool on) async {
+    settings.headsetPtt = on;
+    await _saveAndApplyPtt();
+  }
+
+  Future<void> setToggleTalk(bool on) async {
+    settings.toggleTalk = on;
+    await _saveAndApplyPtt();
+  }
+
+  Future<void> setNotificationTalk(bool on) async {
+    settings.notificationTalk = on;
+    await _saveAndApplyPtt();
+    if (settings.stayReachable) await applyBackgroundSettings();
+  }
+
+  Future<void> _saveAndApplyPtt() async {
+    notifyListeners();
+    await settingsStore.save(settings);
+    await _applyPttConfig();
+  }
+
+  Future<void> setPowerSaver(bool on) async {
+    settings.powerSaver = on;
+    notifyListeners();
+    await settingsStore.save(settings);
+    await manager.setPowerSaver(on);
+  }
+
+  Future<void> setUrgentLoud(bool on) async {
+    settings.urgentLoud = on;
+    notifyListeners();
+    await settingsStore.save(settings);
   }
 
   // --------------------------------------------------------------- peers
@@ -520,8 +705,17 @@ class WalkieController extends ChangeNotifier {
       }
     }
     _left.removeWhere((id, _) => ids.contains(id));
+    final wasTalking = {
+      for (final p in peers)
+        if (p.talking) p.id,
+    };
     for (final p in list) {
-      if (!p.talking) _audio.peerStopped(p.id);
+      if (!p.talking) {
+        _audio.peerStopped(p.id);
+        // Talk ended: close the recorded transmission now (silence also
+        // closes it, see TalkHistory.tick).
+        if (wasTalking.contains(p.id)) history?.endTake(p.id);
+      }
     }
     peers = list;
     final talking = {
@@ -551,30 +745,171 @@ class WalkieController extends ChangeNotifier {
     if (down == transmitting) return;
     if (down && recording != null) return;
     transmitting = down;
+    if (!down) {
+      talkLatched = false;
+      _talkLimit?.cancel();
+    }
     notifyListeners();
+    _updateServiceText();
     try {
       if (down) {
+        _stopReplay();
         _audio.stopClip();
         playingKey = null;
         await manager.setTalking(true);
-        await _audio.startTransmit(manager.sendAudio);
+        await _audio.startTransmit(_sendAndKeep);
       } else {
-        await _audio.stopTransmit(manager.sendAudio);
+        await _audio.stopTransmit(_sendAndKeep);
+        history?.endTake(nodeId);
         await manager.setTalking(false);
       }
     } catch (e) {
       error = 'Mic error: $e';
       transmitting = false;
       notifyListeners();
+      _updateServiceText();
     }
   }
+
+  /// Send a mic packet and keep it in the history (marked "You").
+  void _sendAndKeep(Uint8List opus) {
+    manager.sendAudio(opus);
+    history?.addPacket(
+      scope: scope,
+      sender: nodeId,
+      name: name,
+      opus: opus,
+      heard: true,
+      mine: true,
+    );
+  }
+
+  // ------------------------------------------------------ replay missed talk
+
+  List<TalkTake> get takes => history?.takesFor(scope) ?? const [];
+  int get unheardTakes => history?.unheardIn(scope) ?? 0;
+
+  /// Play [t] (from where it was paused), or pause it if it is playing.
+  Future<void> playTake(TalkTake t) async {
+    if (playingTake?.id == t.id) {
+      pauseTake();
+      return;
+    }
+    playingAll = false;
+    await _play(t);
+  }
+
+  void pauseTake() {
+    final t = playingTake;
+    if (t == null) return;
+    _resumeAt[t.id] = playingPosMs;
+    playingAll = false;
+    _stopReplay();
+    _audio.stopClip();
+    notifyListeners();
+  }
+
+  /// Plays every unheard transmission on this channel, oldest first.
+  Future<void> playAllMissed() async {
+    final queue = takes.where((t) => !t.heard).toList().reversed.toList();
+    if (queue.isEmpty) {
+      _notice('Nothing missed on $channelLabel.');
+      return;
+    }
+    playingAll = true;
+    for (final t in queue) {
+      if (!playingAll) break;
+      final ok = await _play(t);
+      if (!ok) break;
+    }
+    playingAll = false;
+    notifyListeners();
+  }
+
+  Future<void> setPlaybackSpeed(double x) async {
+    playbackSpeed = x;
+    notifyListeners();
+    final t = playingTake;
+    if (t != null) {
+      // Restart where we are at the new speed.
+      _resumeAt[t.id] = playingPosMs;
+      final all = playingAll;
+      _stopReplay();
+      _audio.stopClip();
+      playingAll = all;
+      await _play(t);
+    }
+  }
+
+  /// Returns true if it played to the end.
+  Future<bool> _play(TalkTake t) async {
+    final h = history;
+    if (h == null || transmitting || recording != null) return false;
+    final packets = await h.packetsOf(t);
+    if (packets == null || packets.isEmpty) {
+      _notice('That recording is gone.');
+      return false;
+    }
+    final token = ++_replayToken;
+    playingKey = null;
+    playingTake = t;
+    final from = _resumeAt.remove(t.id) ?? 0;
+    playingPosMs = from >= t.durationMs - 300 ? 0 : from;
+    h.markHeard(t);
+    notifyListeners();
+    final finished = await _audio.playClip(
+      packets,
+      fromPeer: t.mine ? null : t.sender,
+      speed: playbackSpeed,
+      startMs: playingPosMs,
+      onPosition: (ms) {
+        if (token != _replayToken) return;
+        playingPosMs = ms;
+        final now = DateTime.now();
+        if (now.difference(_lastPosNotify).inMilliseconds > 200) {
+          _lastPosNotify = now;
+          notifyListeners();
+        }
+      },
+    );
+    if (token == _replayToken) {
+      playingTake = null;
+      playingPosMs = 0;
+      if (_talkingPrev.isEmpty) await _audio.setFocus(false);
+      notifyListeners();
+    }
+    return finished;
+  }
+
+  void _stopReplay() {
+    _replayToken++;
+    playingTake = null;
+    playingAll = false;
+  }
+
+  Future<void> deleteTake(TalkTake t) async {
+    if (playingTake?.id == t.id) pauseTake();
+    _resumeAt.remove(t.id);
+    await history?.delete(t);
+  }
+
+  Future<void> clearHistory() async {
+    if (playingTake != null) pauseTake();
+    await history?.clear(scope);
+  }
+
+  void markAllHeard() => history?.markAllHeard(scope);
 
   // ---------------------------------------------------------------- rings
 
   /// Ring one phone, or everyone on the channel when [toPeer] is null.
-  Future<void> ring({int? toPeer, bool beep = false}) async {
-    final r = await ringer.ring(toPeer: toPeer, beep: beep);
-    final what = beep ? 'Beep' : 'Ring';
+  Future<void> ring({
+    int? toPeer,
+    bool beep = false,
+    bool urgent = false,
+  }) async {
+    final r = await ringer.ring(toPeer: toPeer, beep: beep, urgent: urgent);
+    final what = beep ? 'Beep' : (urgent ? 'Urgent ring' : 'Ring');
     if (r.status.isEmpty) {
       _notice(
         'Nobody on $channelLabel to ${beep ? 'beep' : 'ring'} right now.',
@@ -604,8 +939,11 @@ class WalkieController extends ChangeNotifier {
       id: r.id,
       name: from,
       channel: displayChannel(r.channel),
+      urgent: r.urgent,
+      loud: settings.urgentLoud,
     );
-    _ringTimers[(r.from, r.id)] = Timer(ringDuration, () async {
+    final ringFor = r.urgent ? urgentRingDuration : ringDuration;
+    _ringTimers[(r.from, r.id)] = Timer(ringFor, () async {
       if (r.status != RingStatus.delivered) return;
       await ringer.respond(r, RingStatus.missed);
       await bridge.stopRing(from: r.from, id: r.id);
@@ -736,6 +1074,7 @@ class WalkieController extends ChangeNotifier {
       _notice('That message could not be played.');
       return;
     }
+    _stopReplay();
     playingKey = e.key;
     await m.markPlayed(e);
     notifyListeners();
@@ -855,6 +1194,8 @@ class WalkieController extends ChangeNotifier {
     for (final t in _ringTimers.values) {
       t.cancel();
     }
+    _talkLimit?.cancel();
+    history?.dispose();
     _lifecycle?.dispose();
     messenger?.dispose();
     ringer.dispose();

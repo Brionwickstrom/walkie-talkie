@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:audio_session/audio_session.dart';
@@ -9,6 +10,7 @@ import 'agc.dart';
 import 'codec.dart';
 import 'opus_voice_codec.dart';
 import 'playout_buffer.dart';
+import 'time_stretch.dart';
 import 'voice_pipeline.dart';
 
 /// Mic capture (record, raw PCM16 stream) and speaker playback
@@ -173,39 +175,75 @@ class AudioEngine {
 
   bool get playingClip => _clipDone != null;
 
-  /// Play a recorded voice message (list of Opus packets). Completes when
-  /// it finished or [stopClip] was called.
-  Future<void> playClip(List<Uint8List> packets, {int? fromPeer}) async {
-    if (!_ready) return;
+  /// Play a recorded clip (list of 20 ms Opus packets): a voice message or
+  /// a replayed transmission. Starts at [startMs] of the clip, at [speed]
+  /// (1, 1.5, 2: pitch kept, see [timeStretch]); [onPosition] gets the clip
+  /// time in ms as it plays. Completes when it finished or [stopClip] was
+  /// called; returns true if it played to the end.
+  Future<bool> playClip(
+    List<Uint8List> packets, {
+    int? fromPeer,
+    double speed = 1.0,
+    int startMs = 0,
+    void Function(int ms)? onPosition,
+  }) async {
+    if (!_ready) return false;
     stopClip();
+    final done = Completer<void>();
+    _clipDone = done;
     await setFocus(true);
     final dec = OpusVoiceDecoder();
     _clipDecoder = dec;
     final agc = Agc();
     final vol = fromPeer == null ? 1.0 : (_volumes[fromPeer] ?? 1.0);
-    final done = Completer<void>();
-    _clipDone = done;
+    final first = (startMs ~/ VoiceFormat.frameMs).clamp(0, packets.length);
+    final pcm = BytesBuilder(copy: false);
+    for (var i = first; i < packets.length; i++) {
+      try {
+        final f = agc.process(dec.decode(packets[i]), volume: vol);
+        pcm.add(f.buffer.asUint8List(f.offsetInBytes, f.lengthInBytes));
+      } catch (_) {}
+    }
+    final raw = pcm.takeBytes();
+    var samples = Int16List.view(
+      Uint8List.fromList(raw).buffer,
+      0,
+      raw.length ~/ 2,
+    );
+    if ((speed - 1).abs() > 0.01) {
+      final input = samples;
+      samples = await Isolate.run(() => timeStretch(input, speed));
+    }
+    if (!identical(_clipDone, done)) return false; // stopped meanwhile
     var i = 0;
+    final n = VoiceFormat.samplesPerFrame;
     final start = DateTime.now();
-    final totalMs = packets.length * VoiceFormat.frameMs;
+    final totalMs = samples.length * 1000 ~/ VoiceFormat.sampleRate;
+    var finished = false;
     void pump() {
       final elapsed = DateTime.now().difference(start).inMilliseconds;
-      // Stay at most ~200 ms ahead of real time so stopClip is quick.
-      while (i < packets.length && i * VoiceFormat.frameMs < elapsed + 200) {
+      // Stay at most ~200 ms ahead of real time so pause / stop is quick.
+      while (i < samples.length &&
+          i * 1000 ~/ VoiceFormat.sampleRate < elapsed + 200) {
+        final end = (i + n).clamp(0, samples.length);
+        final chunk = Int16List.sublistView(samples, i, end);
         try {
-          final pcm = agc.process(dec.decode(packets[i]), volume: vol);
           FlutterPcmSound.feed(
             PcmArrayInt16(
-              bytes: pcm.buffer.asByteData(
-                pcm.offsetInBytes,
-                pcm.lengthInBytes,
+              bytes: chunk.buffer.asByteData(
+                chunk.offsetInBytes,
+                chunk.lengthInBytes,
               ),
             ),
           );
         } catch (_) {}
-        i++;
+        i = end;
       }
-      if (i >= packets.length && elapsed > totalMs + 250) stopClip();
+      onPosition?.call(startMs + (elapsed.clamp(0, totalMs) * speed).round());
+      if (i >= samples.length && elapsed > totalMs + 250) {
+        finished = true;
+        stopClip();
+      }
     }
 
     pump();
@@ -213,7 +251,8 @@ class AudioEngine {
       const Duration(milliseconds: 40),
       (_) => pump(),
     );
-    return done.future;
+    await done.future;
+    return finished;
   }
 
   void stopClip() {

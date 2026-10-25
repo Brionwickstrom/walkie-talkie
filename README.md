@@ -204,6 +204,58 @@ every frame to each connected relay and de-duplicates on receive. Reconnects
 with 2 s..60 s backoff, 75 s first-connect timeout (Render cold start), text
 `ping` every 25 s.
 
+## Replay, hardware talk buttons, urgent rings, battery saver (v1.4)
+
+### Replay missed talk
+Every transmission on the current channel (other people's and your own,
+marked "You") is kept on the phone as Opus packets: the last 50 per
+channel, nothing older than 24 h, at most 20 MB in total
+(`lib/history/talk_history.dart`). A transmission ends at talk-end or after
+1.5 s of silence; blips under 0.4 s are dropped. Anything that was not
+played live with the app open (app closed, you were talking) counts as
+"not heard" and is badged. The home screen shows a "recent" strip (tap to
+play / pause, "Missed" plays all unheard oldest first); History has
+1x / 1.5x / 2x (pitch kept, WSOLA in `lib/audio/time_stretch.dart`),
+play all missed, swipe to delete, mark all heard, clear. Private channels
+are stored under their own scope and only show while on that private
+channel. Limitation: stored unencrypted in app-private storage.
+
+### Hardware talk buttons (Android)
+* Tap-to-talk (toggle) mode for the on-screen button; latched talk stops
+  after 2 minutes.
+* Volume-down as talk button (hold; in toggle mode a tap latches). Works
+  with the app open. With the optional accessibility service
+  (`PttAccessibilityService`, key events only, no screen content) it also
+  works while another app is open and the screen is on. Android does not
+  deliver volume keys to apps with the screen off. Sideloaded apps on
+  Android 13+ must first "Allow restricted settings" in App info.
+* Headset play/pause / hook: a MediaSession active while the listening
+  service runs. Tap = toggle, hold = talk while held. If another app plays
+  media afterwards it takes the button back until Walkie Talkie is opened.
+* "Talk" toggle on the listening notification (lock screen too).
+* Background talk needs the listening service to hold the microphone
+  foreground-service type, which Android only grants while the app is on
+  screen: open the app once after boot.
+
+### Urgent ring
+Long-press a person > Urgent ring. The `ring` control message carries
+`"u":1` (older phones ignore it and ring normally for 15 s). The receiver
+rings for up to 60 s on the alarm stream (sounds in silent mode, alarm
+volume raised to at least 70 % while ringing and restored after) with a
+strong vibration pattern. With Do Not Disturb access granted, DND is
+switched off while an urgent ring sounds and restored afterwards. The
+sender keeps retrying an urgent ring for a minute if the phone is out of
+reach.
+
+### Battery saver
+Hello beacons every 2.5 s instead of 1 s (announced as `"iv"` in the hello
+so newer phones wait longer before dropping us; older phones keep seeing
+us because they ping every second and we answer), no RTT pings, Bluetooth
+scanning in 8 s bursts every 30 s (90 s while linked) with balanced
+connection priority, Wi-Fi subnet sweeps every 2 min, relay keep-alive
+every 50 s. Talk and rings still arrive; discovery and failover are slower.
+The 20-35 % saving shown in Settings is an estimate.
+
 ## Android <-> iPhone limits (important)
 * **No shared Wi-Fi Direct.** Android's Wi-Fi Direct / Wi-Fi Aware and
   Apple's AWDL / MultipeerConnectivity do not interoperate. Google Nearby

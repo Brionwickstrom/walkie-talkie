@@ -45,15 +45,55 @@ class BackgroundBridge {
     }
   }
 
+  /// [mic]: also claim the microphone (talk with the app in the
+  /// background); only works while the app is on screen. [talk]: show a
+  /// Talk button on the notification; [talking]: we are transmitting.
   Future<bool> startService({
     required String title,
     required String text,
+    bool mic = false,
+    bool talk = false,
+    bool talking = false,
   }) async =>
-      await _call<bool>('startService', {'title': title, 'text': text}) ??
+      await _call<bool>('startService', {
+        'title': title,
+        'text': text,
+        'mic': mic,
+        'talk': talk,
+        'talking': talking,
+      }) ??
       false;
 
-  Future<void> updateService({required String title, required String text}) =>
-      _call<void>('updateService', {'title': title, 'text': text});
+  Future<void> updateService({
+    required String title,
+    required String text,
+    bool talk = false,
+    bool talking = false,
+  }) => _call<void>('updateService', {
+    'title': title,
+    'text': text,
+    'talk': talk,
+    'talking': talking,
+  });
+
+  /// The listening service may use the mic (background talk works).
+  Future<bool> micInBackground() async =>
+      await _call<bool>('micInBackground') ?? false;
+
+  /// Hardware talk buttons (see PttKeys.kt).
+  Future<void> setPttConfig({required bool volume, required bool headset}) =>
+      _call<void>('setPttConfig', {'volume': volume, 'headset': headset});
+
+  /// The optional accessibility service (volume-down in the background).
+  Future<bool> accessibilityEnabled() async =>
+      await _call<bool>('a11yEnabled') ?? false;
+
+  Future<void> openAccessibilitySettings() => _call<void>('openA11ySettings');
+
+  /// Do Not Disturb access (urgent rings may sound through DND).
+  Future<bool> dndAccess() async => await _call<bool>('dndAccess') ?? false;
+
+  Future<void> openDndSettings() => _call<void>('openDndSettings');
 
   Future<void> stopService() => _call<void>('stopService');
 
@@ -65,11 +105,15 @@ class BackgroundBridge {
     required int id,
     required String name,
     required int channel,
+    bool urgent = false,
+    bool loud = true,
   }) => _call<void>('showRing', {
     'from': from,
     'id': id,
     'name': name,
     'channel': channel,
+    'urgent': urgent,
+    'loud': loud,
   });
 
   Future<void> stopRing({required int from, required int id}) =>

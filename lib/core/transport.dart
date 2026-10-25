@@ -88,6 +88,10 @@ abstract class Transport {
   /// are blocked.
   void learnPeerAddresses(int peerId, List<String> addresses) {}
 
+  /// Battery saver: scan / sweep / keep-alive less often. Traffic still
+  /// flows; discovery of new phones and failure detection get slower.
+  void setPowerSaver(bool on) {}
+
   /// One-line diagnostic for the debug UI.
   String? get debugInfo => null;
 

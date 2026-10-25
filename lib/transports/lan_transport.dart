@@ -128,6 +128,13 @@ class LanTransport extends Transport {
 
   static const Duration sweepAfter = Duration(seconds: 5);
   static const Duration sweepInterval = Duration(seconds: 30);
+
+  /// Battery saver: subnet sweeps (when nobody is heard) this often.
+  static const Duration saverSweepInterval = Duration(minutes: 2);
+  bool _saver = false;
+
+  @override
+  void setPowerSaver(bool on) => _saver = on;
   static const Duration _ifaceRefresh = Duration(seconds: 5);
   static const Duration _saveEvery = Duration(seconds: 30);
 
@@ -596,7 +603,8 @@ class LanTransport extends Transport {
     if (_hasRecentPeer) return;
     final since = _lastPeerHeard ?? _startedAt;
     if (since == null || now.difference(since) < sweepAfter) return;
-    if (_lastSweep != null && now.difference(_lastSweep!) < sweepInterval) {
+    final every = _saver ? saverSweepInterval : sweepInterval;
+    if (_lastSweep != null && now.difference(_lastSweep!) < every) {
       return;
     }
     unawaited(runSweep());

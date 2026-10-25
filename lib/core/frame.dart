@@ -155,7 +155,18 @@ class ControlMessage {
     this.time,
     this.id,
     this.status,
+    this.urgent = false,
+    this.interval,
   });
+
+  /// [ControlKind.ring]: urgent ring (repeats up to 60 s, may sound in
+  /// silent mode). Older phones ignore it and ring normally.
+  final bool urgent;
+
+  /// [ControlKind.hello]: the sender's hello interval in ms when it is
+  /// longer than normal (battery saver), so we wait longer before treating
+  /// it as gone. Older phones ignore it.
+  final int? interval;
 
   final ControlKind kind;
 
@@ -189,6 +200,8 @@ class ControlMessage {
         if (time != null) 't': time,
         if (id != null) 'i': id,
         if (status != null) 's': status,
+        if (urgent) 'u': 1,
+        if (interval != null) 'iv': interval,
       }),
     ),
   );
@@ -211,6 +224,8 @@ class ControlMessage {
         time: (map['t'] as num?)?.toInt(),
         id: (map['i'] as num?)?.toInt(),
         status: map['s'] as String?,
+        urgent: map['u'] == 1 || map['u'] == true,
+        interval: (map['iv'] as num?)?.toInt(),
       );
     } catch (_) {
       return null;

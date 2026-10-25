@@ -22,6 +22,8 @@ object Notifier {
     const val CH_RING = "ring_v1"
     const val CH_TALK = "talk_v1"
     const val CH_MSG = "msg_v1"
+    const val CH_URGENT = "urgent_v1"
+    const val CH_URGENT_DND = "urgent_dnd_v1"
 
     const val ACTION_STOP = "com.walkie.walkie_talkie.STOP"
     const val ACTION_DISMISS = "com.walkie.walkie_talkie.DISMISS"
@@ -30,8 +32,11 @@ object Notifier {
     const val ACTION_RING_OPEN = "com.walkie.walkie_talkie.RING_OPEN"
     const val ACTION_OPEN_INBOX = "com.walkie.walkie_talkie.OPEN_INBOX"
     const val ACTION_OPEN_CHANNEL = "com.walkie.walkie_talkie.OPEN_CHANNEL"
+    const val ACTION_TALK = "com.walkie.walkie_talkie.TALK"
 
     private const val RING_MS = 15000L
+    private const val URGENT_MS = 60000L
+    private var ringMs = RING_MS
     private val main = Handler(Looper.getMainLooper())
     private var ringPlayer: MediaPlayer? = null
     private var ringKey: Pair<Long, Long>? = null
@@ -57,6 +62,29 @@ object Notifier {
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             },
         )
+        nm.createNotificationChannel(
+            NotificationChannel(CH_URGENT, "Urgent rings", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "Urgent rings repeat for up to a minute (the app plays its own alarm tone)"
+                setSound(null, null)
+                enableVibration(true)
+                vibrationPattern = URGENT_PATTERN
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+            },
+        )
+        // Created only once Do Not Disturb access is granted: then Android
+        // lets this channel through DND.
+        if (nm.isNotificationPolicyAccessGranted && nm.getNotificationChannel(CH_URGENT_DND) == null) {
+            nm.createNotificationChannel(
+                NotificationChannel(CH_URGENT_DND, "Urgent rings (through Do Not Disturb)", NotificationManager.IMPORTANCE_HIGH).apply {
+                    description = "Urgent rings while Do Not Disturb is on"
+                    setSound(null, null)
+                    enableVibration(true)
+                    vibrationPattern = URGENT_PATTERN
+                    lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                    setBypassDnd(true)
+                },
+            )
+        }
         nm.createNotificationChannel(
             NotificationChannel(CH_TALK, "Someone is talking", NotificationManager.IMPORTANCE_DEFAULT).apply {
                 description = "Live push-to-talk while the app is closed"
@@ -113,25 +141,29 @@ object Notifier {
         return PendingIntent.getActivity(ctx, 1, i, FLAGS)
     }
 
-    fun listening(ctx: Context, title: String, text: String): Notification {
+    fun listening(ctx: Context, title: String, text: String, talk: Boolean = false, talking: Boolean = false): Notification {
         ensureChannels(ctx)
-        return NotificationCompat.Builder(ctx, CH_LISTEN)
+        val b = NotificationCompat.Builder(ctx, CH_LISTEN)
             .setSmallIcon(R.drawable.ic_stat_walkie)
-            .setContentTitle(title)
-            .setContentText(text)
+            .setContentTitle(if (talking) "You are talking - others hear you" else title)
+            .setContentText(if (talking) "Tap \"Stop talking\" when done" else text)
             .setOngoing(true)
             .setShowWhen(false)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setContentIntent(openApp(ctx))
-            .addAction(0, "Stop", broadcastIntent(ctx, ACTION_STOP, 2))
+        if (talk) {
+            b.addAction(0, if (talking) "Stop talking" else "Talk", broadcastIntent(ctx, ACTION_TALK, 3))
+        }
+        return b.addAction(0, "Stop", broadcastIntent(ctx, ACTION_STOP, 2))
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .build()
     }
 
     private fun ringId(from: Long, id: Long): Int = (2000000 + ((from xor id) and 0xFFFFF)).toInt()
 
-    fun showRing(ctx: Context, from: Long, id: Long, name: String, channel: Int) {
+    fun showRing(ctx: Context, from: Long, id: Long, name: String, channel: Int, urgent: Boolean = false, loud: Boolean = true) {
         ensureChannels(ctx)
         val nid = ringId(from, id)
         val put: Intent.() -> Unit = {
@@ -142,15 +174,18 @@ object Notifier {
         val full = activityIntent(ctx, ACTION_RING_OPEN, nid, put)
         val answer = activityIntent(ctx, ACTION_ANSWER, nid + 1, put)
         val dismiss = broadcastIntent(ctx, ACTION_DISMISS, nid + 2, put)
-        val n = NotificationCompat.Builder(ctx, CH_RING)
+        val dnd = nm(ctx).isNotificationPolicyAccessGranted
+        val chId = if (!urgent) CH_RING else if (dnd && loud) CH_URGENT_DND else CH_URGENT
+        val ms = if (urgent) URGENT_MS else RING_MS
+        val n = NotificationCompat.Builder(ctx, chId)
             .setSmallIcon(R.drawable.ic_stat_walkie)
-            .setContentTitle("$name is ringing you")
+            .setContentTitle(if (urgent) "URGENT: $name is ringing you" else "$name is ringing you")
             .setContentText("Channel $channel - tap Answer to talk")
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setAutoCancel(true)
-            .setTimeoutAfter(RING_MS + 5000)
+            .setTimeoutAfter(ms + 5000)
             .setContentIntent(full)
             .setFullScreenIntent(full, true)
             .setDeleteIntent(dismiss)
@@ -158,7 +193,7 @@ object Notifier {
             .addAction(0, "Dismiss", dismiss)
             .build()
         post(ctx, nid, n)
-        startRingSound(ctx, from to id)
+        startRingSound(ctx, from to id, urgent, loud)
     }
 
     fun stopRing(ctx: Context, from: Long, id: Long) {
@@ -231,15 +266,75 @@ object Notifier {
     private fun resUri(ctx: Context, res: Int): Uri =
         Uri.parse("android.resource://${ctx.packageName}/$res")
 
-    private fun startRingSound(ctx: Context, key: Pair<Long, Long>) {
+    private val URGENT_PATTERN = longArrayOf(0, 250, 120, 250, 120, 250, 500, 900, 400)
+    private var savedFilter: Int? = null
+    private var savedAlarmVolume: Int? = null
+
+    /** Urgent + loud: through Do Not Disturb (if allowed) and at a
+     *  reasonable alarm volume, both put back when the ring stops. */
+    private fun overrideQuiet(ctx: Context) {
+        try {
+            val nm = nm(ctx)
+            if (nm.isNotificationPolicyAccessGranted &&
+                nm.currentInterruptionFilter != NotificationManager.INTERRUPTION_FILTER_ALL &&
+                nm.currentInterruptionFilter != NotificationManager.INTERRUPTION_FILTER_UNKNOWN
+            ) {
+                savedFilter = nm.currentInterruptionFilter
+                nm.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALL)
+            }
+        } catch (_: Exception) {
+        }
+        try {
+            val am = ctx.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+            val max = am.getStreamMaxVolume(android.media.AudioManager.STREAM_ALARM)
+            val cur = am.getStreamVolume(android.media.AudioManager.STREAM_ALARM)
+            val want = (max * 0.7).toInt().coerceAtLeast(1)
+            if (cur < want) {
+                savedAlarmVolume = cur
+                am.setStreamVolume(android.media.AudioManager.STREAM_ALARM, want, 0)
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun restoreQuiet() {
+        val ctx = appCtx ?: return
+        savedAlarmVolume?.let {
+            try {
+                val am = ctx.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+                am.setStreamVolume(android.media.AudioManager.STREAM_ALARM, it, 0)
+            } catch (_: Exception) {
+            }
+        }
+        savedAlarmVolume = null
+        savedFilter?.let {
+            try {
+                nm(ctx).setInterruptionFilter(it)
+            } catch (_: Exception) {
+            }
+        }
+        savedFilter = null
+    }
+
+    private var urgentNow = false
+
+    private fun startRingSound(ctx: Context, key: Pair<Long, Long>, urgent: Boolean, loud: Boolean) {
         main.post {
             stopRingSound()
             ringKey = key
+            appCtx = ctx.applicationContext
+            val alarm = urgent && loud
+            urgentNow = urgent
+            ringMs = if (urgent) URGENT_MS else RING_MS
+            if (alarm) overrideQuiet(ctx)
             try {
                 val mp = MediaPlayer()
                 mp.setAudioAttributes(
                     AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                        .setUsage(
+                            if (alarm) AudioAttributes.USAGE_ALARM
+                            else AudioAttributes.USAGE_NOTIFICATION_RINGTONE,
+                        )
                         .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                         .build(),
                 )
@@ -251,7 +346,7 @@ object Notifier {
             } catch (_: Exception) {
             }
             vibrate(ctx, true)
-            main.postDelayed(stopRingTask, RING_MS)
+            main.postDelayed(stopRingTask, ringMs)
         }
     }
 
@@ -270,6 +365,8 @@ object Notifier {
         }
         ringPlayer = null
         appCtx?.let { vibrate(it, false) }
+        restoreQuiet()
+        urgentNow = false
     }
 
     @Suppress("DEPRECATION")
@@ -281,9 +378,17 @@ object Notifier {
                 v.cancel()
                 return
             }
-            val pattern = longArrayOf(0, 700, 500)
+            val pattern = if (urgentNow) URGENT_PATTERN else longArrayOf(0, 700, 500)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                v.vibrate(VibrationEffect.createWaveform(pattern, 0))
+                if (urgentNow) {
+                    // Alarm usage: vibrates even in silent mode.
+                    v.vibrate(
+                        VibrationEffect.createWaveform(pattern, 0),
+                        AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).build(),
+                    )
+                } else {
+                    v.vibrate(VibrationEffect.createWaveform(pattern, 0))
+                }
             } else {
                 v.vibrate(pattern, 0)
             }

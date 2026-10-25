@@ -9,6 +9,7 @@ import '../app/walkie_controller.dart';
 import '../core/peer.dart';
 import '../core/transport.dart';
 import '../update/update_ui.dart';
+import 'history_page.dart';
 import 'home_view.dart';
 import 'inbox_page.dart';
 
@@ -153,6 +154,7 @@ class _HomePageState extends State<HomePage> {
               banners: [
                 for (final r in List.of(c.activeRings))
                   _RingBanner(
+                    urgent: r.urgent,
                     name: c.nameOf(r.from),
                     channel: c.labelFor(r.channel),
                     onAnswer: () => c.answerRing(r),
@@ -212,6 +214,18 @@ class _HomePageState extends State<HomePage> {
                       onPressed: () => _openInbox(context),
                     )
                   : null,
+              recent: c.takes.isEmpty
+                  ? null
+                  : RecentStrip(
+                      takes: [for (final t in c.takes.take(8)) takeView(c, t)],
+                      unheard: c.unheardTakes,
+                      onPlay: (v) {
+                        final t = c.takes.where((x) => x.id == v.id);
+                        if (t.isNotEmpty) c.playTake(t.first);
+                      },
+                      onPlayMissed: c.playAllMissed,
+                      onOpenHistory: () => _openHistory(context),
+                    ),
               actions: ChannelActions(
                 onRingAll: () => c.ring(),
                 onBeepAll: () => c.ring(beep: true),
@@ -222,6 +236,8 @@ class _HomePageState extends State<HomePage> {
                 busy: c.talkingPeer != null,
                 onChanged: c.pushToTalk,
                 size: pttSize,
+                toggle: c.settings.toggleTalk,
+                onTap: c.toggleTalk,
               ),
             ),
           ),
@@ -234,10 +250,9 @@ class _HomePageState extends State<HomePage> {
   /// name), then other channels, then the ones that just left.
   List<PersonView> _people() {
     final now = DateTime.now();
-    final timeout = c.manager.linkTimeout;
     final out = <PersonView>[];
     for (final p in c.peers) {
-      final links = p.liveLinks(now, timeout).toList()
+      final links = p.liveLinks(now, c.manager.timeoutFor(p)).toList()
         ..sort((a, b) => b.defaultPriority.compareTo(a.defaultPriority));
       DateTime? last;
       for (final t in p.lastSeen.values) {
@@ -349,6 +364,22 @@ class _HomePageState extends State<HomePage> {
                           c.ring(toPeer: p.id, beep: true);
                         },
                       ),
+                      FilledButton.tonalIcon(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: Theme.of(ctx)
+                              .colorScheme
+                              .errorContainer,
+                          foregroundColor: Theme.of(ctx)
+                              .colorScheme
+                              .onErrorContainer,
+                        ),
+                        icon: const Icon(Icons.campaign),
+                        label: const Text('Urgent ring'),
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          c.ring(toPeer: p.id, urgent: true);
+                        },
+                      ),
                       OutlinedButton.icon(
                         icon: const Icon(Icons.mic),
                         label: const Text('Voice message'),
@@ -386,6 +417,12 @@ class _HomePageState extends State<HomePage> {
       if (waiting > 0) '$waiting waiting for someone to come in range',
     ];
     return 'Voice messages: ${parts.join(', ')}';
+  }
+
+  void _openHistory(BuildContext context) {
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => HistoryPage(controller: c)));
   }
 
   void _openInbox(BuildContext context) {
@@ -539,6 +576,116 @@ class _HomePageState extends State<HomePage> {
                   ),
                 ],
                 const Divider(height: 32),
+                _SectionTitle('Talk button'),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Tap to talk (toggle)'),
+                  subtitle: const Text(
+                    'Tap once to start talking, tap again to stop. Stops by '
+                    'itself after 2 minutes. Off = hold to talk.',
+                  ),
+                  value: c.settings.toggleTalk,
+                  onChanged: c.setToggleTalk,
+                ),
+                if (c.bridge.supported) ...[
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Use volume-down as talk button'),
+                    subtitle: const Text(
+                      'Hold volume-down to talk while the app is open. While '
+                      'this is on, volume-down does not lower the volume.',
+                    ),
+                    value: c.settings.volumeKeyPtt,
+                    onChanged: c.setVolumeKeyPtt,
+                  ),
+                  if (c.settings.volumeKeyPtt)
+                    _PermissionButton(
+                      key: const Key('a11y'),
+                      check: c.bridge.accessibilityEnabled,
+                      onLabel: 'Works with other apps open too',
+                      offLabel: 'Also with other apps open...',
+                      icon: Icons.accessibility_new,
+                      onTap: () => _explainAccessibility(ctx, c),
+                    ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Headset button talks'),
+                    subtitle: const Text(
+                      'Bluetooth or wired headset play/pause button: press '
+                      'to start, press again to stop (or hold while you '
+                      'talk). Works while the app is listening. If you then '
+                      'play music, the button goes back to the music app '
+                      'until you reopen Walkie Talkie.',
+                    ),
+                    value: c.settings.headsetPtt,
+                    onChanged: c.setHeadsetPtt,
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Talk button on the notification'),
+                    subtitle: const Text(
+                      'Adds "Talk" to the listening notification, also on '
+                      'the lock screen. Tap again to stop.',
+                    ),
+                    value: c.settings.notificationTalk,
+                    onChanged: c.settings.stayReachable
+                        ? c.setNotificationTalk
+                        : null,
+                  ),
+                  const Divider(height: 32),
+                  _SectionTitle('Urgent rings'),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Urgent rings sound in silent mode'),
+                    subtitle: const Text(
+                      'Someone can send an urgent ring (long-press a person). '
+                      'It rings for up to 1 minute at alarm volume with a '
+                      'strong vibration, even when the phone is on silent.',
+                    ),
+                    value: c.settings.urgentLoud,
+                    onChanged: c.setUrgentLoud,
+                  ),
+                  if (c.settings.urgentLoud)
+                    _PermissionButton(
+                      key: const Key('dnd'),
+                      check: c.bridge.dndAccess,
+                      onLabel: 'Also rings through Do Not Disturb',
+                      offLabel: 'Also ring through Do Not Disturb...',
+                      icon: Icons.do_not_disturb_off,
+                      onTap: () => _explainDnd(ctx, c),
+                    ),
+                ],
+                const Divider(height: 32),
+                _SectionTitle('Battery'),
+                SegmentedButton<bool>(
+                  segments: const [
+                    ButtonSegment(
+                      value: false,
+                      label: Text('Normal'),
+                      icon: Icon(Icons.bolt),
+                    ),
+                    ButtonSegment(
+                      value: true,
+                      label: Text('Saver'),
+                      icon: Icon(Icons.battery_saver),
+                    ),
+                  ],
+                  selected: {c.settings.powerSaver},
+                  onSelectionChanged: (v) => c.setPowerSaver(v.first),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  c.settings.powerSaver
+                      ? 'Saver: roughly 20-35% less battery while waiting '
+                            '(estimate, varies by phone). Talk and rings still '
+                            'come through, sometimes about a second later. '
+                            'New phones nearby can take up to 30 s to show up '
+                            'over Bluetooth.'
+                      : 'Normal: fastest. Phones show up within a few '
+                            'seconds. Switch to Saver to use less battery.',
+                  style: Theme.of(ctx).textTheme.bodySmall,
+                ),
+                const Divider(height: 32),
                 Row(
                   children: [
                     Expanded(
@@ -645,13 +792,169 @@ class _FullScreenButtonState extends State<_FullScreenButton> {
   }
 }
 
+class _SectionTitle extends StatelessWidget {
+  const _SectionTitle(this.text);
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 4),
+    child: Text(
+      text,
+      style: Theme.of(context).textTheme.titleMedium
+          ?.copyWith(fontWeight: FontWeight.w700),
+    ),
+  );
+}
+
+/// Shows whether an optional Android permission is on; tap to explain and
+/// open the system screen. Re-checks when the app comes back.
+class _PermissionButton extends StatefulWidget {
+  const _PermissionButton({
+    super.key,
+    required this.check,
+    required this.onLabel,
+    required this.offLabel,
+    required this.icon,
+    required this.onTap,
+  });
+  final Future<bool> Function() check;
+  final String onLabel;
+  final String offLabel;
+  final IconData icon;
+  final VoidCallback onTap;
+
+  @override
+  State<_PermissionButton> createState() => _PermissionButtonState();
+}
+
+class _PermissionButtonState extends State<_PermissionButton> {
+  bool? _on;
+  AppLifecycleListener? _l;
+
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+    _l = AppLifecycleListener(onResume: _refresh);
+  }
+
+  Future<void> _refresh() async {
+    final v = await widget.check();
+    if (mounted) setState(() => _on = v);
+  }
+
+  @override
+  void dispose() {
+    _l?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_on == true) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Row(
+          children: [
+            const Icon(Icons.check_circle, color: Colors.green, size: 20),
+            const SizedBox(width: 8),
+            Expanded(child: Text(widget.onLabel)),
+          ],
+        ),
+      );
+    }
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: OutlinedButton.icon(
+          icon: Icon(widget.icon),
+          label: Text(widget.offLabel),
+          onPressed: widget.onTap,
+        ),
+      ),
+    );
+  }
+}
+
+Future<void> _explainAccessibility(
+  BuildContext context,
+  WalkieController c,
+) => _explain(
+  context,
+  c,
+  title: 'Volume-down with other apps open',
+  body:
+      'To use volume-down as the talk button while another app is open, '
+      'Android needs you to turn on "Walkie Talkie volume-down talk button" '
+      'under Accessibility (it may be under "Installed apps" or '
+      '"Downloaded apps").\n\n'
+      'It only watches the volume-down key while this setting is on and '
+      'cannot read your screen.\n\n'
+      'If Android says the setting is restricted: open Settings > Apps > '
+      'Walkie Talkie, tap the ⋮ menu (top right) > "Allow restricted '
+      'settings", then try again.\n\n'
+      'With the screen off, Android does not pass the volume keys to apps, '
+      'so use the headset button or the notification there.',
+  action: 'Open Accessibility',
+  onAction: (c) => c.bridge.openAccessibilitySettings(),
+);
+
+Future<void> _explainDnd(BuildContext context, WalkieController c) => _explain(
+  context,
+  c,
+  title: 'Ring through Do Not Disturb?',
+  body:
+      'Urgent rings already play at alarm volume in silent mode. If you '
+      'also want them to ring while Do Not Disturb is on, allow Walkie '
+      'Talkie under "Do Not Disturb access" on the next screen.\n\n'
+      'Only urgent rings use this: Do Not Disturb is switched off while '
+      'one rings (up to 1 minute) and switched back on right after. '
+      'Normal rings, beeps and talk stay quiet.',
+  action: 'Allow',
+  onAction: (c) => c.bridge.openDndSettings(),
+);
+
+Future<void> _explain(
+  BuildContext context,
+  WalkieController c, {
+  required String title,
+  required String body,
+  required String action,
+  required Future<void> Function(WalkieController c) onAction,
+}) async {
+  await showDialog<void>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text(title),
+      content: SingleChildScrollView(child: Text(body)),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx),
+          child: const Text('Not now'),
+        ),
+        FilledButton(
+          onPressed: () {
+            Navigator.pop(ctx);
+            onAction(c);
+          },
+          child: Text(action),
+        ),
+      ],
+    ),
+  );
+}
+
 class _RingBanner extends StatelessWidget {
   const _RingBanner({
+    this.urgent = false,
     required this.name,
     required this.channel,
     required this.onAnswer,
     required this.onDismiss,
   });
+  final bool urgent;
   final String name;
   final String channel;
   final VoidCallback onAnswer;
@@ -661,7 +964,7 @@ class _RingBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return Card(
-      color: cs.tertiaryContainer,
+      color: urgent ? cs.errorContainer : cs.tertiaryContainer,
       margin: const EdgeInsets.fromLTRB(8, 8, 8, 0),
       child: Padding(
         padding: const EdgeInsets.all(12),
@@ -671,7 +974,7 @@ class _RingBanner extends StatelessWidget {
             const SizedBox(width: 12),
             Expanded(
               child: Text(
-                '$name is ringing you ($channel)',
+                '${urgent ? 'URGENT: ' : ''}$name is ringing you ($channel)',
                 style: Theme.of(context).textTheme.titleMedium,
               ),
             ),

@@ -73,7 +73,27 @@ class TransportManager {
   final List<Transport> _transports;
   final int localNodeId;
   final Duration linkTimeout;
+
+  /// Hello interval in normal mode; see [powerSaver].
   final Duration helloInterval;
+
+  /// Battery saver: hellos every [saverHelloInterval] (announced in the
+  /// hello so newer phones wait longer) and no RTT pings. Older phones
+  /// still see us because they ping us every second and we answer.
+  bool get powerSaver => _saver;
+  bool _saver = false;
+  static const saverHelloInterval = Duration(milliseconds: 2500);
+  Duration get currentHelloInterval =>
+      _saver ? saverHelloInterval : helloInterval;
+
+  /// How long [p] may stay silent before a link counts as dead: longer for
+  /// phones that announced a slow (battery saver) hello.
+  Duration timeoutFor(Peer p) {
+    final iv = p.helloInterval;
+    if (iv == null) return linkTimeout;
+    final t = iv * 2.5;
+    return t > linkTimeout ? t : linkTimeout;
+  }
 
   /// Best link quiet for longer than this => also send on the runner-up.
   final Duration staleAfter;
@@ -173,15 +193,35 @@ class TransportManager {
         }
       }),
     );
-    _helloTimer = Timer.periodic(helloInterval, (_) async {
-      await sendHello();
-      await sendPings();
-    });
+    _startHelloTimer();
     _pruneTimer = Timer.periodic(
       const Duration(milliseconds: 500),
       (_) => prune(),
     );
     await sendHello();
+  }
+
+  void _startHelloTimer() {
+    _helloTimer?.cancel();
+    _helloTimer = Timer.periodic(currentHelloInterval, (_) async {
+      await sendHello();
+      if (!_saver) await sendPings();
+    });
+  }
+
+  /// Turn battery saver on/off for the manager and every transport.
+  Future<void> setPowerSaver(bool on) async {
+    if (on == _saver) return;
+    _saver = on;
+    for (final t in _transports) {
+      try {
+        t.setPowerSaver(on);
+      } catch (_) {}
+    }
+    if (_running) {
+      _startHelloTimer();
+      await sendHello();
+    }
   }
 
   Future<void> stop() async {
@@ -252,6 +292,7 @@ class TransportManager {
     ControlMessage(
       ControlKind.hello,
       name: localName,
+      interval: _saver ? saverHelloInterval.inMilliseconds : null,
       lanAddrs: [
         for (final t in _transports)
           if (t.status == TransportStatus.running) ...t.localAddresses,
@@ -451,7 +492,7 @@ class TransportManager {
   /// addressable, best first.
   List<TransportKind> usableLinks(Peer p, DateTime now) {
     final ts = <Transport>[];
-    for (final kind in p.liveLinks(now, linkTimeout)) {
+    for (final kind in p.liveLinks(now, timeoutFor(p))) {
       final t = _transportOf(kind);
       if (t == null || t.status != TransportStatus.running) continue;
       if (!t.canReach(p.id)) continue;
@@ -517,6 +558,10 @@ class TransportManager {
           if (msg != null) {
             switch (msg.kind) {
               case ControlKind.hello:
+                final iv = msg.interval;
+                peer.helloInterval = iv != null && iv > 0 && iv <= 30000
+                    ? Duration(milliseconds: iv)
+                    : null;
                 if (msg.name != null && msg.name != peer.name) {
                   peer.name = msg.name!;
                   changed = true;
@@ -603,7 +648,8 @@ class TransportManager {
     var changed = false;
     final gone = <int>[];
     for (final p in _peers.values) {
-      p.lastSeen.removeWhere((_, t) => now.difference(t) > linkTimeout);
+      final timeout = timeoutFor(p);
+      p.lastSeen.removeWhere((_, t) => now.difference(t) > timeout);
       p.rtt.removeWhere((k, _) => !p.lastSeen.containsKey(k));
       final best = _bestLink(p, now);
       if (best != p.activeLink) {

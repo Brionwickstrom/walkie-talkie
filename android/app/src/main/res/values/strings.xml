@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ptt_a11y_label">Walkie Talkie volume-down talk button</string>
+    <string name="ptt_a11y_description">Lets you hold volume-down to talk on Walkie Talkie while another app is open (screen on). It only listens for the volume-down key while "Use volume-down as talk button" is on in Walkie Talkie, and does not read anything on your screen.</string>
+</resources>
