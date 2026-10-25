@@ -1,0 +1,16 @@
+# Render blueprint: the Walkie Talkie internet relay (free web service).
+# The app connects to wss://brion-walkie-relay.onrender.com/ws
+services:
+  - type: web
+    name: brion-walkie-relay
+    runtime: docker
+    plan: free
+    branch: main
+    dockerfilePath: ./relay/Dockerfile
+    dockerContext: ./relay
+    healthCheckPath: /healthz
+    autoDeploy: true
+    buildFilter:
+      paths:
+        - relay/**
+        - render.yaml

@@ -1,0 +1,7 @@
+name: walkie_relay
+description: Internet relay for the Walkie Talkie app (pure dart:io).
+publish_to: 'none'
+version: 1.3.0
+
+environment:
+  sdk: ^3.5.0
