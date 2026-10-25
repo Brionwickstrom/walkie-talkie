@@ -9,6 +9,13 @@ android {
     compileSdk = 37 // permission_handler_android needs 37
     ndkVersion = flutter.ndkVersion
 
+    // Compress native libs so the APK is small enough to email
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
