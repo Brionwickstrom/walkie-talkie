@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io' show Platform;
-import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -14,17 +13,16 @@ import '../transports/lan_transport.dart';
 import '../transports/mdns_discovery.dart';
 import '../transports/relay_transport.dart';
 import 'config.dart';
+import 'settings.dart';
 
 /// Glue between UI, [TransportManager] and [AudioEngine].
 class WalkieController extends ChangeNotifier {
-  WalkieController()
-    : nodeId = Random.secure().nextInt(0xFFFFFFFF),
-      _relay = RelayTransport(
-        serverUri: AppConfig.relayUrl.isEmpty
-            ? null
-            : Uri.tryParse(AppConfig.relayUrl),
-      ) {
-    name = 'Phone ${nodeId.toRadixString(16).substring(0, 4).toUpperCase()}';
+  WalkieController({
+    required this.settings,
+    this.settingsStore = const SharedPrefsSettingsStore(),
+  }) : nodeId = settings.nodeId,
+       _relay = RelayTransport(serverUri: _relayUri(settings)) {
+    name = settings.name;
     manager = TransportManager(
       transports: [
         LanTransport(
@@ -32,16 +30,33 @@ class WalkieController extends ChangeNotifier {
           platform: Platform.isAndroid
               ? const AndroidLanPlatform()
               : const LanPlatform(),
+          store: const SharedPrefsLanPeerStore(),
         ),
         BleTransport(),
         _relay,
       ],
       localNodeId: nodeId,
       localName: name,
-      channel: AppConfig.defaultChannel,
+      channel: settings.channel,
     );
   }
 
+  /// Loads the saved id/name/channel/relay (creating a stable id on first
+  /// launch) and builds the controller.
+  static Future<WalkieController> load({
+    SettingsStore store = const SharedPrefsSettingsStore(),
+  }) async {
+    final s = await store.load(defaultChannel: AppConfig.defaultChannel);
+    return WalkieController(settings: s, settingsStore: store);
+  }
+
+  static Uri? _relayUri(AppSettings s) {
+    final url = (s.relayUrl ?? AppConfig.relayUrl).trim();
+    return url.isEmpty ? null : Uri.tryParse(url);
+  }
+
+  final AppSettings settings;
+  final SettingsStore settingsStore;
   final int nodeId;
   late String name;
   late final TransportManager manager;
@@ -132,18 +147,26 @@ class WalkieController extends ChangeNotifier {
 
   Future<void> setChannel(int ch) async {
     await manager.setChannel(ch);
+    settings.channel = ch;
+    unawaited(settingsStore.save(settings));
     notifyListeners();
   }
 
+  /// Empty resets to the default name derived from the stable id.
   void setName(String n) {
-    name = n.trim().isEmpty ? name : n.trim();
+    final t = n.trim();
+    settings.customName = t.isEmpty ? null : t;
+    name = settings.name;
     manager.localName = name;
     manager.sendHello();
+    unawaited(settingsStore.save(settings));
     notifyListeners();
   }
 
   Future<void> setRelayUrl(String url) async {
     final uri = url.trim().isEmpty ? null : Uri.tryParse(url.trim());
+    settings.relayUrl = url.trim();
+    unawaited(settingsStore.save(settings));
     await _relay.setServerUri(uri);
     notifyListeners();
   }

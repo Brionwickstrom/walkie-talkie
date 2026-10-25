@@ -13,7 +13,7 @@ class PlayoutBuffer {
   PlayoutBuffer({
     required this.sampleRate,
     this.targetMs = 60,
-    this.maxMs = 180,
+    this.maxMs = 200,
     DateTime Function()? clock,
   }) : _clock = clock ?? DateTime.now;
 

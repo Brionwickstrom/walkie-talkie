@@ -62,6 +62,33 @@ class LanInterface {
   String toString() => '$name ${address.address}/${prefixLength ?? '?'}';
 }
 
+/// What Android says about the Wi-Fi network (debug + socket rebinding).
+class LanNetState {
+  const LanNetState({
+    this.wifi = false,
+    this.validated = false,
+    this.bound = false,
+    this.wifiLock = false,
+    this.generation = 0,
+  });
+
+  /// A Wi-Fi network is connected.
+  final bool wifi;
+
+  /// Android confirmed that Wi-Fi reaches the internet. Not needed for
+  /// LAN; when false Android would otherwise send our traffic over mobile
+  /// data, so the app is bound to Wi-Fi instead ([bound]).
+  final bool validated;
+  final bool bound;
+
+  /// Low-latency Wi-Fi lock held (stops Wi-Fi power save batching packets).
+  final bool wifiLock;
+
+  /// Bumps whenever the process network binding changes. Sockets created
+  /// before a change keep the old routing, so the LAN socket is recreated.
+  final int generation;
+}
+
 /// OS hooks the LAN transport needs. The default works anywhere dart:io
 /// does; [AndroidLanPlatform] adds the Wi-Fi multicast lock and real
 /// netmasks via a small platform channel in MainActivity.kt.
@@ -72,6 +99,9 @@ class LanPlatform {
   /// app holds a WifiManager.MulticastLock.
   Future<bool> acquireMulticastLock() async => false;
   Future<void> releaseMulticastLock() async {}
+
+  /// Network binding / Wi-Fi lock state, null where not applicable.
+  Future<LanNetState?> netState() async => null;
 
   Future<List<LanInterface>> interfaces() async {
     final out = <LanInterface>[];
@@ -106,6 +136,23 @@ class AndroidLanPlatform extends LanPlatform {
     try {
       await _ch.invokeMethod<void>('releaseMulticastLock');
     } catch (_) {}
+  }
+
+  @override
+  Future<LanNetState?> netState() async {
+    try {
+      final m = await _ch.invokeMapMethod<String, dynamic>('netState');
+      if (m == null) return null;
+      return LanNetState(
+        wifi: m['wifi'] == true,
+        validated: m['validated'] == true,
+        bound: m['bound'] == true,
+        wifiLock: m['wifiLock'] == true,
+        generation: (m['generation'] as num?)?.toInt() ?? 0,
+      );
+    } catch (_) {
+      return null;
+    }
   }
 
   @override

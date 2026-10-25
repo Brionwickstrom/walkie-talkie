@@ -62,11 +62,19 @@ class TransportManager {
   String localName;
   int _channel;
   int _seq = 0;
+
+  /// Audio has its own sequence so the receiver's loss concealment only
+  /// sees real audio gaps (hello/ping frames used to share one counter, so
+  /// every beacon looked like a lost packet and inserted extra audio,
+  /// which made the speaker buffer overflow and drop frames). Starts far
+  /// from the control counter to avoid clashing in v1.1.0 receivers.
+  int _audioSeq = 0x8000;
   bool _running = false;
   bool _talking = false;
 
   final Map<int, Peer> _peers = {};
   final Map<int, _SeqWindow> _seen = {};
+  final Map<int, _SeqWindow> _seenAudio = {};
   final List<StreamSubscription<dynamic>> _subs = [];
   Timer? _helloTimer;
   Timer? _pruneTimer;
@@ -160,6 +168,12 @@ class TransportManager {
     return s;
   }
 
+  int _nextAudioSeq() {
+    final s = _audioSeq;
+    _audioSeq = (_audioSeq + 1) & 0xFFFF;
+    return s;
+  }
+
   /// Broadcast presence on every running transport.
   Future<void> sendHello() => _broadcastControl(
     ControlMessage(
@@ -216,7 +230,7 @@ class TransportManager {
       type: FrameType.audio,
       senderId: localNodeId,
       channel: _channel,
-      seq: _nextSeq(),
+      seq: _nextAudioSeq(),
       payload: opus,
     ),
   );
@@ -313,7 +327,10 @@ class TransportManager {
     peer.lastSeen[inbound.transport] = now;
     peer.channel = f.channel;
 
-    final window = _seen.putIfAbsent(f.senderId, _SeqWindow.new);
+    final window = (f.type == FrameType.audio ? _seenAudio : _seen).putIfAbsent(
+      f.senderId,
+      _SeqWindow.new,
+    );
     final duplicate = !window.add(f.seq);
 
     final before = peer.activeLink;
@@ -400,6 +417,7 @@ class TransportManager {
     for (final id in gone) {
       _peers.remove(id);
       _seen.remove(id);
+      _seenAudio.remove(id);
       changed = true;
     }
     if (changed) _emitPeers();

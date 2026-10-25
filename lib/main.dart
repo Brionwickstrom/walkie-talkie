@@ -3,9 +3,9 @@ import 'package:flutter/material.dart';
 import 'app/walkie_controller.dart';
 import 'ui/home_page.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(WalkieApp(controller: WalkieController()));
+  runApp(WalkieApp(controller: await WalkieController.load()));
 }
 
 class WalkieApp extends StatelessWidget {

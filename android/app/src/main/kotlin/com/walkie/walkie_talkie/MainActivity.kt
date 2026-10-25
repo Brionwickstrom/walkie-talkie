@@ -2,6 +2,10 @@ package com.walkie.walkie_talkie
 
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.Uri
 import android.net.wifi.WifiManager
 import android.os.Build
@@ -22,12 +26,25 @@ import java.net.NetworkInterface
  *  - list IPv4 interfaces with their real subnet broadcast address, which
  *    dart:io cannot provide (it has no netmask).
  *
+ *  - hold a low-latency Wi-Fi lock so Wi-Fi power save does not batch
+ *    voice packets into bursts.
+ *  - watch the Wi-Fi network. If it has no internet (offline router, a
+ *    phone hotspot without data) Android keeps mobile data as the default
+ *    network and would send our LAN packets there, so the process is bound
+ *    to the Wi-Fi network instead. Nothing here needs internet.
+ *
  * And "walkie/update" for in-app updates: a cache folder to download the APK
  * into, the "install unknown apps" check / settings page, and launching the
  * system package installer through a FileProvider.
  */
 class MainActivity : FlutterActivity() {
     private var multicastLock: WifiManager.MulticastLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
+    private var wifiCallback: ConnectivityManager.NetworkCallback? = null
+    @Volatile private var wifiNetwork: Network? = null
+    @Volatile private var wifiValidated = false
+    @Volatile private var boundNetwork: Network? = null
+    @Volatile private var bindGeneration = 0
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -41,6 +58,7 @@ class MainActivity : FlutterActivity() {
                             result.success(null)
                         }
                         "interfaces" -> result.success(listInterfaces())
+                        "netState" -> result.success(netState())
                         else -> result.notImplemented()
                     }
                 } catch (e: Exception) {
@@ -117,12 +135,111 @@ class MainActivity : FlutterActivity() {
             }
         }
         if (!lock.isHeld) lock.acquire()
+        acquireWifiLock()
+        startWifiWatch()
         return lock.isHeld
     }
 
     private fun releaseLock() {
         multicastLock?.let { if (it.isHeld) it.release() }
+        wifiLock?.let { if (it.isHeld) it.release() }
+        stopWifiWatch()
     }
+
+    @Suppress("DEPRECATION")
+    private fun acquireWifiLock() {
+        try {
+            val lock = wifiLock ?: run {
+                val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+                val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+                } else {
+                    WifiManager.WIFI_MODE_FULL_HIGH_PERF
+                }
+                wifi.createWifiLock(mode, "walkie_talkie_voice").also {
+                    it.setReferenceCounted(false)
+                    wifiLock = it
+                }
+            }
+            if (!lock.isHeld) lock.acquire()
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun connectivity(): ConnectivityManager =
+        applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+
+    /** Track the Wi-Fi network, with or without internet. */
+    private fun startWifiWatch() {
+        if (wifiCallback != null) return
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+                wifiNetwork = network
+                wifiValidated = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                updateBinding()
+            }
+
+            override fun onLost(network: Network) {
+                if (network == wifiNetwork) {
+                    wifiNetwork = null
+                    wifiValidated = false
+                    updateBinding()
+                }
+            }
+        }
+        try {
+            val req = NetworkRequest.Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .build()
+            // requestNetwork (not just register) also stops Android from
+            // dropping a no-internet Wi-Fi in favour of mobile data.
+            connectivity().requestNetwork(req, cb)
+            wifiCallback = cb
+        } catch (_: Exception) {
+            try {
+                val req = NetworkRequest.Builder()
+                    .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                    .build()
+                connectivity().registerNetworkCallback(req, cb)
+                wifiCallback = cb
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun stopWifiWatch() {
+        val cb = wifiCallback ?: return
+        try {
+            connectivity().unregisterNetworkCallback(cb)
+        } catch (_: Exception) {
+        }
+        wifiCallback = null
+        wifiNetwork = null
+        wifiValidated = false
+        updateBinding()
+    }
+
+    /** Bind to Wi-Fi only while it has no internet (else it is the default). */
+    @Synchronized
+    private fun updateBinding() {
+        val want = if (wifiNetwork != null && !wifiValidated) wifiNetwork else null
+        if (want == boundNetwork) return
+        try {
+            connectivity().bindProcessToNetwork(want)
+            boundNetwork = want
+            bindGeneration++
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun netState(): Map<String, Any?> = mapOf(
+        "wifi" to (wifiNetwork != null),
+        "validated" to wifiValidated,
+        "bound" to (boundNetwork != null),
+        "wifiLock" to (wifiLock?.isHeld == true),
+        "generation" to bindGeneration,
+    )
 
     private fun listInterfaces(): List<Map<String, Any?>> {
         val out = mutableListOf<Map<String, Any?>>()
