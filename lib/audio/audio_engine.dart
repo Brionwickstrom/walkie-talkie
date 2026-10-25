@@ -7,6 +7,7 @@ import 'package:record/record.dart' hide IosAudioCategory;
 
 import 'codec.dart';
 import 'opus_voice_codec.dart';
+import 'playout_buffer.dart';
 import 'voice_pipeline.dart';
 
 /// Mic capture (record, raw PCM16 stream) and speaker playback
@@ -17,6 +18,21 @@ class AudioEngine {
   StreamSubscription<Uint8List>? _micSub;
   bool _ready = false;
   bool _transmitting = false;
+  final _playout = PlayoutBuffer(sampleRate: VoiceFormat.sampleRate);
+
+  /// Mic read sizes to try, smallest (lowest latency) first. The record
+  /// plugin's default is 2x the OS minimum, often 80-240 ms per chunk, which
+  /// both delays audio and makes it bursty. Some phones reject buffers
+  /// below their minimum, so fall back until one works (null = default).
+  static const List<int?> _micBufferBytes = [
+    VoiceFormat.samplesPerFrame * 2, // 20 ms
+    VoiceFormat.samplesPerFrame * 4, // 40 ms
+    null,
+  ];
+  int _micBufferIndex = 0;
+
+  /// Frames dropped on playback to keep latency bounded (debug).
+  int get playbackDropped => _playout.dropped;
 
   bool get isTransmitting => _transmitting;
 
@@ -28,18 +44,23 @@ class AudioEngine {
       decoderFactory: OpusVoiceDecoder.new,
     );
     final session = await AudioSession.instance;
-    await session.configure(AudioSessionConfiguration(
-      avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
-      avAudioSessionCategoryOptions:
-          AVAudioSessionCategoryOptions.defaultToSpeaker |
-              AVAudioSessionCategoryOptions.allowBluetooth,
-      avAudioSessionMode: AVAudioSessionMode.voiceChat,
-      androidAudioAttributes: const AndroidAudioAttributes(
-        contentType: AndroidAudioContentType.speech,
-        usage: AndroidAudioUsage.voiceCommunication,
+    await session.configure(
+      AudioSessionConfiguration(
+        avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
+        avAudioSessionCategoryOptions:
+            AVAudioSessionCategoryOptions.defaultToSpeaker |
+            AVAudioSessionCategoryOptions.allowBluetooth,
+        avAudioSessionMode: AVAudioSessionMode.voiceChat,
+        androidAudioAttributes: const AndroidAudioAttributes(
+          contentType: AndroidAudioContentType.speech,
+          usage: AndroidAudioUsage.voiceCommunication,
+        ),
+        androidAudioFocusGainType:
+            AndroidAudioFocusGainType.gainTransientMayDuck,
       ),
-      androidAudioFocusGainType: AndroidAudioFocusGainType.gainTransientMayDuck,
-    ));
+    );
+    // The plugin logs every feed() call by default (50 per second).
+    await FlutterPcmSound.setLogLevel(LogLevel.error);
     await FlutterPcmSound.setup(
       sampleRate: VoiceFormat.sampleRate,
       channelCount: VoiceFormat.channels,
@@ -56,14 +77,34 @@ class AudioEngine {
   Future<void> startTransmit(void Function(Uint8List opus) onPacket) async {
     if (_transmitting) return;
     _transmitting = true;
-    final stream = await _recorder.startStream(const RecordConfig(
-      encoder: AudioEncoder.pcm16bits,
-      sampleRate: VoiceFormat.sampleRate,
-      numChannels: VoiceFormat.channels,
-      echoCancel: true,
-      noiseSuppress: true,
-      autoGain: true,
-    ));
+    Stream<Uint8List>? stream;
+    Object? lastError;
+    while (stream == null && _micBufferIndex < _micBufferBytes.length) {
+      try {
+        stream = await _recorder.startStream(
+          RecordConfig(
+            encoder: AudioEncoder.pcm16bits,
+            sampleRate: VoiceFormat.sampleRate,
+            numChannels: VoiceFormat.channels,
+            echoCancel: true,
+            noiseSuppress: true,
+            autoGain: true,
+            streamBufferSize: _micBufferBytes[_micBufferIndex],
+          ),
+        );
+      } catch (e) {
+        lastError = e;
+        try {
+          await _recorder.stop();
+        } catch (_) {}
+        _micBufferIndex++;
+      }
+    }
+    if (stream == null) {
+      _transmitting = false;
+      _micBufferIndex = _micBufferBytes.length - 1;
+      throw lastError ?? StateError('mic failed');
+    }
     _micSub = stream.listen((bytes) {
       for (final p in _pipeline.encodeMic(bytes)) {
         onPacket(p);
@@ -85,8 +126,16 @@ class AudioEngine {
   void play(int peerId, int seq, Uint8List opus) {
     if (!_ready) return;
     for (final pcm in _pipeline.decode(peerId, seq, opus)) {
-      FlutterPcmSound.feed(PcmArrayInt16(
-          bytes: pcm.buffer.asByteData(pcm.offsetInBytes, pcm.lengthInBytes)));
+      final pre = _playout.admit(pcm.length);
+      if (pre == null) continue; // too far behind: drop to catch up
+      if (pre > 0) {
+        FlutterPcmSound.feed(PcmArrayInt16.zeros(count: pre));
+      }
+      FlutterPcmSound.feed(
+        PcmArrayInt16(
+          bytes: pcm.buffer.asByteData(pcm.offsetInBytes, pcm.lengthInBytes),
+        ),
+      );
     }
   }
 

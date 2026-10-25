@@ -73,5 +73,23 @@ abstract class Transport {
   /// receiver de-duplicates.
   Future<void> send(Uint8List frame, {Set<int>? peerIds});
 
+  /// Whether this transport currently has a way to address [peerId]
+  /// (e.g. a live BLE connection or a known UDP endpoint). Lets the manager
+  /// stop routing over a link the moment the radio reports it gone, instead
+  /// of waiting for the liveness timeout.
+  bool canReach(int peerId) => true;
+
+  /// Addresses other phones can use to reach us directly on this transport
+  /// (LAN: "ip:port"). Advertised in hello beacons over every link.
+  List<String> get localAddresses => const [];
+
+  /// A peer told us (over any link) where it can be reached on this
+  /// transport. LAN uses this to try direct unicast when broadcast/mDNS
+  /// are blocked.
+  void learnPeerAddresses(int peerId, List<String> addresses) {}
+
+  /// One-line diagnostic for the debug UI.
+  String? get debugInfo => null;
+
   Future<void> dispose() => stop();
 }

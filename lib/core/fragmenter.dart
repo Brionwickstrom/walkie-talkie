@@ -12,7 +12,7 @@ import 'dart:typed_data';
 /// in one chunk; fragmentation mainly matters on the 23 byte default MTU.
 class Fragmenter {
   Fragmenter({required this.maxChunkSize})
-      : assert(maxChunkSize > prefixSize, 'MTU too small');
+    : assert(maxChunkSize > prefixSize, 'MTU too small');
 
   static const int prefixSize = 2;
   static const int maxChunks = 15;
@@ -26,16 +26,18 @@ class Fragmenter {
     final count = message.isEmpty ? 1 : (message.length + body - 1) ~/ body;
     if (count > maxChunks) {
       throw ArgumentError(
-          'Message of ${message.length}B needs $count chunks (> $maxChunks) '
-          'at chunk size $maxChunkSize');
+        'Message of ${message.length}B needs $count chunks (> $maxChunks) '
+        'at chunk size $maxChunkSize',
+      );
     }
     final id = _nextId;
     _nextId = (_nextId + 1) & 0xFF;
     final chunks = <Uint8List>[];
     for (var i = 0; i < count; i++) {
       final start = i * body;
-      final end =
-          (start + body) > message.length ? message.length : start + body;
+      final end = (start + body) > message.length
+          ? message.length
+          : start + body;
       final chunk = Uint8List(prefixSize + (end - start));
       chunk[0] = id;
       chunk[1] = (i << 4) | count;

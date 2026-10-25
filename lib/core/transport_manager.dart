@@ -27,22 +27,35 @@ typedef Clock = DateTime Function();
 ///   quiet, traffic fails over to the next one automatically.
 /// * The same frame can arrive over several transports; it is
 ///   de-duplicated by (sender, seq).
+/// * Route choice is re-evaluated for every frame sent, never latched.
+///   When the best link has not been heard for [staleAfter] (it may be
+///   dying), frames also go out on the next best link until one recovers
+///   or times out (make-before-break), so walking out of range does not
+///   cause a multi-second gap.
+/// * Hello beacons carry our LAN endpoints, so a peer heard only over
+///   Bluetooth can try direct UDP to us even when the router blocks
+///   broadcast/mDNS.
+/// * Ping/pong per link measures round-trip time for the debug UI.
 class TransportManager {
   TransportManager({
     required List<Transport> transports,
     required this.localNodeId,
     required this.localName,
     this._channel = 1,
-    this.linkTimeout = const Duration(seconds: 6),
-    this.helloInterval = const Duration(seconds: 2),
+    this.linkTimeout = const Duration(seconds: 4),
+    this.helloInterval = const Duration(seconds: 1),
+    this.staleAfter = const Duration(milliseconds: 1600),
     Clock? clock,
-  })  : _transports = List.unmodifiable(transports),
-        _clock = clock ?? DateTime.now;
+  }) : _transports = List.unmodifiable(transports),
+       _clock = clock ?? DateTime.now;
 
   final List<Transport> _transports;
   final int localNodeId;
   final Duration linkTimeout;
   final Duration helloInterval;
+
+  /// Best link quiet for longer than this => also send on the runner-up.
+  final Duration staleAfter;
   final Clock _clock;
 
   /// Display name sent in hello beacons.
@@ -85,15 +98,23 @@ class TransportManager {
     }
     // Start transports independently: one failing (e.g. Bluetooth off) must
     // not prevent the others from working.
-    await Future.wait(_transports.map((t) async {
-      try {
-        await t.start(localNodeId: localNodeId, channel: _channel);
-      } catch (_) {
-        // Transport reports its own status; keep going.
-      }
-    }));
-    _helloTimer = Timer.periodic(helloInterval, (_) => sendHello());
-    _pruneTimer = Timer.periodic(const Duration(seconds: 1), (_) => prune());
+    await Future.wait(
+      _transports.map((t) async {
+        try {
+          await t.start(localNodeId: localNodeId, channel: _channel);
+        } catch (_) {
+          // Transport reports its own status; keep going.
+        }
+      }),
+    );
+    _helloTimer = Timer.periodic(helloInterval, (_) async {
+      await sendHello();
+      await sendPings();
+    });
+    _pruneTimer = Timer.periodic(
+      const Duration(milliseconds: 500),
+      (_) => prune(),
+    );
     await sendHello();
   }
 
@@ -106,11 +127,13 @@ class TransportManager {
       await s.cancel();
     }
     _subs.clear();
-    await Future.wait(_transports.map((t) async {
-      try {
-        await t.stop();
-      } catch (_) {}
-    }));
+    await Future.wait(
+      _transports.map((t) async {
+        try {
+          await t.stop();
+        } catch (_) {}
+      }),
+    );
   }
 
   Future<void> dispose() async {
@@ -139,28 +162,64 @@ class TransportManager {
 
   /// Broadcast presence on every running transport.
   Future<void> sendHello() => _broadcastControl(
-      ControlMessage(ControlKind.hello, name: localName));
+    ControlMessage(
+      ControlKind.hello,
+      name: localName,
+      lanAddrs: [
+        for (final t in _transports)
+          if (t.status == TransportStatus.running) ...t.localAddresses,
+      ],
+    ),
+  );
+
+  /// Ping every peer on every usable link (for round-trip display). Cheap:
+  /// ~40 bytes per link per [helloInterval].
+  Future<void> sendPings() async {
+    final now = _clock();
+    final futures = <Future<void>>[];
+    for (final p in _peers.values) {
+      for (final kind in usableLinks(p, now)) {
+        final bytes = Frame.control(
+          senderId: localNodeId,
+          channel: _channel,
+          seq: _nextSeq(),
+          message: ControlMessage(
+            ControlKind.ping,
+            to: p.id,
+            time: now.millisecondsSinceEpoch,
+          ),
+        ).encode();
+        futures.add(_safeSend(_transportOf(kind)!, bytes, {p.id}));
+      }
+    }
+    await Future.wait(futures);
+  }
 
   Future<void> setTalking(bool talking) async {
     if (_talking == talking) return;
     _talking = talking;
-    await _sendToChannel(Frame.control(
-      senderId: localNodeId,
-      channel: _channel,
-      seq: _nextSeq(),
-      message:
-          ControlMessage(talking ? ControlKind.talkStart : ControlKind.talkEnd),
-    ));
-  }
-
-  /// Send one encoded Opus packet to every peer on our channel.
-  Future<void> sendAudio(Uint8List opus) => _sendToChannel(Frame(
-        type: FrameType.audio,
+    await _sendToChannel(
+      Frame.control(
         senderId: localNodeId,
         channel: _channel,
         seq: _nextSeq(),
-        payload: opus,
-      ));
+        message: ControlMessage(
+          talking ? ControlKind.talkStart : ControlKind.talkEnd,
+        ),
+      ),
+    );
+  }
+
+  /// Send one encoded Opus packet to every peer on our channel.
+  Future<void> sendAudio(Uint8List opus) => _sendToChannel(
+    Frame(
+      type: FrameType.audio,
+      senderId: localNodeId,
+      channel: _channel,
+      seq: _nextSeq(),
+      payload: opus,
+    ),
+  );
 
   Future<void> _broadcastControl(ControlMessage msg) async {
     final bytes = Frame.control(
@@ -169,20 +228,29 @@ class TransportManager {
       seq: _nextSeq(),
       message: msg,
     ).encode();
-    await Future.wait(_transports
-        .where((t) => t.status == TransportStatus.running)
-        .map((t) => _safeSend(t, bytes, null)));
+    await Future.wait(
+      _transports
+          .where((t) => t.status == TransportStatus.running)
+          .map((t) => _safeSend(t, bytes, null)),
+    );
   }
 
-  /// Exposed for tests: which transport each peer would be sent to.
+  /// Which transport(s) each peer on our channel would be sent to right
+  /// now. Normally one link per peer; two while the best one looks stale.
   Map<TransportKind, Set<int>> routeForChannel() {
     final now = _clock();
     final routes = <TransportKind, Set<int>>{};
     for (final p in _peers.values) {
       if (p.channel != _channel) continue;
-      final best = _bestLink(p, now);
-      if (best == null) continue;
-      routes.putIfAbsent(best, () => <int>{}).add(p.id);
+      final links = usableLinks(p, now);
+      if (links.isEmpty) continue;
+      routes.putIfAbsent(links.first, () => <int>{}).add(p.id);
+      final bestSeen = p.lastSeen[links.first];
+      if (links.length > 1 &&
+          bestSeen != null &&
+          now.difference(bestSeen) > staleAfter) {
+        routes.putIfAbsent(links[1], () => <int>{}).add(p.id);
+      }
     }
     return routes;
   }
@@ -190,10 +258,12 @@ class TransportManager {
   Future<void> _sendToChannel(Frame frame) async {
     final bytes = frame.encode();
     final routes = routeForChannel();
-    await Future.wait(routes.entries.map((e) {
-      final t = _transports.firstWhere((t) => t.kind == e.key);
-      return _safeSend(t, bytes, e.value);
-    }));
+    await Future.wait(
+      routes.entries.map((e) {
+        final t = _transports.firstWhere((t) => t.kind == e.key);
+        return _safeSend(t, bytes, e.value);
+      }),
+    );
   }
 
   Future<void> _safeSend(Transport t, Uint8List bytes, Set<int>? to) async {
@@ -205,14 +275,23 @@ class TransportManager {
     }
   }
 
-  TransportKind? _bestLink(Peer p, DateTime now) {
-    Transport? best;
+  /// Links to [p] that are alive (heard recently), running and still
+  /// addressable, best first.
+  List<TransportKind> usableLinks(Peer p, DateTime now) {
+    final ts = <Transport>[];
     for (final kind in p.liveLinks(now, linkTimeout)) {
       final t = _transportOf(kind);
       if (t == null || t.status != TransportStatus.running) continue;
-      if (best == null || t.priority > best.priority) best = t;
+      if (!t.canReach(p.id)) continue;
+      ts.add(t);
     }
-    return best?.kind;
+    ts.sort((a, b) => b.priority.compareTo(a.priority));
+    return [for (final t in ts) t.kind];
+  }
+
+  TransportKind? _bestLink(Peer p, DateTime now) {
+    final l = usableLinks(p, now);
+    return l.isEmpty ? null : l.first;
   }
 
   Transport? _transportOf(TransportKind kind) {
@@ -252,6 +331,40 @@ class TransportManager {
                   peer.name = msg.name!;
                   changed = true;
                 }
+                if (msg.lanAddrs.isNotEmpty) {
+                  peer.lanAddrs = msg.lanAddrs;
+                  for (final t in _transports) {
+                    t.learnPeerAddresses(peer.id, msg.lanAddrs);
+                  }
+                }
+              case ControlKind.ping:
+                if (msg.to == null || msg.to == localNodeId) {
+                  final t = _transportOf(inbound.transport);
+                  if (t != null) {
+                    _safeSend(
+                      t,
+                      Frame.control(
+                        senderId: localNodeId,
+                        channel: _channel,
+                        seq: _nextSeq(),
+                        message: ControlMessage(
+                          ControlKind.pong,
+                          to: peer.id,
+                          time: msg.time,
+                        ),
+                      ).encode(),
+                      {peer.id},
+                    );
+                  }
+                }
+              case ControlKind.pong:
+                if (msg.to == localNodeId && msg.time != null) {
+                  final rtt = now.millisecondsSinceEpoch - msg.time!;
+                  if (rtt >= 0 && rtt < 30000) {
+                    peer.rtt[inbound.transport] = Duration(milliseconds: rtt);
+                    changed = true;
+                  }
+                }
               case ControlKind.talkStart:
                 peer.talking = true;
                 changed = true;
@@ -276,6 +389,7 @@ class TransportManager {
     final gone = <int>[];
     for (final p in _peers.values) {
       p.lastSeen.removeWhere((_, t) => now.difference(t) > linkTimeout);
+      p.rtt.removeWhere((k, _) => !p.lastSeen.containsKey(k));
       final best = _bestLink(p, now);
       if (best != p.activeLink) {
         p.activeLink = best;

@@ -26,6 +26,18 @@ import '../core/transport.dart';
 /// ~185 automatically). On the 23 B default MTU frames are fragmented into
 /// 3 chunks, which still works but is near the practical limit.
 ///
+/// Latency: on Android each central link asks for MTU 247 (one frame per
+/// packet) and high connection priority (7.5-15 ms interval instead of the
+/// default ~45 ms). Writes are write-without-response, and audio is dropped
+/// rather than queued when a link has more than [maxInflightAudio] frames
+/// pending, so a slow link loses a few packets instead of falling seconds
+/// behind. While at least one link is up the background scan drops to
+/// low-power mode, because scanning steals radio time from connections.
+///
+/// Failover: a link that disconnects is removed immediately (so the manager
+/// stops routing over it via [canReach]); a link silent for [silentLinkDrop]
+/// is torn down so the phone can rediscover and reconnect when back in range.
+///
 /// Peer identity is not in the advertisement (a 128-bit UUID already uses
 /// most of the 31 B legacy advertising payload); it is learned from the
 /// sender id of the first frame (hello) received on each link.
@@ -33,7 +45,13 @@ class BleTransport extends Transport {
   BleTransport({
     this.maxCentralLinks = 4,
     this.fbpLicense = fbp.License.nonprofit,
+    this.maxInflightAudio = 2,
+    this.silentLinkDrop = const Duration(seconds: 8),
   });
+
+  static const int requestedMtu = 247;
+  final int maxInflightAudio;
+  final Duration silentLinkDrop;
 
   static const String serviceUuid = 'a7e1c0de-5741-4c4b-9e1e-77616c6b6965';
   static const String txUuid = 'a7e1c0de-5741-4c4b-9e1e-000000000001';
@@ -58,8 +76,16 @@ class BleTransport extends Transport {
   final Set<String> _connecting = {};
   // Which link reaches which node id (learned from frames).
   final Map<int, String> _peerToLink = {};
-  // Node ids that reach us through our peripheral (they are our centrals).
-  final Set<int> _peripheralPeers = {};
+  // Node ids that reach us through our peripheral (they are our centrals),
+  // with the last time we heard from each.
+  final Map<int, DateTime> _peripheralPeers = {};
+  final Map<String, DateTime> _retryAfter = {};
+  int _peripheralInflight = 0;
+  int _dropped = 0;
+  int _peripheralMtu = 23;
+  Timer? _watchdog;
+  DateTime? _lastScanStart;
+  fbp.AndroidScanMode? _scanMode;
 
   final _peripheralReassembler = Reassembler();
   final _peripheralFragmenter = Fragmenter(maxChunkSize: 20);
@@ -95,18 +121,22 @@ class BleTransport extends Transport {
     }
     _listenOnce();
     // React to the adapter being turned on/off at any time.
-    _subs.add(fbp.FlutterBluePlus.adapterState.listen((state) async {
-      if (state == fbp.BluetoothAdapterState.on) {
-        await _bringUp();
-      } else if (state == fbp.BluetoothAdapterState.off ||
-          state == fbp.BluetoothAdapterState.unauthorized) {
-        await _tearDown();
-        _setStatus(TransportStatus.unavailable,
+    _subs.add(
+      fbp.FlutterBluePlus.adapterState.listen((state) async {
+        if (state == fbp.BluetoothAdapterState.on) {
+          await _bringUp();
+        } else if (state == fbp.BluetoothAdapterState.off ||
+            state == fbp.BluetoothAdapterState.unauthorized) {
+          await _tearDown();
+          _setStatus(
+            TransportStatus.unavailable,
             state == fbp.BluetoothAdapterState.off
                 ? 'Bluetooth is off'
-                : 'Bluetooth permission denied');
-      }
-    }));
+                : 'Bluetooth permission denied',
+          );
+        }
+      }),
+    );
     if (Platform.isAndroid &&
         fbp.FlutterBluePlus.adapterStateNow != fbp.BluetoothAdapterState.on) {
       try {
@@ -126,27 +156,69 @@ class BleTransport extends Transport {
     } catch (e) {
       _detail = '${_detail ?? ''} Scan failed: $e'.trim();
     }
+    _watchdog?.cancel();
+    _watchdog = Timer.periodic(
+      const Duration(seconds: 2),
+      (_) => _checkLinks(),
+    );
     _setStatus(TransportStatus.running, _detail);
   }
 
-  void _listenOnce() {
-    _subs.add(_peripheral.onGattWrite.listen((w) {
-      if (w.characteristicUuid.toLowerCase() != rxUuid) return;
-      final msg = _peripheralReassembler.add(w.data);
-      if (msg == null) return;
-      final frame = Frame.tryDecode(msg);
-      if (frame == null) return;
-      _peripheralPeers.add(frame.senderId);
-      _framesCtl.add(InboundFrame(frame, TransportKind.ble));
-    }));
-    _subs.add(_peripheral.onMtuChanged.listen((mtu) {
-      if (mtu > 23) _peripheralFragmenter.maxChunkSize = mtu - 3;
-    }));
-    _subs.add(fbp.FlutterBluePlus.onScanResults.listen((results) {
-      for (final r in results) {
-        _maybeConnect(r.device);
+  /// Drop silent links, forget stale peripheral peers, keep scanning in the
+  /// right mode so peers that come back in range reconnect on their own.
+  Future<void> _checkLinks() async {
+    final now = DateTime.now();
+    for (final e in _links.entries.toList()) {
+      if (now.difference(e.value.lastRx) > silentLinkDrop) {
+        final device = e.value.device;
+        _dropLink(e.key);
+        _retryAfter[e.key] = now.add(const Duration(seconds: 2));
+        try {
+          await device.disconnect();
+        } catch (_) {}
       }
-    }));
+    }
+    _peripheralPeers.removeWhere((_, t) => now.difference(t) > silentLinkDrop);
+    final wantMode = _links.isEmpty
+        ? fbp.AndroidScanMode.lowLatency
+        : fbp.AndroidScanMode.lowPower;
+    final recently =
+        _lastScanStart != null &&
+        now.difference(_lastScanStart!) < const Duration(seconds: 10);
+    if (!recently &&
+        (!fbp.FlutterBluePlus.isScanningNow ||
+            (Platform.isAndroid && wantMode != _scanMode))) {
+      try {
+        await _startCentral();
+      } catch (_) {}
+    }
+  }
+
+  void _listenOnce() {
+    _subs.add(
+      _peripheral.onGattWrite.listen((w) {
+        if (w.characteristicUuid.toLowerCase() != rxUuid) return;
+        final msg = _peripheralReassembler.add(w.data);
+        if (msg == null) return;
+        final frame = Frame.tryDecode(msg);
+        if (frame == null) return;
+        _peripheralPeers[frame.senderId] = DateTime.now();
+        _framesCtl.add(InboundFrame(frame, TransportKind.ble));
+      }),
+    );
+    _subs.add(
+      _peripheral.onMtuChanged.listen((mtu) {
+        _peripheralMtu = mtu;
+        if (mtu > 23) _peripheralFragmenter.maxChunkSize = mtu - 3;
+      }),
+    );
+    _subs.add(
+      fbp.FlutterBluePlus.onScanResults.listen((results) {
+        for (final r in results) {
+          _maybeConnect(r.device);
+        }
+      }),
+    );
   }
 
   Future<void> _startPeripheral() async {
@@ -163,48 +235,86 @@ class BleTransport extends Transport {
   }
 
   Future<void> _startCentral() async {
+    final mode = _links.isEmpty
+        ? fbp.AndroidScanMode.lowLatency
+        : fbp.AndroidScanMode.lowPower;
+    _lastScanStart = DateTime.now();
+    if (fbp.FlutterBluePlus.isScanningNow) {
+      await fbp.FlutterBluePlus.stopScan();
+    }
     await fbp.FlutterBluePlus.startScan(
       withServices: [fbp.Guid(serviceUuid)],
       continuousUpdates: true,
       removeIfGone: const Duration(seconds: 10),
+      androidScanMode: mode,
     );
+    _scanMode = mode;
   }
 
   Future<void> _maybeConnect(fbp.BluetoothDevice device) async {
     final id = device.remoteId.str;
     if (_links.containsKey(id) || _connecting.contains(id)) return;
     if (_links.length + _connecting.length >= maxCentralLinks) return;
+    final retry = _retryAfter[id];
+    if (retry != null && DateTime.now().isBefore(retry)) return;
     _connecting.add(id);
     try {
       await device.connect(
-          license: fbpLicense, timeout: const Duration(seconds: 10));
+        license: fbpLicense,
+        timeout: const Duration(seconds: 10),
+        mtu: Platform.isAndroid ? requestedMtu : null,
+      );
+      if (Platform.isAndroid) {
+        try {
+          await device.requestConnectionPriority(
+            connectionPriorityRequest: fbp.ConnectionPriority.high,
+          );
+        } catch (_) {}
+      }
       final services = await device.discoverServices();
       final service = services.firstWhere(
-          (s) => s.uuid == fbp.Guid(serviceUuid),
-          orElse: () => throw StateError('service missing'));
-      final tx = service.characteristics
-          .firstWhere((c) => c.uuid == fbp.Guid(txUuid));
-      final rx = service.characteristics
-          .firstWhere((c) => c.uuid == fbp.Guid(rxUuid));
-      final link = _CentralLink(device, rx,
-          Fragmenter(maxChunkSize: (device.mtuNow - 3).clamp(20, 512)));
-      link.subs.add(tx.onValueReceived.listen((value) {
-        final msg = link.reassembler.add(value);
-        if (msg == null) return;
-        final frame = Frame.tryDecode(msg);
-        if (frame == null) return;
-        _peerToLink[frame.senderId] = id;
-        _framesCtl.add(InboundFrame(frame, TransportKind.ble));
-      }));
-      link.subs.add(device.mtu.listen((mtu) {
-        link.fragmenter.maxChunkSize = (mtu - 3).clamp(20, 512);
-      }));
-      link.subs.add(device.connectionState.listen((s) {
-        if (s == fbp.BluetoothConnectionState.disconnected) _dropLink(id);
-      }));
+        (s) => s.uuid == fbp.Guid(serviceUuid),
+        orElse: () => throw StateError('service missing'),
+      );
+      final tx = service.characteristics.firstWhere(
+        (c) => c.uuid == fbp.Guid(txUuid),
+      );
+      final rx = service.characteristics.firstWhere(
+        (c) => c.uuid == fbp.Guid(rxUuid),
+      );
+      final link = _CentralLink(
+        device,
+        rx,
+        Fragmenter(maxChunkSize: (device.mtuNow - 3).clamp(20, 512)),
+      );
+      link.subs.add(
+        tx.onValueReceived.listen((value) {
+          link.lastRx = DateTime.now();
+          final msg = link.reassembler.add(value);
+          if (msg == null) return;
+          final frame = Frame.tryDecode(msg);
+          if (frame == null) return;
+          _peerToLink[frame.senderId] = id;
+          link.peerIds.add(frame.senderId);
+          _framesCtl.add(InboundFrame(frame, TransportKind.ble));
+        }),
+      );
+      link.subs.add(
+        device.mtu.listen((mtu) {
+          link.fragmenter.maxChunkSize = (mtu - 3).clamp(20, 512);
+        }),
+      );
+      link.subs.add(
+        device.connectionState.listen((s) {
+          if (s == fbp.BluetoothConnectionState.disconnected) _dropLink(id);
+        }),
+      );
       await tx.setNotifyValue(true);
+      link.lastRx = DateTime.now();
       _links[id] = link;
+      _retryAfter.remove(id);
     } catch (_) {
+      _retryAfter[id] = DateTime.now().add(const Duration(seconds: 3));
       try {
         await device.disconnect();
       } catch (_) {}
@@ -223,8 +333,24 @@ class BleTransport extends Transport {
   }
 
   @override
+  bool canReach(int peerId) {
+    if (_links.containsKey(_peerToLink[peerId])) return true;
+    final t = _peripheralPeers[peerId];
+    return t != null && DateTime.now().difference(t) <= silentLinkDrop;
+  }
+
+  @override
+  String? get debugInfo {
+    final mtus = _links.values.map((l) => l.device.mtuNow).join(',');
+    return '${_links.length} link(s)${mtus.isEmpty ? '' : ' mtu $mtus'}'
+        ' · ${_peripheralPeers.length} in · periph mtu $_peripheralMtu'
+        '${_dropped > 0 ? ' · dropped $_dropped' : ''}';
+  }
+
+  @override
   Future<void> send(Uint8List frame, {Set<int>? peerIds}) async {
     if (_status != TransportStatus.running) return;
+    final isAudio = frame.length > 3 && frame[3] == FrameType.audio.code;
     final targets = <_CentralLink>{};
     var notify = false;
     if (peerIds == null) {
@@ -235,29 +361,57 @@ class BleTransport extends Transport {
         final link = _links[_peerToLink[id]];
         if (link != null) {
           targets.add(link);
-        } else if (_peripheralPeers.contains(id)) {
+        } else if (_peripheralPeers.containsKey(id)) {
           notify = true;
         }
       }
     }
     final futures = <Future<void>>[];
     for (final link in targets) {
-      for (final chunk in link.fragmenter.split(frame)) {
-        futures.add(link.rx.write(chunk, withoutResponse: true).catchError((_) {}));
+      if (isAudio && link.inflight >= maxInflightAudio) {
+        _dropped++; // link is behind: drop rather than add latency
+        continue;
       }
+      futures.add(_writeLink(link, frame));
     }
     if (notify && _peripheralUp) {
-      for (final chunk in _peripheralFragmenter.split(frame)) {
-        // Throws when nobody is subscribed; that is fine.
-        futures.add(_peripheral
-            .sendData(chunk, characteristicUuid: txUuid)
-            .catchError((_) {}));
+      if (isAudio && _peripheralInflight >= maxInflightAudio) {
+        _dropped++;
+      } else {
+        futures.add(_notifyAll(frame));
       }
     }
     await Future.wait(futures);
   }
 
+  Future<void> _writeLink(_CentralLink link, Uint8List frame) async {
+    link.inflight++;
+    try {
+      for (final chunk in link.fragmenter.split(frame)) {
+        await link.rx.write(chunk, withoutResponse: true);
+      }
+    } catch (_) {
+    } finally {
+      link.inflight--;
+    }
+  }
+
+  Future<void> _notifyAll(Uint8List frame) async {
+    _peripheralInflight++;
+    try {
+      for (final chunk in _peripheralFragmenter.split(frame)) {
+        // Throws when nobody is subscribed; that is fine.
+        await _peripheral.sendData(chunk, characteristicUuid: txUuid);
+      }
+    } catch (_) {
+    } finally {
+      _peripheralInflight--;
+    }
+  }
+
   Future<void> _tearDown() async {
+    _watchdog?.cancel();
+    _watchdog = null;
     try {
       await fbp.FlutterBluePlus.stopScan();
     } catch (_) {}
@@ -302,4 +456,7 @@ class _CentralLink {
   final Fragmenter fragmenter;
   final Reassembler reassembler = Reassembler();
   final List<StreamSubscription<dynamic>> subs = [];
+  final Set<int> peerIds = {};
+  DateTime lastRx = DateTime.now();
+  int inflight = 0;
 }

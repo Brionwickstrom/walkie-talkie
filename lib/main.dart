@@ -18,9 +18,10 @@ class WalkieApp extends StatelessWidget {
       title: 'Walkie Talkie',
       theme: ThemeData(colorSchemeSeed: Colors.teal, useMaterial3: true),
       darkTheme: ThemeData(
-          colorSchemeSeed: Colors.teal,
-          brightness: Brightness.dark,
-          useMaterial3: true),
+        colorSchemeSeed: Colors.teal,
+        brightness: Brightness.dark,
+        useMaterial3: true,
+      ),
       home: HomePage(controller: controller),
     );
   }

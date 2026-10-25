@@ -12,6 +12,12 @@ class Peer {
   /// Last time we heard anything from this peer on each transport.
   final Map<TransportKind, DateTime> lastSeen = {};
 
+  /// Last measured round trip per transport (ping/pong).
+  final Map<TransportKind, Duration> rtt = {};
+
+  /// LAN endpoints the peer advertised in its hello ("ip:port").
+  List<String> lanAddrs = const [];
+
   /// Transport currently used to send to this peer (best live link).
   TransportKind? activeLink;
 
@@ -19,7 +25,7 @@ class Peer {
       name.isNotEmpty ? name : 'Phone ${id.toRadixString(16).padLeft(8, '0')}';
 
   Set<TransportKind> liveLinks(DateTime now, Duration timeout) => {
-        for (final e in lastSeen.entries)
-          if (now.difference(e.value) <= timeout) e.key,
-      };
+    for (final e in lastSeen.entries)
+      if (now.difference(e.value) <= timeout) e.key,
+  };
 }

@@ -38,12 +38,12 @@ void main() {
     expect(Frame.tryDecode([1, 2, 3]), isNull);
     expect(Frame.tryDecode(List.filled(20, 0)), isNull);
     final good = Frame(
-            type: FrameType.audio,
-            senderId: 1,
-            channel: 1,
-            seq: 1,
-            payload: Uint8List(0))
-        .encode();
+      type: FrameType.audio,
+      senderId: 1,
+      channel: 1,
+      seq: 1,
+      payload: Uint8List(0),
+    ).encode();
     final badType = Uint8List.fromList(good)..[3] = 99;
     expect(Frame.tryDecode(badType), isNull);
     final badVersion = Uint8List.fromList(good)..[2] = 2;

@@ -42,9 +42,9 @@ class Frame {
     required this.channel,
     required this.seq,
     required this.payload,
-  })  : assert(senderId >= 0 && senderId <= 0xFFFFFFFF),
-        assert(channel >= 0 && channel <= 0xFFFF),
-        assert(seq >= 0 && seq <= 0xFFFF);
+  }) : assert(senderId >= 0 && senderId <= 0xFFFFFFFF),
+       assert(channel >= 0 && channel <= 0xFFFF),
+       assert(seq >= 0 && seq <= 0xFFFF);
 
   static const int headerSize = 12;
   static const int version = 1;
@@ -62,14 +62,13 @@ class Frame {
     required int channel,
     required int seq,
     required ControlMessage message,
-  }) =>
-      Frame(
-        type: FrameType.control,
-        senderId: senderId,
-        channel: channel,
-        seq: seq,
-        payload: message.encode(),
-      );
+  }) => Frame(
+    type: FrameType.control,
+    senderId: senderId,
+    channel: channel,
+    seq: seq,
+    payload: message.encode(),
+  );
 
   Uint8List encode() {
     final out = Uint8List(headerSize + payload.length);
@@ -114,27 +113,63 @@ class Frame {
       'seq=$seq, ${payload.length}B)';
 }
 
-enum ControlKind { hello, talkStart, talkEnd }
+enum ControlKind { hello, talkStart, talkEnd, ping, pong }
 
 /// Small JSON control payload. Kept short because it may travel over BLE.
 class ControlMessage {
-  const ControlMessage(this.kind, {this.name});
+  const ControlMessage(
+    this.kind, {
+    this.name,
+    this.lanAddrs = const [],
+    this.to,
+    this.time,
+  });
 
   final ControlKind kind;
 
   /// Display name, sent with [ControlKind.hello].
   final String? name;
 
-  Uint8List encode() => Uint8List.fromList(utf8.encode(jsonEncode({
+  /// The sender's own LAN endpoints ("ip:port"), sent with
+  /// [ControlKind.hello]. Lets a peer we only hear over Bluetooth try direct
+  /// UDP to us when broadcast and mDNS are blocked by the router.
+  final List<String> lanAddrs;
+
+  /// Intended recipient (ping/pong). Transports may over-deliver.
+  final int? to;
+
+  /// Sender's clock in ms (ping); echoed back unchanged in the pong.
+  final int? time;
+
+  Uint8List encode() => Uint8List.fromList(
+    utf8.encode(
+      jsonEncode({
         'k': kind.name,
         if (name != null) 'n': name,
-      })));
+        if (lanAddrs.isNotEmpty) 'a': lanAddrs,
+        if (to != null) 'to': to,
+        if (time != null) 't': time,
+      }),
+    ),
+  );
 
   static ControlMessage? tryDecode(List<int> bytes) {
     try {
       final map = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
       final kind = ControlKind.values.byName(map['k'] as String);
-      return ControlMessage(kind, name: map['n'] as String?);
+      final a = map['a'];
+      return ControlMessage(
+        kind,
+        name: map['n'] as String?,
+        lanAddrs: a is List
+            ? [
+                for (final x in a)
+                  if (x is String) x,
+              ]
+            : const [],
+        to: (map['to'] as num?)?.toInt(),
+        time: (map['t'] as num?)?.toInt(),
+      );
     } catch (_) {
       return null;
     }

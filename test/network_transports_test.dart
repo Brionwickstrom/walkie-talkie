@@ -9,42 +9,48 @@ import 'package:walkie_talkie/transports/lan_transport.dart';
 import 'package:walkie_talkie/transports/relay_transport.dart';
 
 Uint8List frameBytes(int from, int seq, {int channel = 1}) => Frame(
-        type: FrameType.audio,
-        senderId: from,
-        channel: channel,
-        seq: seq,
-        payload: Uint8List.fromList([1, 2, 3]))
-    .encode();
+  type: FrameType.audio,
+  senderId: from,
+  channel: channel,
+  seq: seq,
+  payload: Uint8List.fromList([1, 2, 3]),
+).encode();
 
 void main() {
-  test('LAN: discovery beacon then unicast audio over real UDP sockets',
-      () async {
-    final loop = InternetAddress.loopbackIPv4;
-    final a = LanTransport(port: 0, enableBroadcast: false, bindAddress: loop);
-    await a.start(localNodeId: 1, channel: 1);
-    final b = LanTransport(
-      port: 0,
-      enableBroadcast: false,
-      bindAddress: loop,
-      staticPeers: [LanEndpoint(loop, a.boundPort!)],
-    );
-    await b.start(localNodeId: 2, channel: 1);
+  test(
+    'LAN: discovery beacon then unicast audio over real UDP sockets',
+    () async {
+      final loop = InternetAddress.loopbackIPv4;
+      final a = LanTransport(
+        port: 0,
+        enableBroadcast: false,
+        bindAddress: loop,
+      );
+      await a.start(localNodeId: 1, channel: 1);
+      final b = LanTransport(
+        port: 0,
+        enableBroadcast: false,
+        bindAddress: loop,
+        staticPeers: [LanEndpoint(loop, a.boundPort!)],
+      );
+      await b.start(localNodeId: 2, channel: 1);
 
-    final atA = a.frames.first;
-    await b.send(frameBytes(2, 0)); // "hello" to all candidates
-    final f = (await atA.timeout(const Duration(seconds: 2))).frame;
-    expect(f.senderId, 2);
+      final atA = a.frames.first;
+      await b.send(frameBytes(2, 0)); // "hello" to all candidates
+      final f = (await atA.timeout(const Duration(seconds: 2))).frame;
+      expect(f.senderId, 2);
 
-    // A learned B's endpoint from that packet and can unicast back by id.
-    final atB = b.frames.first;
-    await a.send(frameBytes(1, 0), peerIds: {2});
-    final back = await atB.timeout(const Duration(seconds: 2));
-    expect(back.frame.senderId, 1);
-    expect(back.transport, TransportKind.lan);
+      // A learned B's endpoint from that packet and can unicast back by id.
+      final atB = b.frames.first;
+      await a.send(frameBytes(1, 0), peerIds: {2});
+      final back = await atB.timeout(const Duration(seconds: 2));
+      expect(back.frame.senderId, 1);
+      expect(back.transport, TransportKind.lan);
 
-    await a.dispose();
-    await b.dispose();
-  });
+      await a.dispose();
+      await b.dispose();
+    },
+  );
 
   test('Internet relay: fans out within a channel only', () async {
     final server = await RelayServer.bind(address: '127.0.0.1', port: 0);

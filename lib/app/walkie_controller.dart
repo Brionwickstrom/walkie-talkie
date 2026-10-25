@@ -18,15 +18,21 @@ import 'config.dart';
 /// Glue between UI, [TransportManager] and [AudioEngine].
 class WalkieController extends ChangeNotifier {
   WalkieController()
-      : nodeId = Random.secure().nextInt(0xFFFFFFFF),
-        _relay = RelayTransport(
-            serverUri: AppConfig.relayUrl.isEmpty
-                ? null
-                : Uri.tryParse(AppConfig.relayUrl)) {
+    : nodeId = Random.secure().nextInt(0xFFFFFFFF),
+      _relay = RelayTransport(
+        serverUri: AppConfig.relayUrl.isEmpty
+            ? null
+            : Uri.tryParse(AppConfig.relayUrl),
+      ) {
     name = 'Phone ${nodeId.toRadixString(16).substring(0, 4).toUpperCase()}';
     manager = TransportManager(
       transports: [
-        LanTransport(discoveries: [MdnsLanDiscovery()]),
+        LanTransport(
+          discoveries: [MdnsLanDiscovery()],
+          platform: Platform.isAndroid
+              ? const AndroidLanPlatform()
+              : const LanPlatform(),
+        ),
         BleTransport(),
         _relay,
       ],
@@ -51,6 +57,7 @@ class WalkieController extends ChangeNotifier {
   int get channel => manager.channel;
   Uri? get relayUri => _relay.serverUri;
   List<Transport> get transports => manager.transports;
+  int get playbackDropped => _audio.playbackDropped;
   int? get talkingPeer {
     for (final p in peers) {
       if (p.talking && p.channel == channel) return p.id;
@@ -67,17 +74,21 @@ class WalkieController extends ChangeNotifier {
     } catch (e) {
       error = 'Audio init failed: $e';
     }
-    _subs.add(manager.peerChanges.listen((list) {
-      for (final p in list) {
-        if (!p.talking) _audio.peerStopped(p.id);
-      }
-      peers = list;
-      notifyListeners();
-    }));
+    _subs.add(
+      manager.peerChanges.listen((list) {
+        for (final p in list) {
+          if (!p.talking) _audio.peerStopped(p.id);
+        }
+        peers = list;
+        notifyListeners();
+      }),
+    );
     _subs.add(manager.transportChanges.listen((_) => notifyListeners()));
-    _subs.add(manager.audio.listen((a) {
-      if (!transmitting) _audio.play(a.peerId, a.seq, a.opus);
-    }));
+    _subs.add(
+      manager.audio.listen((a) {
+        if (!transmitting) _audio.play(a.peerId, a.seq, a.opus);
+      }),
+    );
     await manager.start();
     notifyListeners();
   }

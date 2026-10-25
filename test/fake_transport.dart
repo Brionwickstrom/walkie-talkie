@@ -20,6 +20,18 @@ class FakeTransport extends Transport {
   final _status$ = StreamController<TransportStatus>.broadcast(sync: true);
   final sent = <SentFrame>[];
 
+  /// Peers this transport can no longer address (e.g. BLE disconnected).
+  final unreachable = <int>{};
+  final learned = <int, List<String>>{};
+  List<String> addresses = const [];
+
+  @override
+  bool canReach(int peerId) => !unreachable.contains(peerId);
+  @override
+  List<String> get localAddresses => addresses;
+  @override
+  void learnPeerAddresses(int peerId, List<String> a) => learned[peerId] = a;
+
   @override
   TransportStatus get status => _status;
   set status(TransportStatus s) {

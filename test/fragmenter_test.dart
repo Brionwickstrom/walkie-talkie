@@ -50,7 +50,9 @@ void main() {
   });
 
   test('refuses messages needing more than 15 chunks', () {
-    expect(() => Fragmenter(maxChunkSize: 10).split(bytes(200)),
-        throwsArgumentError);
+    expect(
+      () => Fragmenter(maxChunkSize: 10).split(bytes(200)),
+      throwsArgumentError,
+    );
   });
 }

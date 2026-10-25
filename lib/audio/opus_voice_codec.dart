@@ -17,17 +17,19 @@ class OpusRuntime {
 
 class OpusVoiceEncoder implements VoiceEncoder {
   OpusVoiceEncoder({int bitrate = VoiceFormat.bitrate})
-      : _enc = BufferedOpusEncoder(
-          sampleRate: VoiceFormat.sampleRate,
-          channels: VoiceFormat.channels,
-          application: Application.voip,
-          maxInputBufferSizeBytes: 2 * VoiceFormat.samplesPerFrame * 6,
-        ) {
+    : _enc = BufferedOpusEncoder(
+        sampleRate: VoiceFormat.sampleRate,
+        channels: VoiceFormat.channels,
+        application: Application.voip,
+        maxInputBufferSizeBytes: 2 * VoiceFormat.samplesPerFrame * 6,
+      ) {
     _enc.encoderCtl(request: defines.OPUS_SET_BITRATE_REQUEST, value: bitrate);
     // In-band FEC lets the receiver rebuild a lost packet from the next one.
     _enc.encoderCtl(request: defines.OPUS_SET_INBAND_FEC_REQUEST, value: 1);
     _enc.encoderCtl(
-        request: defines.OPUS_SET_PACKET_LOSS_PERC_REQUEST, value: 10);
+      request: defines.OPUS_SET_PACKET_LOSS_PERC_REQUEST,
+      value: 10,
+    );
   }
 
   final BufferedOpusEncoder _enc;
@@ -46,7 +48,9 @@ class OpusVoiceEncoder implements VoiceEncoder {
 
 class OpusVoiceDecoder implements VoiceDecoder {
   final _dec = SimpleOpusDecoder(
-      sampleRate: VoiceFormat.sampleRate, channels: VoiceFormat.channels);
+    sampleRate: VoiceFormat.sampleRate,
+    channels: VoiceFormat.channels,
+  );
 
   @override
   Int16List decode(Uint8List? packet) => _dec.decode(input: packet);

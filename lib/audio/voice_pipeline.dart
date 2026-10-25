@@ -8,10 +8,7 @@ import 'pcm_chunker.dart';
 /// on the way out, Opus packets -> PCM (with loss concealment) on the way
 /// in. The native mic/speaker plumbing lives in [AudioEngine].
 class VoicePipeline {
-  VoicePipeline({
-    required this.encoderFactory,
-    required this.decoderFactory,
-  });
+  VoicePipeline({required this.encoderFactory, required this.decoderFactory});
 
   final VoiceEncoder Function() encoderFactory;
   final VoiceDecoder Function() decoderFactory;

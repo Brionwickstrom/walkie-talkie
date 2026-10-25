@@ -4,6 +4,9 @@ import 'dart:typed_data';
 
 import '../core/frame.dart';
 import '../core/transport.dart';
+import 'lan_platform.dart';
+
+export 'lan_platform.dart';
 
 /// Something that finds candidate LAN addresses for other phones (mDNS,
 /// manual entry, ...). UDP broadcast discovery is built into [LanTransport].
@@ -27,36 +30,58 @@ class LanEndpoint {
 
   @override
   String toString() => '${address.address}:$port';
+
+  /// Parses "1.2.3.4:5678".
+  static LanEndpoint? tryParse(String s) {
+    final i = s.lastIndexOf(':');
+    if (i <= 0) return null;
+    final a = InternetAddress.tryParse(s.substring(0, i));
+    final p = int.tryParse(s.substring(i + 1));
+    if (a == null || p == null || p <= 0 || p > 65535) return null;
+    return LanEndpoint(a, p);
+  }
 }
 
 /// Local network transport: works on any shared Wi-Fi or on a phone's
 /// hotspot, with or without internet.
 ///
-/// * One UDP socket on [port] carries both discovery beacons and audio.
-/// * Discovery: hello frames are sent to the limited broadcast address and a
-///   best-guess /24 directed broadcast for every interface, plus unicast to
-///   every endpoint found by [discoveries] (mDNS/Bonjour) or [staticPeers].
-///   iOS needs the multicast entitlement to send/receive broadcasts, so on
-///   iPhone mDNS (no entitlement needed) + unicast is the reliable path.
-/// * Audio: unicast UDP to the address each peer's frames came from. Opus
-///   at 12-24 kbps is a few KB/s, far below what any Wi-Fi can do, and UDP
-///   avoids head-of-line blocking (a late audio packet is a useless one).
+/// * One UDP socket on [port] (bound to 0.0.0.0, SO_REUSEADDR, broadcast
+///   enabled) carries both discovery beacons and audio.
+/// * Discovery, all at once, whichever gets through first wins:
+///   1. hello frames to 255.255.255.255 and the real subnet broadcast of
+///      every Wi-Fi interface (netmask from the OS on Android);
+///   2. unicast to endpoints found by [discoveries] (mDNS/Bonjour);
+///   3. unicast to endpoints a peer advertised in its hello over another
+///      link (usually Bluetooth) via [learnPeerAddresses]. This is what
+///      makes LAN work on routers that filter broadcast/multicast.
+/// * On Android a WifiManager.MulticastLock is held while running; without
+///   it many phones (Samsung included) silently drop incoming broadcasts.
+/// * Audio: unicast UDP to the address each peer's frames came from.
 class LanTransport extends Transport {
   LanTransport({
     this.port = defaultPort,
     this.discoveries = const [],
     this.staticPeers = const [],
     this.enableBroadcast = true,
+    this.platform = const LanPlatform(),
     InternetAddress? bindAddress,
-  }) : _bindAddress = bindAddress ?? InternetAddress.anyIPv4;
+    DateTime Function()? clock,
+  }) : _bindAddress = bindAddress ?? InternetAddress.anyIPv4,
+       _clock = clock ?? DateTime.now;
 
   static const int defaultPort = 47474;
+
+  /// Hinted/mDNS endpoints are retried for this long after the last hint.
+  static const Duration candidateTtl = Duration(seconds: 30);
+  static const Duration _ifaceRefresh = Duration(seconds: 5);
 
   final int port;
   final List<LanDiscovery> discoveries;
   final List<LanEndpoint> staticPeers;
   final bool enableBroadcast;
+  final LanPlatform platform;
   final InternetAddress _bindAddress;
+  final DateTime Function() _clock;
 
   RawDatagramSocket? _socket;
   TransportStatus _status = TransportStatus.stopped;
@@ -64,9 +89,17 @@ class LanTransport extends Transport {
   final _statusCtl = StreamController<TransportStatus>.broadcast();
   final _framesCtl = StreamController<InboundFrame>.broadcast();
   final Map<int, LanEndpoint> _peerEndpoints = {};
-  final Set<LanEndpoint> _candidates = {};
+
+  /// Endpoint -> expiry (null = permanent, e.g. static peers).
+  final Map<LanEndpoint, DateTime?> _candidates = {};
   final List<StreamSubscription<dynamic>> _subs = [];
   List<InternetAddress> _broadcastTargets = const [];
+  List<LanInterface> _ifaces = const [];
+  DateTime? _ifacesAt;
+  bool _refreshing = false;
+  bool _lockHeld = false;
+  int _rxCount = 0;
+  int _txErrors = 0;
 
   @override
   TransportKind get kind => TransportKind.lan;
@@ -82,6 +115,10 @@ class LanTransport extends Transport {
   /// The port actually bound (useful when [port] is 0 in tests).
   int? get boundPort => _socket?.port;
 
+  /// Visible for tests/debug: current unicast discovery targets.
+  Set<LanEndpoint> get candidates => _candidates.keys.toSet();
+  List<InternetAddress> get broadcastTargets => _broadcastTargets;
+
   void _setStatus(TransportStatus s, [String? detail]) {
     _status = s;
     _detail = detail;
@@ -93,20 +130,30 @@ class LanTransport extends Transport {
     if (_socket != null) return;
     _setStatus(TransportStatus.starting);
     try {
-      final socket = await RawDatagramSocket.bind(_bindAddress, port,
-          reuseAddress: true);
+      _lockHeld = await platform.acquireMulticastLock();
+      final socket = await RawDatagramSocket.bind(
+        _bindAddress,
+        port,
+        reuseAddress: true,
+      );
       socket.broadcastEnabled = enableBroadcast;
       socket.readEventsEnabled = true;
       _socket = socket;
       _subs.add(socket.listen(_onSocketEvent));
-      _candidates.addAll(staticPeers);
-      if (enableBroadcast) _broadcastTargets = await _computeBroadcasts();
+      for (final p in staticPeers) {
+        _candidates[p] = null;
+      }
+      await _refreshInterfaces();
       for (final d in discoveries) {
-        _subs.add(d.found.listen(_candidates.add));
+        _subs.add(
+          d.found.listen(
+            (ep) => _addCandidate(ep, _clock().add(candidateTtl * 2)),
+          ),
+        );
         try {
           await d.start(localNodeId: localNodeId, port: socket.port);
         } catch (_) {
-          // mDNS failing is not fatal: broadcast/static still work.
+          // mDNS failing is not fatal: broadcast/hints still work.
         }
       }
       _setStatus(TransportStatus.running);
@@ -116,24 +163,66 @@ class LanTransport extends Transport {
     }
   }
 
-  Future<List<InternetAddress>> _computeBroadcasts() async {
-    final targets = <InternetAddress>{InternetAddress('255.255.255.255')};
+  /// Re-read interfaces: Wi-Fi may connect, change network or turn into a
+  /// hotspot after the app started.
+  Future<void> _refreshInterfaces() async {
+    if (_refreshing) return;
+    _refreshing = true;
     try {
-      final ifaces = await NetworkInterface.list(
-          type: InternetAddressType.IPv4, includeLoopback: false);
-      for (final i in ifaces) {
-        for (final a in i.addresses) {
-          final parts = a.address.split('.');
-          if (parts.length == 4) {
-            // dart:io does not expose netmasks; /24 is by far the most
-            // common for home Wi-Fi and phone hotspots (Android 192.168.x,
-            // iPhone 172.20.10.x is a /28, still covered by 255.255.255.255).
-            targets.add(InternetAddress('${parts[0]}.${parts[1]}.${parts[2]}.255'));
-          }
-        }
+      final all = await platform.interfaces();
+      _ifaces = [
+        for (final i in all)
+          if (i.isLocalNetwork) i,
+      ];
+      if (enableBroadcast) {
+        _broadcastTargets = <InternetAddress>{
+          InternetAddress('255.255.255.255'),
+          for (final i in _ifaces) i.effectiveBroadcast,
+        }.toList();
       }
-    } catch (_) {}
-    return targets.toList();
+    } catch (_) {
+    } finally {
+      _ifacesAt = _clock();
+      _refreshing = false;
+    }
+  }
+
+  bool _isOwnAddress(InternetAddress a) =>
+      a.isLoopback || _ifaces.any((i) => i.address == a);
+
+  void _addCandidate(LanEndpoint ep, DateTime? expiry) {
+    if (_isOwnAddress(ep.address) && ep.port == boundPort) return;
+    if (_candidates.containsKey(ep) && _candidates[ep] == null) return;
+    _candidates[ep] = expiry;
+  }
+
+  @override
+  List<String> get localAddresses {
+    final p = boundPort;
+    if (p == null) return const [];
+    // Cap at 3 to keep hello small enough for Bluetooth.
+    return [for (final i in _ifaces.take(3)) '${i.address.address}:$p'];
+  }
+
+  @override
+  void learnPeerAddresses(int peerId, List<String> addresses) {
+    final expiry = _clock().add(candidateTtl);
+    for (final a in addresses) {
+      final ep = LanEndpoint.tryParse(a);
+      if (ep == null || ep.address.type != InternetAddressType.IPv4) continue;
+      _addCandidate(ep, expiry);
+    }
+  }
+
+  @override
+  bool canReach(int peerId) => _peerEndpoints.containsKey(peerId);
+
+  @override
+  String? get debugInfo {
+    final ips = _ifaces.map((i) => i.address.address).join(',');
+    return 'IP ${ips.isEmpty ? 'none' : ips} · lock ${_lockHeld ? 'on' : 'off'}'
+        ' · ${_candidates.length} direct · rx $_rxCount'
+        '${_txErrors > 0 ? ' · tx err $_txErrors' : ''}';
   }
 
   void _onSocketEvent(RawSocketEvent event) {
@@ -144,9 +233,9 @@ class LanTransport extends Transport {
     while ((dg = socket.receive()) != null) {
       final frame = Frame.tryDecode(dg!.data);
       if (frame == null) continue;
+      _rxCount++;
       final ep = LanEndpoint(dg.address, dg.port);
       _peerEndpoints[frame.senderId] = ep;
-      _candidates.add(ep);
       if (!_framesCtl.isClosed) {
         _framesCtl.add(InboundFrame(frame, TransportKind.lan));
       }
@@ -158,11 +247,19 @@ class LanTransport extends Transport {
     final socket = _socket;
     if (socket == null) return;
     if (peerIds == null) {
+      final now = _clock();
+      if (_ifacesAt == null || now.difference(_ifacesAt!) > _ifaceRefresh) {
+        unawaited(_refreshInterfaces());
+      }
+      _candidates.removeWhere((_, exp) => exp != null && exp.isBefore(now));
+      final sentTo = <LanEndpoint>{};
       for (final b in _broadcastTargets) {
         _trySend(socket, frame, b, port);
       }
-      for (final ep in _candidates) {
-        _trySend(socket, frame, ep.address, ep.port);
+      // Known peers first (keeps the link fresh even if broadcast is
+      // filtered), then every candidate.
+      for (final ep in [..._peerEndpoints.values, ..._candidates.keys]) {
+        if (sentTo.add(ep)) _trySend(socket, frame, ep.address, ep.port);
       }
       return;
     }
@@ -177,6 +274,7 @@ class LanTransport extends Transport {
       s.send(data, a, p);
     } catch (_) {
       // e.g. network unreachable while Wi-Fi is switching; ignore.
+      _txErrors++;
     }
   }
 
@@ -195,6 +293,10 @@ class LanTransport extends Transport {
     _socket = null;
     _peerEndpoints.clear();
     _candidates.clear();
+    if (_lockHeld) {
+      await platform.releaseMulticastLock();
+      _lockHeld = false;
+    }
     _setStatus(TransportStatus.stopped);
   }
 

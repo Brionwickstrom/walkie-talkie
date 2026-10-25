@@ -11,18 +11,21 @@ const me = 0x1111;
 const bob = 0x2222;
 const carol = 0x3333;
 
-Frame hello(int from, int seq, {int channel = 1, String? name}) => Frame.control(
-    senderId: from,
-    channel: channel,
-    seq: seq,
-    message: ControlMessage(ControlKind.hello, name: name));
+Frame hello(int from, int seq, {int channel = 1, String? name}) =>
+    Frame.control(
+      senderId: from,
+      channel: channel,
+      seq: seq,
+      message: ControlMessage(ControlKind.hello, name: name),
+    );
 
 Frame audio(int from, int seq, {int channel = 1}) => Frame(
-    type: FrameType.audio,
-    senderId: from,
-    channel: channel,
-    seq: seq,
-    payload: Uint8List.fromList([seq]));
+  type: FrameType.audio,
+  senderId: from,
+  channel: channel,
+  seq: seq,
+  payload: Uint8List.fromList([seq]),
+);
 
 void main() {
   late FakeTransport lan, ble, net;
@@ -70,23 +73,25 @@ void main() {
     expect(net.sent, isEmpty);
   });
 
-  test('fails over when the best link goes quiet, and drops dead peers',
-      () async {
-    lan.deliver(hello(bob, 0));
-    ble.deliver(hello(bob, 1));
-    now = now.add(const Duration(seconds: 4));
-    ble.deliver(hello(bob, 2)); // BLE keeps hearing bob, LAN does not
-    now = now.add(const Duration(seconds: 3)); // LAN now 7s stale
-    m.prune();
-    expect(m.peers.single.activeLink, TransportKind.ble);
-    await m.sendAudio(Uint8List(1));
-    expect(ble.sent.single.peerIds, {bob});
-    expect(lan.sent, isEmpty);
+  test(
+    'fails over when the best link goes quiet, and drops dead peers',
+    () async {
+      lan.deliver(hello(bob, 0));
+      ble.deliver(hello(bob, 1));
+      now = now.add(const Duration(seconds: 4));
+      ble.deliver(hello(bob, 2)); // BLE keeps hearing bob, LAN does not
+      now = now.add(const Duration(seconds: 3)); // LAN now 7s stale
+      m.prune();
+      expect(m.peers.single.activeLink, TransportKind.ble);
+      await m.sendAudio(Uint8List(1));
+      expect(ble.sent.single.peerIds, {bob});
+      expect(lan.sent, isEmpty);
 
-    now = now.add(const Duration(seconds: 10));
-    m.prune();
-    expect(m.peers, isEmpty);
-  });
+      now = now.add(const Duration(seconds: 10));
+      m.prune();
+      expect(m.peers, isEmpty);
+    },
+  );
 
   test('a transport that stops is skipped even if recently heard', () async {
     lan.deliver(hello(bob, 0));
@@ -139,17 +144,23 @@ void main() {
 
   test('talk start/end toggles the peer talking flag', () {
     lan.deliver(hello(bob, 0));
-    lan.deliver(Frame.control(
+    lan.deliver(
+      Frame.control(
         senderId: bob,
         channel: 1,
         seq: 1,
-        message: const ControlMessage(ControlKind.talkStart)));
+        message: const ControlMessage(ControlKind.talkStart),
+      ),
+    );
     expect(m.peers.single.talking, isTrue);
-    lan.deliver(Frame.control(
+    lan.deliver(
+      Frame.control(
         senderId: bob,
         channel: 1,
         seq: 2,
-        message: const ControlMessage(ControlKind.talkEnd)));
+        message: const ControlMessage(ControlKind.talkEnd),
+      ),
+    );
     expect(m.peers.single.talking, isFalse);
   });
 }

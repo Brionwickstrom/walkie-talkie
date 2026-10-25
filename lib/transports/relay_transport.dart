@@ -66,12 +66,13 @@ class RelayTransport extends Transport {
     if (!_statusCtl.isClosed) _statusCtl.add(s);
   }
 
-  static Uri channelUri(Uri base, int channel, int nodeId) =>
-      base.replace(queryParameters: {
-        ...base.queryParameters,
-        'ch': '$channel',
-        'id': nodeId.toRadixString(16),
-      });
+  static Uri channelUri(Uri base, int channel, int nodeId) => base.replace(
+    queryParameters: {
+      ...base.queryParameters,
+      'ch': '$channel',
+      'id': nodeId.toRadixString(16),
+    },
+  );
 
   @override
   Future<void> start({required int localNodeId, required int channel}) async {
@@ -89,8 +90,9 @@ class RelayTransport extends Transport {
     }
     _setStatus(TransportStatus.starting);
     try {
-      final ws =
-          WebSocketChannel.connect(channelUri(base, _channel, _localNodeId));
+      final ws = WebSocketChannel.connect(
+        channelUri(base, _channel, _localNodeId),
+      );
       await ws.ready.timeout(const Duration(seconds: 8));
       _ws = ws;
       _sub = ws.stream.listen(

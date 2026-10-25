@@ -49,7 +49,10 @@ void main() {
 
   test('pipeline encodes mic audio into one packet per frame', () {
     final enc = FakeEncoder();
-    final p = VoicePipeline(encoderFactory: () => enc, decoderFactory: FakeDecoder.new);
+    final p = VoicePipeline(
+      encoderFactory: () => enc,
+      decoderFactory: FakeDecoder.new,
+    );
     expect(p.encodeMic(pcmBytes(960)), hasLength(3));
     expect(p.encodeMic(pcmBytes(100)), isEmpty);
     expect(p.endTransmission(), hasLength(1));
