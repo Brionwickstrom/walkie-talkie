@@ -10,6 +10,7 @@ import android.os.Looper
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
+import okhttp3.Dns
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -17,6 +18,7 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
+import java.net.InetAddress
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
@@ -122,7 +124,12 @@ class RelayBridge(private val context: Context) {
         } else {
             baseClient.newBuilder()
                 .socketFactory(net.socketFactory)
-                .dns { host -> net.getAllByName(host).toList() }
+                .dns(
+                    object : Dns {
+                        override fun lookup(hostname: String): List<InetAddress> =
+                            net.getAllByName(hostname).toList()
+                    },
+                )
                 .build()
         }
         val ws = client.newWebSocket(
