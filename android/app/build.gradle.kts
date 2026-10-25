@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "com.walkie.walkie_talkie"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 37 // permission_handler_android needs 37
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
