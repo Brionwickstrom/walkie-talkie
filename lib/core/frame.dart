@@ -140,7 +140,32 @@ enum ControlKind {
   /// Reply to [ring]/[beep]: [ControlMessage.status] is one of
   /// [RingStatus] names (delivered / answered / dismissed / missed).
   ringAck,
+
+  // ---- v1.5.0 (older phones fail to decode these and ignore them) ----
+
+  /// Friend request with our X25519 public key in `x.pk`.
+  friendReq,
+
+  /// Friend request accepted (their public key in `x.pk`).
+  friendAcc,
+
+  /// Friend request declined.
+  friendDec,
+
+  /// Presence between friends (sealed with the pair key).
+  fhello,
+
+  /// Private-channel admin hands remaining members a new passcode
+  /// (`x.pc`) after removing someone (`x.ex`).
+  rekey,
+
+  /// Member got the [rekey].
+  rekeyAck,
 }
+
+/// Feature level we announce in hello `x.v`: 15 = v1.5.0 (friends, chat,
+/// channel names, moderation). Absent on older phones.
+const int featureLevel = 15;
 
 /// What happened to a ring on the receiving phone.
 enum RingStatus { sending, delivered, answered, dismissed, missed, unreachable }
@@ -157,7 +182,14 @@ class ControlMessage {
     this.status,
     this.urgent = false,
     this.interval,
+    this.x = const {},
   });
+
+  /// Extension fields of newer versions (older phones ignore the whole
+  /// map): hello `v` feature level, `cn`/`ce`/`ct` channel name / emoji /
+  /// time set, `adm` admin, `ann` announcement mode; friend keys, rekey
+  /// passcodes.
+  final Map<String, Object?> x;
 
   /// [ControlKind.ring]: urgent ring (repeats up to 60 s, may sound in
   /// silent mode). Older phones ignore it and ring normally.
@@ -202,6 +234,7 @@ class ControlMessage {
         if (status != null) 's': status,
         if (urgent) 'u': 1,
         if (interval != null) 'iv': interval,
+        if (x.isNotEmpty) 'x': x,
       }),
     ),
   );
@@ -226,6 +259,9 @@ class ControlMessage {
         status: map['s'] as String?,
         urgent: map['u'] == 1 || map['u'] == true,
         interval: (map['iv'] as num?)?.toInt(),
+        x: map['x'] is Map
+            ? Map<String, Object?>.from(map['x'] as Map)
+            : const {},
       );
     } catch (_) {
       return null;

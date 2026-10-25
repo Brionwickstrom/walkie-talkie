@@ -3,7 +3,28 @@ import 'dart:math';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../friends/friend_links.dart';
 import 'call_signs.dart';
+
+/// A channel's display name and emoji (shared with the others on it via
+/// presence; the newest [updated] wins).
+class ChannelName {
+  const ChannelName(this.name, this.emoji, this.updated);
+  final String name;
+  final String emoji;
+  final int updated; // ms since epoch
+
+  bool get isEmpty => name.isEmpty && emoji.isEmpty;
+
+  Map<String, Object?> toJson() => {'n': name, 'e': emoji, 't': updated};
+
+  static ChannelName? fromJson(Object? j) {
+    if (j is! Map) return null;
+    final n = j['n'], e = j['e'], t = j['t'];
+    if (n is! String || e is! String || t is! num) return null;
+    return ChannelName(n, e, t.toInt());
+  }
+}
 
 /// Everything that must survive an app restart: the phone's stable id (so
 /// other phones keep showing the same name), its display name, the channel
@@ -27,8 +48,20 @@ class AppSettings {
     this.urgentLoud = true,
     Map<int, String>? privateChannels,
     Map<int, double>? peerVolumes,
+    List<Friend>? friends,
+    Map<int, ChannelName>? channelNames,
+    Map<int, int>? channelAdmins,
+    Set<int>? announceScopes,
+    Set<int>? muted,
+    Map<int, String>? blocked,
   }) : privateChannels = privateChannels ?? {},
-       peerVolumes = peerVolumes ?? {} {
+       peerVolumes = peerVolumes ?? {},
+       friends = friends ?? [],
+       channelNames = channelNames ?? {},
+       channelAdmins = channelAdmins ?? {},
+       announceScopes = announceScopes ?? {},
+       muted = muted ?? {},
+       blocked = blocked ?? {} {
     // v1.1.x prefilled the name box with "Phone 38EA", so pressing Save
     // stored it as if typed. Treat that as "never customized".
     if (customName != null &&
@@ -126,6 +159,77 @@ class AppSettings {
     }
   }
 
+  /// Friends with their pair keys.
+  final List<Friend> friends;
+
+  /// Channel names by scope (channel number or private scope).
+  final Map<int, ChannelName> channelNames;
+
+  /// Admin of each private channel (scope -> phone id).
+  final Map<int, int> channelAdmins;
+
+  /// Private channels (scopes) where I am admin and only admins may talk.
+  final Set<int> announceScopes;
+
+  /// People whose live talk is not played.
+  final Set<int> muted;
+
+  /// Blocked people (id -> name, for the unblock list).
+  final Map<int, String> blocked;
+
+  static String encodeSocial(AppSettings s) => jsonEncode({
+    'cn': {
+      for (final e in s.channelNames.entries) '${e.key}': e.value.toJson(),
+    },
+    'ad': {for (final e in s.channelAdmins.entries) '${e.key}': e.value},
+    'an': s.announceScopes.toList(),
+    'mu': s.muted.toList(),
+    'bl': {for (final e in s.blocked.entries) '${e.key}': e.value},
+  });
+
+  /// Decodes [encodeSocial] into the given maps (bad parts are skipped).
+  static void decodeSocial(
+    String? str, {
+    required Map<int, ChannelName> names,
+    required Map<int, int> admins,
+    required Set<int> announce,
+    required Set<int> muted,
+    required Map<int, String> blocked,
+  }) {
+    if (str == null || str.isEmpty) return;
+    Object? j;
+    try {
+      j = jsonDecode(str);
+    } catch (_) {
+      return;
+    }
+    if (j is! Map) return;
+    void eachEntry(Object? m, void Function(int k, Object? v) f) {
+      if (m is! Map) return;
+      m.forEach((k, v) {
+        final i = int.tryParse('$k');
+        if (i != null) f(i, v);
+      });
+    }
+
+    eachEntry(j['cn'], (k, v) {
+      final n = ChannelName.fromJson(v);
+      if (n != null) names[k] = n;
+    });
+    eachEntry(j['ad'], (k, v) {
+      if (v is num) admins[k] = v.toInt();
+    });
+    eachEntry(j['bl'], (k, v) {
+      if (v is String) blocked[k] = v;
+    });
+    for (final x in (j['an'] as List?) ?? const []) {
+      if (x is num) announce.add(x.toInt());
+    }
+    for (final x in (j['mu'] as List?) ?? const []) {
+      if (x is num) muted.add(x.toInt());
+    }
+  }
+
   /// Name used by v1.1.x before call signs existed.
   static String legacyDefaultNameFor(int nodeId) =>
       'Phone ${nodeId.toRadixString(16).padLeft(8, '0').substring(0, 4).toUpperCase()}';
@@ -180,6 +284,8 @@ class SharedPrefsSettingsStore implements SettingsStore {
   static const _kToggle = 'toggle_talk';
   static const _kNotifTalk = 'notif_talk';
   static const _kUrgent = 'urgent_loud';
+  static const _kFriends = 'friends';
+  static const _kSocial = 'social';
 
   @override
   Future<AppSettings> load({required int defaultChannel}) async {
@@ -194,8 +300,27 @@ class SharedPrefsSettingsStore implements SettingsStore {
         await prefs?.setInt(_kId, id);
       } catch (_) {}
     }
+    final names = <int, ChannelName>{};
+    final admins = <int, int>{};
+    final announce = <int>{};
+    final muted = <int>{};
+    final blocked = <int, String>{};
+    AppSettings.decodeSocial(
+      prefs?.getString(_kSocial),
+      names: names,
+      admins: admins,
+      announce: announce,
+      muted: muted,
+      blocked: blocked,
+    );
     return AppSettings(
       nodeId: id,
+      friends: Friend.decodeList(prefs?.getString(_kFriends)),
+      channelNames: names,
+      channelAdmins: admins,
+      announceScopes: announce,
+      muted: muted,
+      blocked: blocked,
       customName: prefs?.getString(_kName),
       channel: prefs?.getInt(_kChannel) ?? defaultChannel,
       relayUrl: prefs?.getString(_kRelay),
@@ -248,6 +373,8 @@ class SharedPrefsSettingsStore implements SettingsStore {
         _kVolumes,
         AppSettings.encodeVolumes(s.peerVolumes),
       );
+      await prefs.setString(_kFriends, Friend.encodeList(s.friends));
+      await prefs.setString(_kSocial, AppSettings.encodeSocial(s));
       await prefs.setString(
         _kPrivate,
         AppSettings.encodePrivate(s.privateChannels),

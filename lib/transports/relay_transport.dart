@@ -31,12 +31,16 @@ class RelayTransport extends Transport {
     this.maxBackoff = const Duration(seconds: 30),
     this.connectTimeout = const Duration(seconds: 75),
     this.pingInterval = const Duration(seconds: 25),
+    this.room,
   }) : connector = connector ?? IoRelayConnector() {
     _netSub = this.connector.networkChanges.listen(_onNetworkChanged);
   }
 
   Uri? _serverUri;
   final RelayConnector connector;
+
+  /// Fixed relay room (friend links) instead of the channel's room.
+  final String? room;
   final Duration minBackoff;
   final Duration maxBackoff;
 
@@ -90,7 +94,7 @@ class RelayTransport extends Transport {
   String? get debugInfo {
     final host = _serverUri?.host;
     if (host == null) return null;
-    return '$host room ${roomFor(_channel)}'
+    return '$host room ${room ?? roomFor(_channel)}'
         '${network != null ? ' via $network' : ''}'
         '${_connects > 1 ? ' · reconnects ${_connects - 1}' : ''}'
         '${_status != TransportStatus.running && _retry != null ? ' · retry in ${_backoff.inSeconds}s' : ''}';
@@ -161,7 +165,15 @@ class RelayTransport extends Transport {
     );
     try {
       final ws = await connector.connect(
-        channelUri(base, _channel, _localNodeId),
+        room != null
+            ? base.replace(
+                queryParameters: {
+                  ...base.queryParameters,
+                  'ch': room!,
+                  'id': _localNodeId.toRadixString(16),
+                },
+              )
+            : channelUri(base, _channel, _localNodeId),
         timeout: connectTimeout,
       );
       if (attempt != _attempt || !_wanted) {

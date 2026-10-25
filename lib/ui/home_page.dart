@@ -9,6 +9,9 @@ import '../app/walkie_controller.dart';
 import '../core/peer.dart';
 import '../core/transport.dart';
 import '../update/update_ui.dart';
+import '../chat/chat_store.dart';
+import 'chat_page.dart';
+import 'friends_page.dart';
 import 'history_page.dart';
 import 'home_view.dart';
 import 'inbox_page.dart';
@@ -64,6 +67,34 @@ class _HomePageState extends State<HomePage> {
       }),
     );
     _subs.add(
+      c.friendRequestStream.listen((r) async {
+        if (!mounted) return;
+        final ok = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: Text('${r.name} wants to be friends'),
+            content: const Text(
+              'Friends can talk and chat with each other privately from '
+              'anywhere, on any channel (end-to-end encrypted).',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Decline'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Accept'),
+              ),
+            ],
+          ),
+        );
+        if (ok == null || !mounted) return;
+        if (!c.friendRequests.contains(r)) return;
+        await answerFriendRequest(context, c, r, ok);
+      }),
+    );
+    _subs.add(
       c.uiRequests.listen((r) {
         if (r == 'inbox' && mounted) _openInbox(context);
       }),
@@ -115,6 +146,9 @@ class _HomePageState extends State<HomePage> {
                 _ChannelPicker(
                   channel: c.channel,
                   isPrivate: c.settings.isPrivate,
+                  emojiOf: (ch) => ch == c.channel
+                      ? c.channelName?.emoji ?? ''
+                      : c.channelNameOf(ch)?.emoji ?? '',
                   onChanged: (ch) => c.setChannel(ch),
                 ),
                 IconButton(
@@ -133,6 +167,29 @@ class _HomePageState extends State<HomePage> {
               ],
             ),
             actions: [
+              IconButton(
+                tooltip: 'Chat on this channel',
+                icon: Badge(
+                  isLabelVisible: c.unreadChannelChat > 0,
+                  label: Text('${c.unreadChannelChat}'),
+                  child: const Icon(Icons.chat_bubble_outline),
+                ),
+                onPressed: () => _openChat(context, c.channelChat),
+              ),
+              IconButton(
+                tooltip: 'Friends',
+                icon: Badge(
+                  isLabelVisible:
+                      c.unreadFriendChats + c.friendRequests.length > 0,
+                  label: Text(
+                    '${c.unreadFriendChats + c.friendRequests.length}',
+                  ),
+                  child: Icon(
+                    c.onlineFriends > 0 ? Icons.people : Icons.people_outline,
+                  ),
+                ),
+                onPressed: () => _openFriends(context),
+              ),
               IconButton(
                 tooltip: 'Voice messages',
                 icon: Badge(
@@ -166,7 +223,9 @@ class _HomePageState extends State<HomePage> {
               showDetails: c.settings.showDiagnostics,
               onToggleDetails: c.setShowDiagnostics,
               details: _detailLines(),
-              channelLabel: 'CH ${c.channel}',
+              channelLabel: c.channelName == null
+                  ? 'CH ${c.channel}'
+                  : '${c.channelTitle} (CH ${c.channel})',
               isPrivate: c.isPrivate,
               me: PersonView(
                 id: c.nodeId,
@@ -179,7 +238,20 @@ class _HomePageState extends State<HomePage> {
               onBeep: (p) => c.ring(toPeer: p.id, beep: true),
               onMessage: (p) => _openRecordSheet(context, p.id, p.name),
               onVolume: (p) => _openPersonSheet(context, p),
-              notice: (c.mediaVolume ?? 1) < 0.3
+              notice: c.announcementMode && !c.isAdmin
+                  ? Card(
+                      margin: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+                      child: ListTile(
+                        dense: true,
+                        leading: const Icon(Icons.campaign),
+                        title: Text(
+                          'Announcement mode: only '
+                          '${c.adminId == null ? 'the admin' : c.nameOf(c.adminId!)}'
+                          ' can talk here.',
+                        ),
+                      ),
+                    )
+                  : (c.mediaVolume ?? 1) < 0.3
                   ? Card(
                       margin: const EdgeInsets.fromLTRB(8, 4, 8, 0),
                       color: Theme.of(context).colorScheme.errorContainer,
@@ -232,8 +304,9 @@ class _HomePageState extends State<HomePage> {
                 record: _RecordButton(controller: c),
               ),
               ptt: PttButton(
-                transmitting: c.transmitting,
-                busy: c.talkingPeer != null,
+                transmitting: c.transmitting && c.privateTalkTo == null,
+                busy:
+                    c.talkingPeer != null || (c.announcementMode && !c.isAdmin),
                 onChanged: c.pushToTalk,
                 size: pttSize,
                 toggle: c.settings.toggleTalk,
@@ -390,6 +463,86 @@ class _HomePageState extends State<HomePage> {
                       ),
                     ],
                   ),
+                  const Divider(),
+                  Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 8,
+                    runSpacing: 6,
+                    children: [
+                      if (c.isFriend(p.id))
+                        FilledButton.tonalIcon(
+                          icon: const Icon(Icons.forum),
+                          label: const Text('Private chat'),
+                          onPressed: () {
+                            Navigator.pop(ctx);
+                            _openChat(context, friendConversation(p.id));
+                          },
+                        )
+                      else if (!p.left)
+                        FilledButton.tonalIcon(
+                          icon: const Icon(Icons.person_add),
+                          label: const Text('Add friend'),
+                          onPressed: () {
+                            Navigator.pop(ctx);
+                            c.requestFriend(p.id);
+                          },
+                        ),
+                      OutlinedButton.icon(
+                        icon: Icon(
+                          c.isMuted(p.id) ? Icons.volume_up : Icons.volume_off,
+                        ),
+                        label: Text(c.isMuted(p.id) ? 'Unmute' : 'Mute'),
+                        onPressed: () => c.setMuted(p.id, !c.isMuted(p.id)),
+                      ),
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.block),
+                        label: const Text('Block'),
+                        onPressed: () async {
+                          final ok = await _confirm(
+                            ctx,
+                            'Block ${p.name}?',
+                            'You will not hear, see or receive anything from '
+                                'them (talk, rings, messages, chats). Undo in '
+                                'Settings > Blocked.',
+                            'Block',
+                          );
+                          if (ok && ctx.mounted) {
+                            Navigator.pop(ctx);
+                            await c.setBlocked(p.id, true, name: p.name);
+                          }
+                        },
+                      ),
+                      if (c.isAdmin && p.here)
+                        OutlinedButton.icon(
+                          icon: const Icon(Icons.person_remove),
+                          label: const Text('Remove from channel'),
+                          onPressed: () async {
+                            final ok = await _confirm(
+                              ctx,
+                              'Remove ${p.name} from ${c.channelTitle}?',
+                              'Everyone else is moved to a new passcode '
+                                  'automatically. ${p.name} keeps the old one '
+                                  'and can no longer hear or see the channel. '
+                                  'Phones out of range right now need the '
+                                  'new passcode from you.',
+                              'Remove',
+                            );
+                            if (ok && ctx.mounted) {
+                              Navigator.pop(ctx);
+                              await c.kick(p.id);
+                            }
+                          },
+                        ),
+                    ],
+                  ),
+                  if (c.isMuted(p.id))
+                    const Padding(
+                      padding: EdgeInsets.only(top: 6),
+                      child: Text(
+                        'Muted: their live talk is not played here.',
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -423,6 +576,20 @@ class _HomePageState extends State<HomePage> {
     Navigator.of(
       context,
     ).push(MaterialPageRoute<void>(builder: (_) => HistoryPage(controller: c)));
+  }
+
+  void _openChat(BuildContext context, String conv) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ChatPage(controller: c, conv: conv),
+      ),
+    );
+  }
+
+  void _openFriends(BuildContext context) {
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => FriendsPage(controller: c)));
   }
 
   void _openInbox(BuildContext context) {
@@ -653,6 +820,20 @@ class _HomePageState extends State<HomePage> {
                       offLabel: 'Also ring through Do Not Disturb...',
                       icon: Icons.do_not_disturb_off,
                       onTap: () => _explainDnd(ctx, c),
+                    ),
+                ],
+                if (c.settings.blocked.isNotEmpty) ...[
+                  const Divider(height: 32),
+                  _SectionTitle('Blocked'),
+                  for (final e in c.settings.blocked.entries)
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.block),
+                      title: Text(e.value),
+                      trailing: TextButton(
+                        onPressed: () => c.setBlocked(e.key, false),
+                        child: const Text('Unblock'),
+                      ),
                     ),
                 ],
                 const Divider(height: 32),
@@ -1053,10 +1234,12 @@ class _ChannelPicker extends StatelessWidget {
   const _ChannelPicker({
     required this.channel,
     required this.isPrivate,
+    required this.emojiOf,
     required this.onChanged,
   });
   final int channel;
   final bool Function(int channel) isPrivate;
+  final String Function(int channel) emojiOf;
   final ValueChanged<int> onChanged;
 
   @override
@@ -1071,7 +1254,7 @@ class _ChannelPicker extends StatelessWidget {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text('CH $i'),
+                Text('${emojiOf(i).isEmpty ? '' : '${emojiOf(i)} '}CH $i'),
                 if (isPrivate(i)) ...[
                   const SizedBox(width: 4),
                   const Icon(Icons.lock, size: 14),
@@ -1084,6 +1267,31 @@ class _ChannelPicker extends StatelessWidget {
     );
   }
 }
+
+Future<bool> _confirm(
+  BuildContext context,
+  String title,
+  String text,
+  String action,
+) async =>
+    await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: Text(text),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(action),
+          ),
+        ],
+      ),
+    ) ??
+    false;
 
 String _short(TransportKind k) => switch (k) {
   TransportKind.lan => 'WiFi',
@@ -1114,7 +1322,10 @@ String peerDebugLine(Peer p, DateTime now) {
 Future<void> showPrivacySheet(BuildContext context, WalkieController c) async {
   final ch = c.channel;
   final passCtl = TextEditingController();
+  final nameCtl = TextEditingController(text: c.channelName?.name ?? '');
+  final emojiCtl = TextEditingController(text: c.channelName?.emoji ?? '');
   var show = false;
+  var makeAdmin = true;
   String? err;
   await showModalBottomSheet<void>(
     context: context,
@@ -1147,6 +1358,44 @@ Future<void> showPrivacySheet(BuildContext context, WalkieController c) async {
                   ],
                 ),
                 const SizedBox(height: 8),
+                Row(
+                  children: [
+                    SizedBox(
+                      width: 64,
+                      child: TextField(
+                        controller: emojiCtl,
+                        textAlign: TextAlign.center,
+                        decoration: const InputDecoration(labelText: 'Emoji'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextField(
+                        controller: nameCtl,
+                        maxLength: 30,
+                        decoration: const InputDecoration(
+                          labelText: 'Channel name (optional)',
+                          counterText: '',
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Save name',
+                      icon: const Icon(Icons.check),
+                      onPressed: () async {
+                        await c.setChannelName(nameCtl.text, emojiCtl.text);
+                        if (ctx.mounted) FocusScope.of(ctx).unfocus();
+                        setSheet(() {});
+                      },
+                    ),
+                  ],
+                ),
+                Text(
+                  'Everyone on this channel sees the name (phones with app '
+                  '1.5 or newer).',
+                  style: theme.textTheme.bodySmall,
+                ),
+                const SizedBox(height: 12),
                 if (pass == null) ...[
                   const Text(
                     'Set a passcode to make this channel private. Everything '
@@ -1171,7 +1420,18 @@ Future<void> showPrivacySheet(BuildContext context, WalkieController c) async {
                       ),
                     ),
                   ),
-                  const SizedBox(height: 12),
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: makeAdmin,
+                    onChanged: (v) => setSheet(() => makeAdmin = v ?? false),
+                    title: const Text("I'm setting up this channel"),
+                    subtitle: const Text(
+                      'You become its admin: you can remove people and '
+                      'turn on announcement mode. Untick when joining '
+                      "someone else's channel.",
+                    ),
+                  ),
+                  const SizedBox(height: 4),
                   FilledButton.icon(
                     icon: const Icon(Icons.lock),
                     label: const Text('Make private'),
@@ -1181,7 +1441,7 @@ Future<void> showPrivacySheet(BuildContext context, WalkieController c) async {
                         setSheet(() => err = 'Use at least 6 characters');
                         return;
                       }
-                      await c.setChannelPrivacy(ch, p);
+                      await c.setChannelPrivacy(ch, p, makeAdmin: makeAdmin);
                       setSheet(() => err = null);
                     },
                   ),
@@ -1243,6 +1503,53 @@ Future<void> showPrivacySheet(BuildContext context, WalkieController c) async {
                       ),
                     ],
                   ),
+                  const Divider(height: 24),
+                  Row(
+                    children: [
+                      const Icon(Icons.admin_panel_settings, size: 20),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          c.isAdmin
+                              ? 'You are the admin of this channel'
+                              : c.adminId != null
+                              ? 'Admin: ${c.nameOf(c.adminId!)}'
+                              : 'No admin yet',
+                          style: theme.textTheme.titleSmall,
+                        ),
+                      ),
+                      if (c.adminId == null)
+                        TextButton(
+                          onPressed: () async {
+                            await c.claimAdmin();
+                            setSheet(() {});
+                          },
+                          child: const Text('Become admin'),
+                        ),
+                    ],
+                  ),
+                  if (c.isAdmin) ...[
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Announcement mode'),
+                      subtitle: const Text(
+                        'Only you can talk; everyone else listens.',
+                      ),
+                      value: c.announcementMode,
+                      onChanged: (v) async {
+                        await c.setAnnouncementMode(v);
+                        setSheet(() {});
+                      },
+                    ),
+                    Text(
+                      'To remove someone: long-press them on the main '
+                      'screen > Remove from channel.',
+                      style: theme.textTheme.bodySmall,
+                    ),
+                  ] else if (c.announcementMode)
+                    const Text(
+                      'Announcement mode is on: only the admin talks.',
+                    ),
                   const SizedBox(height: 8),
                   OutlinedButton.icon(
                     icon: const Icon(Icons.lock_open),

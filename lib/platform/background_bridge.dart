@@ -159,6 +159,22 @@ class BackgroundBridge {
 
   Future<String?> filesDir() => _call<String>('filesDir');
 
+  /// One location fix (Android), or null.
+  Future<({double lat, double lng, double? acc})?> getLocation() async {
+    final m = await _call<Map<Object?, Object?>>('getLocation');
+    final lat = m?['lat'], lng = m?['lng'];
+    if (lat is! num || lng is! num) return null;
+    return (
+      lat: lat.toDouble(),
+      lng: lng.toDouble(),
+      acc: (m?['acc'] as num?)?.toDouble(),
+    );
+  }
+
+  /// Open a link (Google Maps) in another app.
+  Future<bool> openUrl(String url) async =>
+      await _call<bool>('openUrl', {'url': url}) ?? false;
+
   Future<String> manufacturer() async =>
       await _call<String>('manufacturer') ?? '';
 

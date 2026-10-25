@@ -73,6 +73,12 @@ class FakeNode implements MessengerLink, RingLink {
   @override
   String nameOf(int peerId) => 'Node $peerId';
 
+  /// Phones that understand chat (null = all of them).
+  Set<int>? chatPeers;
+
+  @override
+  bool supportsChat(int peerId) => chatPeers?.contains(peerId) ?? true;
+
   @override
   Stream<InboundData> get data => _data.stream;
 

@@ -117,6 +117,16 @@ class TransportManager {
   bool _running = false;
   bool _talking = false;
 
+  /// Phones blocked by the user: everything from them is dropped.
+  final Set<int> blocked = {};
+
+  /// Sealed frames our channel key does not open (friend links, see
+  /// FriendLinks). Return true if handled.
+  bool Function(InboundFrame inbound)? sealedHandler;
+
+  /// Extra hello fields (feature level, channel name, admin...).
+  Map<String, Object?> Function()? helloExtras;
+
   final Map<int, Peer> _peers = {};
   final Map<int, _SeqWindow> _seen = {};
   final Map<int, _SeqWindow> _seenAudio = {};
@@ -293,6 +303,7 @@ class TransportManager {
       ControlKind.hello,
       name: localName,
       interval: _saver ? saverHelloInterval.inMilliseconds : null,
+      x: helloExtras?.call() ?? const {},
       lanAddrs: [
         for (final t in _transports)
           if (t.status == TransportStatus.running) ...t.localAddresses,
@@ -514,12 +525,32 @@ class TransportManager {
     return null;
   }
 
+  /// Send already-encoded bytes on one transport (friend links).
+  Future<void> sendRaw(
+    TransportKind kind,
+    Uint8List bytes,
+    Set<int>? peerIds,
+  ) async {
+    final t = _transportOf(kind);
+    if (t == null || t.status != TransportStatus.running) return;
+    await _safeSend(t, bytes, peerIds);
+  }
+
+  /// Whether [kind] currently has a way to address [peerId].
+  bool canReachOn(TransportKind kind, int peerId) {
+    final t = _transportOf(kind);
+    return t != null &&
+        t.status == TransportStatus.running &&
+        t.canReach(peerId);
+  }
+
   /// Visible for tests: feed a frame as if a transport delivered it.
   void handleInbound(InboundFrame inbound) => _onInbound(inbound);
 
   void _onInbound(InboundFrame inbound) {
     var f = inbound.frame;
     if (f.senderId == localNodeId) return; // our own broadcast echoed back
+    if (blocked.contains(f.senderId)) return;
 
     // Private channels: only frames that decrypt with our key count. Plain
     // frames are ignored while private, sealed ones while public, so phones
@@ -527,9 +558,11 @@ class TransportManager {
     // versa). Nothing is recorded about rejected frames.
     final key = _key;
     if (f.type == FrameType.sealed) {
-      if (key == null) return;
-      final opened = key.open(f);
-      if (opened == null) return;
+      final opened = key?.open(f);
+      if (opened == null) {
+        sealedHandler?.call(inbound);
+        return;
+      }
       f = opened;
     } else if (key != null) {
       return;
@@ -562,6 +595,15 @@ class TransportManager {
                 peer.helloInterval = iv != null && iv > 0 && iv <= 30000
                     ? Duration(milliseconds: iv)
                     : null;
+                if (msg.x.isNotEmpty || peer.info.isNotEmpty) {
+                  final v = (msg.x['v'] as num?)?.toInt() ?? 0;
+                  if (v != peer.feature ||
+                      msg.x.toString() != peer.info.toString()) {
+                    peer.feature = v;
+                    peer.info = msg.x;
+                    changed = true;
+                  }
+                }
                 if (msg.name != null && msg.name != peer.name) {
                   peer.name = msg.name!;
                   changed = true;
@@ -608,9 +650,16 @@ class TransportManager {
               case ControlKind.talkEnd:
                 peer.talking = false;
                 changed = true;
+              case ControlKind.fhello:
+                break; // only between friends (FriendLinks)
               case ControlKind.ring:
               case ControlKind.beep:
               case ControlKind.ringAck:
+              case ControlKind.friendReq:
+              case ControlKind.friendAcc:
+              case ControlKind.friendDec:
+              case ControlKind.rekey:
+              case ControlKind.rekeyAck:
                 if (msg.to == null || msg.to == localNodeId) {
                   if (!_controls.isClosed) {
                     _controls.add(

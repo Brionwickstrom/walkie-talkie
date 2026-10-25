@@ -256,6 +256,81 @@ connection priority, Wi-Fi subnet sweeps every 2 min, relay keep-alive
 every 50 s. Talk and rings still arrive; discovery and failover are slower.
 The 20-35 % saving shown in Settings is an estimate.
 
+## Friends, chat, photos, location, channel names, moderation (v1.5)
+
+### Friends and private 1:1 talk
+* **Add a friend** two ways: long-press someone on the main screen >
+  *Add friend* (they get an Accept/Decline prompt), or in *Friends* one phone
+  taps *Show my code* and the other *Scan a code* (QR, valid 10 minutes;
+  works across networks as long as both are online).
+* Adding by request uses an X25519 key exchange over the channel link; both
+  phones show a **safety code** that should match. The QR route carries the
+  secret in the code itself, so it is safe against an eavesdropper.
+* Each pair of friends shares a random 256-bit **pair key**. Everything between
+  them (presence, talk, voice messages, chat) is sealed with it (AES-256-GCM),
+  on any channel, over Wi-Fi, Bluetooth or the internet. Over the internet both
+  phones join their own relay room named from a hash of the pair key, so the
+  relay only sees encrypted frames.
+* *Friends* lists everyone with an online dot (heard within 15 s) and the path
+  (Wi-Fi / Bluetooth / Internet). Open a friend: **Hold to talk** talks to
+  just them, **Hold: voice msg** records a message delivered when they are
+  back (24 h, same store-and-forward as v1.2).
+
+### Chat, photos and location
+* Chat bubble icon in the top bar = chat for the current channel; each friend
+  has a private chat. Unread counts show as badges.
+* Text, **photos** (gallery or camera, recompressed to <= 150 KB; over
+  Bluetooth only a ~160 px preview is sent and marked as such) and
+  **location**: one pin, or *live* for 15/30/60 min (updates every 30 s; tap
+  a pin to open Google Maps).
+* Chats use the voice-message machinery: chunked, acknowledged, retried and
+  stored for up to 24 h for phones not in reach. "waiting" / "delivered"
+  shows under your messages.
+
+### Channel names, mute, block, admin
+* Tap the lock: give the channel a **name and emoji**; it is shared with
+  everyone on the channel via presence (newest wins; on private channels
+  only the admin's name is accepted).
+* Long-press a person: **Mute** (their live talk is not played here) or
+  **Block** (nothing from them at all: talk, rings, messages, chats, friend
+  traffic). Unblock in Settings > Blocked.
+* Private channels have an **admin**: tick *I'm setting up this channel* when
+  making it private (or *Become admin* if nobody is). The admin can
+  **Remove from channel** (everyone else gets a new random passcode,
+  encrypted with the old one, and moves automatically) and turn on
+  **announcement mode** (only the admin can talk; others' talk buttons are
+  disabled and their audio is ignored).
+
+### Compatibility
+Phones announce feature level 15 in their hello. Chats, names and friend
+features are only sent to phones that announce it; 1.4 and older phones keep
+working for talk, rings and voice messages and silently ignore the new
+messages (unknown control kinds and the extra hello fields are dropped by
+their decoders; sealed friend frames are dropped like any frame they cannot
+decrypt).
+
+### Limitations (honest list)
+* Request-based friend adding has no protection against an active
+  man-in-the-middle on the link unless you compare the safety codes. QR is
+  safe.
+* Each friend uses one extra relay connection (first relay in the list only);
+  many friends = more sockets and battery.
+* Admin is trust-on-first-use: the first phone that claims admin on a
+  private channel is accepted by the others. Anyone who knows the passcode
+  could claim it first if nobody has.
+* Remove-from-channel is simple: phones out of reach at that moment (or on
+  app 1.4) are not moved; give them the new passcode by hand. The removed
+  person keeps the old passcode, so they can still decrypt anything
+  recorded earlier on the old key, and nothing stops them from joining
+  again if someone tells them the new passcode.
+* Announcement mode is enforced by the members' apps, not by the network.
+* Live location updates only while the app is running; Android may pause
+  it in the background. Location and "open in Maps" are Android-only for now.
+* Chats and photos are stored unencrypted in the app's private storage
+  (at most 300 per conversation); friend keys are in app preferences.
+* Private talk to a friend is not saved in the replay history.
+* 1.4 and older phones do not see chats, names, friends or moderation.
+
 ## Android <-> iPhone limits (important)
 * **No shared Wi-Fi Direct.** Android's Wi-Fi Direct / Wi-Fi Aware and
   Apple's AWDL / MultipeerConnectivity do not interoperate. Google Nearby
@@ -272,7 +347,8 @@ The 20-35 % saving shown in Settings is an estimate.
 * **Android** (`AndroidManifest.xml`): RECORD_AUDIO, MODIFY_AUDIO_SETTINGS,
   INTERNET, ACCESS_NETWORK_STATE/WIFI_STATE, CHANGE_WIFI_MULTICAST_STATE,
   NEARBY_WIFI_DEVICES, BLUETOOTH_SCAN/CONNECT/ADVERTISE (12+), legacy
-  BLUETOOTH/ADMIN/FINE_LOCATION (<= 11), WAKE_LOCK, FOREGROUND_SERVICE(+MIC,
+  BLUETOOTH/ADMIN (<= 11), ACCESS_FINE/COARSE_LOCATION (BLE on <= 11 and
+  location sharing), CAMERA (QR scan / photos, from mobile_scanner), WAKE_LOCK, FOREGROUND_SERVICE(+MIC,
   CONNECTED_DEVICE), POST_NOTIFICATIONS, USE_FULL_SCREEN_INTENT, VIBRATE,
   RECEIVE_BOOT_COMPLETED, REQUEST_IGNORE_BATTERY_OPTIMIZATIONS. minSdk 24.
 * **iOS** (`Info.plist`): NSMicrophoneUsageDescription,

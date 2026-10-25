@@ -18,7 +18,9 @@
     <!-- Bluetooth LE, Android 11 and below -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
+    <!-- BLE scan on Android <= 11, and "share my location" in chats. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <!-- Stay reachable when the app is closed: foreground service, wake lock,
          notifications (rings / voice messages), optional start on boot -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />

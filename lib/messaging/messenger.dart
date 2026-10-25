@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math';
 import 'dart:typed_data';
 
+import '../chat/chat_body.dart';
 import '../core/transport.dart';
 import '../core/transport_manager.dart';
 import 'inbox.dart';
@@ -27,6 +28,9 @@ abstract class MessengerLink {
   Future<bool> sendData(int peerId, Uint8List payload);
   Stream<InboundData> get data;
   String nameOf(int peerId);
+
+  /// The phone understands chat messages (v1.5+).
+  bool supportsChat(int peerId);
 }
 
 class ManagerMessengerLink implements MessengerLink {
@@ -52,6 +56,28 @@ class ManagerMessengerLink implements MessengerLink {
   Stream<InboundData> get data => m.data;
   @override
   String nameOf(int peerId) => m.peer(peerId)?.displayName ?? '';
+  @override
+  bool supportsChat(int peerId) => m.peer(peerId)?.supportsChat ?? false;
+}
+
+/// A chat message (text / photo / location) that arrived.
+class ChatArrival {
+  ChatArrival({
+    required this.sender,
+    required this.msgId,
+    required this.senderName,
+    required this.channel,
+    required this.channelMessage,
+    required this.receivedAt,
+    required this.body,
+  });
+  final int sender;
+  final int msgId;
+  final String senderName;
+  final int channel;
+  final bool channelMessage;
+  final DateTime receivedAt;
+  final ChatBody body;
 }
 
 /// Delivery state of one outgoing message to one phone (for the UI).
@@ -100,17 +126,26 @@ class Messenger {
   final Map<(int, int), DateTime> _retryAt = {};
   final Map<(int, int), TransferReceiver> _rx = {};
   final Map<(int, int), DateTime> _ackDue = {};
-  final Map<int, Uint8List> _bodies = {};
+  final Map<(int, bool), Uint8List> _bodies = {};
+
+  /// Chat messages already received (sender, msgId), to re-ack duplicates.
+  /// [alreadyHaveChat] covers the ones from before a restart.
+  final Set<(int, int)> _chatSeen = {};
+  bool Function(int sender, int msgId)? alreadyHaveChat;
   StreamSubscription<InboundData>? _sub;
   Timer? _timer;
   bool _ticking = false;
 
   final _received = StreamController<InboxEntry>.broadcast();
+  final _chats = StreamController<ChatArrival>.broadcast();
   final _delivered = StreamController<(OutboxEntry, int)>.broadcast();
   final _changes = StreamController<void>.broadcast();
 
   /// A complete new voice message arrived.
   Stream<InboxEntry> get received => _received.stream;
+
+  /// A chat message arrived (not stored by the messenger).
+  Stream<ChatArrival> get chats => _chats.stream;
 
   /// A message reached a phone (entry, peer).
   Stream<(OutboxEntry, int)> get delivered => _delivered.stream;
@@ -135,6 +170,7 @@ class Messenger {
   Future<void> dispose() async {
     await stop();
     await _received.close();
+    await _chats.close();
     await _delivered.close();
     await _changes.close();
   }
@@ -155,8 +191,39 @@ class Messenger {
       recipients: toPeer == null ? link.reachablePeersOn(channel) : {toPeer},
     );
     final body = clip.encode();
-    _bodies[entry.msgId] = body;
+    _bodies[(entry.msgId, false)] = body;
     await outbox.add(entry, body);
+    _changed();
+    await tick();
+    return entry;
+  }
+
+  /// Queue a chat message (same store-and-forward as voice messages). Only
+  /// phones that understand chat get it. [bleBody] is sent instead of the
+  /// full one over Bluetooth (a photo thumbnail).
+  Future<OutboxEntry> sendChat(
+    ChatBody chat, {
+    int? toPeer,
+    required int channel,
+    ChatBody? bleBody,
+  }) async {
+    final entry = OutboxEntry(
+      msgId: _random.nextInt(0x7FFFFFFF) + 1,
+      toPeer: toPeer,
+      channel: channel,
+      createdAt: _clock(),
+      durationMs: 0,
+      kind: OutboxKind.chat,
+      hasBleBody: bleBody != null,
+      recipients: toPeer == null
+          ? link.reachablePeersOn(channel).where(link.supportsChat).toSet()
+          : {toPeer},
+    );
+    final body = chat.encode();
+    final ble = bleBody?.encode();
+    _bodies[(entry.msgId, false)] = body;
+    if (ble != null) _bodies[(entry.msgId, true)] = ble;
+    await outbox.add(entry, body, bleBody: ble);
     _changed();
     await tick();
     return entry;
@@ -164,7 +231,7 @@ class Messenger {
 
   Future<void> cancel(int msgId) async {
     _sessions.removeWhere((k, _) => k.$1 == msgId);
-    _bodies.remove(msgId);
+    _bodies.removeWhere((k, _) => k.$1 == msgId);
     await outbox.cancel(msgId);
     _changed();
   }
@@ -172,19 +239,20 @@ class Messenger {
   /// Per-recipient status of everything still in the outbox.
   List<OutgoingStatus> get outgoing => [
     for (final e in outbox.entries)
-      for (final p in e.pending)
-        OutgoingStatus(
-          e,
-          p,
-          _sessions[(e.msgId, p)]?.progress ?? 0,
-          _sessions.containsKey((e.msgId, p)),
-        ),
+      if (!e.isChat)
+        for (final p in e.pending)
+          OutgoingStatus(
+            e,
+            p,
+            _sessions[(e.msgId, p)]?.progress ?? 0,
+            _sessions.containsKey((e.msgId, p)),
+          ),
   ];
 
   /// Channel messages nobody has received yet (no recipients known).
   List<OutboxEntry> get waitingForAnyone => [
     for (final e in outbox.entries)
-      if (e.recipients.isEmpty) e,
+      if (e.recipients.isEmpty && !e.isChat) e,
   ];
 
   /// Drive sending, retries, acks and expiry. Runs every [tickInterval];
@@ -206,12 +274,15 @@ class Messenger {
     final expired = await outbox.expire(now);
     if (expired.isNotEmpty) {
       for (final e in expired) {
-        _bodies.remove(e.msgId);
+        _bodies.removeWhere((k, _) => k.$1 == e.msgId);
         _sessions.removeWhere((k, _) => k.$1 == e.msgId);
       }
       changed = true;
     }
-    if (outbox.addRecipients(link.reachablePeersOn)) {
+    if (outbox.addRecipients(
+      link.reachablePeersOn,
+      accept: (e, p) => !e.isChat || link.supportsChat(p),
+    )) {
       await outbox.save();
       changed = true;
     }
@@ -228,11 +299,12 @@ class Messenger {
         if (!link.isReachable(p)) continue;
         final retry = _retryAt[key];
         if (retry != null && now.isBefore(retry)) continue;
-        var body = _bodies[e.msgId];
+        final ble = e.hasBleBody && link.bestLinkTo(p) == TransportKind.ble;
+        var body = _bodies[(e.msgId, ble)];
         if (body == null) {
-          body = await _loadBody(e);
+          body = await outbox.storage.getBlob(ble ? e.bleBlobName : e.blobName);
           if (body == null) continue;
-          _bodies[e.msgId] = body;
+          _bodies[(e.msgId, ble)] = body;
         }
         _sessions[key] = TransferSender(
           msgId: e.msgId,
@@ -282,9 +354,6 @@ class Messenger {
     if (changed) _changed();
   }
 
-  Future<Uint8List?> _loadBody(OutboxEntry e) =>
-      outbox.storage.getBlob(e.blobName);
-
   /// Handle a data payload from a peer.
   Future<void> onData(InboundData d) async {
     final pkt = DataPacket.tryDecode(d.payload);
@@ -307,7 +376,9 @@ class Messenger {
     }
     if (pkt is ChunkPacket) {
       final key = (d.peerId, pkt.msgId);
-      if (inbox.contains(d.peerId, pkt.msgId)) {
+      if (inbox.contains(d.peerId, pkt.msgId) ||
+          _chatSeen.contains((d.peerId, pkt.msgId)) ||
+          (alreadyHaveChat?.call(d.peerId, pkt.msgId) ?? false)) {
         // Already have it; our final ack was probably lost.
         await link.sendData(
           d.peerId,
@@ -338,8 +409,26 @@ class Messenger {
         _ackDue.remove(key);
         final body = r.assemble();
         await link.sendData(d.peerId, r.ack().encode());
-        if (VoiceClip.tryDecode(body) == null) return;
         final name = link.nameOf(d.peerId);
+        if (VoiceClip.tryDecode(body) == null) {
+          final chat = ChatBody.tryDecode(body);
+          if (chat == null) return;
+          _chatSeen.add((d.peerId, pkt.msgId));
+          if (!_chats.isClosed) {
+            _chats.add(
+              ChatArrival(
+                sender: d.peerId,
+                msgId: pkt.msgId,
+                senderName: name,
+                channel: d.channel,
+                channelMessage: pkt.channelMessage,
+                receivedAt: now,
+                body: chat,
+              ),
+            );
+          }
+          return;
+        }
         final e = InboxEntry(
           sender: d.peerId,
           msgId: pkt.msgId,
@@ -366,7 +455,9 @@ class Messenger {
     final e = outbox.byId(msgId);
     if (e == null) return;
     if (await outbox.markDelivered(msgId, peer)) {
-      if (outbox.byId(msgId) == null) _bodies.remove(msgId);
+      if (outbox.byId(msgId) == null) {
+        _bodies.removeWhere((k, _) => k.$1 == msgId);
+      }
       if (!_delivered.isClosed) _delivered.add((e, peer));
       _changed();
     }

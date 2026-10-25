@@ -2,7 +2,9 @@ import 'dart:typed_data';
 
 import 'storage.dart';
 
-/// A voice message waiting to be delivered (store-and-forward).
+enum OutboxKind { voice, chat }
+
+/// A voice or chat message waiting to be delivered (store-and-forward).
 class OutboxEntry {
   OutboxEntry({
     required this.msgId,
@@ -10,6 +12,8 @@ class OutboxEntry {
     required this.channel,
     required this.createdAt,
     required this.durationMs,
+    this.kind = OutboxKind.voice,
+    this.hasBleBody = false,
     Set<int>? recipients,
     Set<int>? delivered,
   }) : recipients = recipients ?? (toPeer == null ? <int>{} : {toPeer}),
@@ -23,6 +27,14 @@ class OutboxEntry {
   final DateTime createdAt;
   final int durationMs;
 
+  /// Voice message or chat (text / photo / location).
+  final OutboxKind kind;
+
+  /// A smaller body (photo thumbnail) is stored for Bluetooth.
+  final bool hasBleBody;
+
+  bool get isChat => kind == OutboxKind.chat;
+
   /// Who should get it. For channel messages: everyone on the channel when
   /// it was sent, or (if nobody was around) the first phones that show up.
   final Set<int> recipients;
@@ -30,6 +42,7 @@ class OutboxEntry {
 
   bool get isChannel => toPeer == null;
   String get blobName => 'out_$msgId.wtv';
+  String get bleBlobName => 'out_${msgId}_ble.wtv';
 
   bool get done =>
       recipients.isNotEmpty && recipients.every(delivered.contains);
@@ -46,6 +59,8 @@ class OutboxEntry {
     'ch': channel,
     'at': createdAt.millisecondsSinceEpoch,
     'dur': durationMs,
+    if (isChat) 'k': 'chat',
+    if (hasBleBody) 'ble': 1,
     'r': recipients.toList(),
     'd': delivered.toList(),
   };
@@ -61,6 +76,8 @@ class OutboxEntry {
           (j['at'] as num).toInt(),
         ),
         durationMs: (j['dur'] as num).toInt(),
+        kind: j['k'] == 'chat' ? OutboxKind.chat : OutboxKind.voice,
+        hasBleBody: j['ble'] == 1,
         recipients: {for (final x in j['r'] as List) (x as num).toInt()},
         delivered: {for (final x in j['d'] as List) (x as num).toInt()},
       );
@@ -100,8 +117,9 @@ class Outbox {
     return null;
   }
 
-  Future<void> add(OutboxEntry e, Uint8List body) async {
+  Future<void> add(OutboxEntry e, Uint8List body, {Uint8List? bleBody}) async {
     await storage.putBlob(e.blobName, body);
+    if (bleBody != null) await storage.putBlob(e.bleBlobName, bleBody);
     entries.add(e);
     await save();
   }
@@ -120,11 +138,15 @@ class Outbox {
 
   /// Add phones now seen on a channel message's channel (see
   /// [OutboxEntry.acceptsNewRecipients]).
-  bool addRecipients(Set<int> Function(int channel) peersOn) {
+  bool addRecipients(
+    Set<int> Function(int channel) peersOn, {
+    bool Function(OutboxEntry e, int peer)? accept,
+  }) {
     var changed = false;
     for (final e in entries) {
       if (!e.acceptsNewRecipients) continue;
       for (final p in peersOn(e.channel)) {
+        if (accept != null && !accept(e, p)) continue;
         if (e.recipients.add(p)) changed = true;
       }
     }
@@ -154,5 +176,6 @@ class Outbox {
   Future<void> _remove(OutboxEntry e) async {
     entries.remove(e);
     await storage.deleteBlob(e.blobName);
+    if (e.hasBleBody) await storage.deleteBlob(e.bleBlobName);
   }
 }

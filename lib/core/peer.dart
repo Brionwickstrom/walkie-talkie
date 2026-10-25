@@ -23,6 +23,14 @@ class Peer {
   /// normal.
   Duration? helloInterval;
 
+  /// Feature level from the hello (15 = v1.5 friends / chat), 0 = older.
+  int feature = 0;
+
+  /// Hello extension fields (channel name, admin, announcement mode...).
+  Map<String, Object?> info = const {};
+
+  bool get supportsChat => feature >= 15;
+
   /// Transport currently used to send to this peer (best live link).
   TransportKind? activeLink;
 

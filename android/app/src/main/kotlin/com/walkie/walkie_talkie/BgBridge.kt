@@ -4,6 +4,9 @@ import android.annotation.SuppressLint
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
@@ -192,6 +195,15 @@ object BgBridge {
                 }
                 result.success(null)
             }
+            "getLocation" -> getLocation(ctx, result)
+            "openUrl" -> {
+                try {
+                    open(ctx, Intent(Intent.ACTION_VIEW, Uri.parse(str(call, "url"))))
+                    result.success(true)
+                } catch (_: Exception) {
+                    result.success(false)
+                }
+            }
             "setBootStart" -> {
                 ctx.getSharedPreferences(BootReceiver.PREFS, Context.MODE_PRIVATE)
                     .edit()
@@ -200,6 +212,67 @@ object BgBridge {
                 result.success(null)
             }
             else -> result.notImplemented()
+        }
+    }
+
+    /**
+     * One location fix: {lat, lng, acc}, or null (no permission, location
+     * off, or nothing within 20 s). Prefers a fresh fix, falls back to the
+     * newest last-known one.
+     */
+    @SuppressLint("MissingPermission")
+    private fun getLocation(ctx: Context, result: MethodChannel.Result) {
+        val fine = ctx.checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        val coarse = ctx.checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (!fine && !coarse) {
+            result.success(null)
+            return
+        }
+        val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        val providers = lm.getProviders(true)
+        fun last(): Location? = providers
+            .mapNotNull { p -> try { lm.getLastKnownLocation(p) } catch (_: Exception) { null } }
+            .maxByOrNull { it.time }
+        fun map(l: Location?): Map<String, Any?>? = l?.let {
+            mapOf("lat" to it.latitude, "lng" to it.longitude, "acc" to it.accuracy.toDouble(), "t" to it.time)
+        }
+        val provider = when {
+            fine && providers.contains(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
+            providers.contains(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
+            providers.contains(LocationManager.FUSED_PROVIDER) -> LocationManager.FUSED_PROVIDER
+            providers.isNotEmpty() -> providers.first()
+            else -> null
+        }
+        if (provider == null) {
+            result.success(map(last()))
+            return
+        }
+        var done = false
+        fun finish(l: Location?) {
+            main.post {
+                if (done) return@post
+                done = true
+                result.success(map(l ?: last()))
+            }
+        }
+        main.postDelayed({ finish(null) }, 20_000)
+        try {
+            if (Build.VERSION.SDK_INT >= 30) {
+                lm.getCurrentLocation(provider, null, ctx.mainExecutor) { finish(it) }
+            } else {
+                @Suppress("DEPRECATION")
+                lm.requestSingleUpdate(provider, object : LocationListener {
+                    override fun onLocationChanged(location: Location) = finish(location)
+                    @Deprecated("old API")
+                    override fun onStatusChanged(p: String?, s: Int, e: android.os.Bundle?) {}
+                    override fun onProviderEnabled(p: String) {}
+                    override fun onProviderDisabled(p: String) = finish(null)
+                }, Looper.getMainLooper())
+            }
+        } catch (_: Exception) {
+            finish(null)
         }
     }
 

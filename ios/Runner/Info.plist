@@ -2,6 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Take photos for chats and scan friend codes.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Send photos from your library in chats.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Share your location in a chat when you ask to.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Walkie Talkie needs the microphone to send your voice while you hold the talk button.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>

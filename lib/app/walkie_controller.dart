@@ -1,17 +1,25 @@
 import 'dart:async';
 import 'dart:io' show Directory, Platform, exit;
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:cryptography/cryptography.dart' show SimpleKeyPair;
 import 'package:permission_handler/permission_handler.dart';
 
 import '../audio/audio_engine.dart';
+import '../chat/chat_body.dart';
+import '../chat/chat_store.dart';
+import '../chat/photo.dart';
 import '../core/channel_crypto.dart';
 import '../core/frame.dart';
+import '../core/pair_key.dart';
 import '../core/peer.dart';
 import '../core/transport.dart';
 import '../core/transport_manager.dart';
+import '../friends/friend_links.dart';
+import '../friends/friend_messenger_link.dart';
 import '../history/talk_history.dart';
 import '../messaging/inbox.dart';
 import '../messaging/messenger.dart';
@@ -29,10 +37,38 @@ import 'call_signs.dart';
 import 'config.dart';
 import 'settings.dart';
 
+/// A friend request waiting for an answer.
+class FriendRequest {
+  FriendRequest({
+    required this.from,
+    required this.name,
+    required this.id,
+    required this.publicKey,
+    required this.at,
+  });
+  final int from;
+  final String name;
+  final int id;
+  final String publicKey;
+  final DateTime at;
+}
+
+class _LiveShare {
+  _LiveShare(this.liveId, this.until);
+  final int liveId;
+  final DateTime until;
+  Timer? timer;
+  int? lastMsgId;
+  ({double lat, double lng, double? acc})? last;
+}
+
 /// Voice message being recorded.
 class Recording {
-  Recording(this.toPeer, this.startedAt);
+  Recording(this.toPeer, this.startedAt, {this.toFriend = false});
   final int? toPeer;
+
+  /// [toPeer] is a friend: send privately (any channel, end-to-end).
+  final bool toFriend;
   final DateTime startedAt;
   final List<Uint8List> packets = [];
 }
@@ -72,6 +108,23 @@ class WalkieController extends ChangeNotifier {
           channelKey;
     }
     ringer = Ringer(link: ManagerRingLink(manager));
+    manager.helloExtras = _helloExtras;
+    manager.blocked.addAll(settings.blocked.keys);
+    final relays = relayUrisFor(settings);
+    friendLinks = FriendLinks(
+      localId: nodeId,
+      radio: ManagerFriendRadio(manager),
+      localName: () => name,
+      relayFactory: relays.isEmpty
+          ? null
+          : (room) => RelayTransport(
+              serverUri: relays.first,
+              connector: RelayConnector.platform(),
+              room: room,
+            ),
+    );
+    friendLinks.setFriends(settings.friends);
+    manager.sealedHandler = friendLinks.handle;
   }
 
   /// Loads the saved id/name/channel/relay (creating a stable id on first
@@ -187,6 +240,7 @@ class WalkieController extends ChangeNotifier {
 
   /// Label for a scope stored with a ring / message.
   String labelFor(int scope) {
+    if (scope == friendScope) return 'private (friend)';
     if (!TransportManager.isPrivateScope(scope)) return 'CH $scope';
     return scope == this.scope ? channelLabel : 'a private channel';
   }
@@ -245,11 +299,24 @@ class WalkieController extends ChangeNotifier {
   String get relayOverride => settings.relayUrl?.trim() ?? '';
   List<Transport> get transports => manager.transports;
   int get playbackDropped => _audio.playbackDropped;
-  List<InboxEntry> get inbox => messenger?.inbox.entries ?? const [];
-  int get unplayedMessages => messenger?.inbox.unplayed ?? 0;
-  List<OutgoingStatus> get outgoing => messenger?.outgoing ?? const [];
+  List<InboxEntry> get inbox {
+    final a = messenger?.inbox.entries ?? const <InboxEntry>[];
+    final b = friendMessenger?.inbox.entries ?? const <InboxEntry>[];
+    if (b.isEmpty) return a;
+    return [...a, ...b]..sort((x, y) => y.receivedAt.compareTo(x.receivedAt));
+  }
+
+  int get unplayedMessages =>
+      (messenger?.inbox.unplayed ?? 0) + (friendMessenger?.inbox.unplayed ?? 0);
+  List<OutgoingStatus> get outgoing => [
+    ...?messenger?.outgoing,
+    ...?friendMessenger?.outgoing,
+  ];
   List<OutboxEntry> get waitingForAnyone =>
       messenger?.waitingForAnyone ?? const [];
+
+  Messenger? _messengerFor(InboxEntry e) =>
+      e.channel == friendScope ? friendMessenger : messenger;
 
   int? get talkingPeer {
     for (final p in peers) {
@@ -259,7 +326,9 @@ class WalkieController extends ChangeNotifier {
   }
 
   String nameOf(int peerId) =>
-      manager.peer(peerId)?.displayName ?? callSignFor(peerId);
+      manager.peer(peerId)?.displayName ??
+      friendLinks.friend(peerId)?.name ??
+      callSignFor(peerId);
 
   Future<void> start() async {
     if (started || _starting) return;
@@ -300,6 +369,8 @@ class WalkieController extends ChangeNotifier {
           heard: live && foreground,
         );
         if (!live) return;
+        if (isMuted(a.peerId)) return;
+        if (announcementMode && a.peerId != adminId) return;
         if (_audio.playingClip) {
           _stopReplay();
           _audio.stopClip();
@@ -310,6 +381,39 @@ class WalkieController extends ChangeNotifier {
     );
     await manager.setPowerSaver(settings.powerSaver);
     await manager.start();
+    _subs.add(
+      manager.controls.listen((c) {
+        switch (c.message.kind) {
+          case ControlKind.friendReq:
+          case ControlKind.friendAcc:
+          case ControlKind.friendDec:
+            unawaited(_onFriendControl(c));
+          case ControlKind.rekey:
+          case ControlKind.rekeyAck:
+            unawaited(_onRekey(c));
+          default:
+        }
+      }),
+    );
+
+    // Friends: presence, private talk.
+    friendLinks.setPowerSaver(settings.powerSaver);
+    friendLinks.start();
+    _subs.add(friendLinks.changes.listen((_) => notifyListeners()));
+    _subs.add(friendLinks.inbound.listen(_onFriendFrame));
+    _subs.add(friendLinks.paired.listen((e) => unawaited(_onPaired(e))));
+
+    // Chats.
+    try {
+      final c = ChatStore(
+        FileMessageStorage(
+          Directory('${(await _messageDir()).parent.path}/chat'),
+        ),
+      );
+      await c.load();
+      chats = c;
+      _subs.add(c.changes.listen((_) => notifyListeners()));
+    } catch (_) {}
 
     // Replay missed talk.
     try {
@@ -332,16 +436,21 @@ class WalkieController extends ChangeNotifier {
       );
       await m.start();
       messenger = m;
-      _subs.add(m.received.listen(_onVoiceMessage));
-      _subs.add(
-        m.delivered.listen(
-          (d) => _notice('Voice message delivered to ${nameOf(d.$2)}'),
-        ),
-      );
-      _subs.add(m.changes.listen((_) => notifyListeners()));
+      _wireMessenger(m, friend: false);
     } catch (e) {
       error = 'Voice messages unavailable: $e';
     }
+    try {
+      final m = Messenger(
+        link: FriendMessengerLink(friendLinks, friendScope),
+        storage: FileMessageStorage(
+          Directory('${(await _messageDir()).parent.path}/friendmsg'),
+        ),
+      );
+      await m.start();
+      friendMessenger = m;
+      _wireMessenger(m, friend: true);
+    } catch (_) {}
 
     // Rings / beeps.
     ringer.start();
@@ -357,6 +466,25 @@ class WalkieController extends ChangeNotifier {
     await applyBackgroundSettings();
     await _applyPttConfig();
     notifyListeners();
+  }
+
+  void _wireMessenger(Messenger m, {required bool friend}) {
+    m.alreadyHaveChat = (s, id) => chats?.contains(s, id) ?? false;
+    _subs.add(m.received.listen(_onVoiceMessage));
+    _subs.add(m.chats.listen((a) => unawaited(_onChat(a, friend: friend))));
+    _subs.add(
+      m.delivered.listen((d) {
+        if (d.$1.isChat) {
+          unawaited(chats?.markDelivered(nodeId, d.$1.msgId, d.$2));
+        } else {
+          _notice(
+            'Voice message delivered to '
+            '${friend ? friendName(d.$2) : nameOf(d.$2)}',
+          );
+        }
+      }),
+    );
+    _subs.add(m.changes.listen((_) => notifyListeners()));
   }
 
   Future<Directory> _messageDir() async {
@@ -509,7 +637,9 @@ class WalkieController extends ChangeNotifier {
         final r = ringer.incomingById(n('from'), n('id'));
         if (r != null) await dismissRing(r);
       case 'play':
-        final e = messenger?.inbox.byKey(a['key'] as String? ?? '');
+        final key = a['key'] as String? ?? '';
+        final e =
+            messenger?.inbox.byKey(key) ?? friendMessenger?.inbox.byKey(key);
         if (e != null) await playMessage(e);
       case 'openInbox':
         _uiRequests.add('inbox');
@@ -632,6 +762,7 @@ class WalkieController extends ChangeNotifier {
     notifyListeners();
     await settingsStore.save(settings);
     await manager.setPowerSaver(on);
+    friendLinks.setPowerSaver(on);
   }
 
   Future<void> setUrgentLoud(bool on) async {
@@ -718,6 +849,7 @@ class WalkieController extends ChangeNotifier {
       }
     }
     peers = list;
+    _adoptChannelInfo(list);
     final talking = {
       for (final p in list)
         if (p.talking && p.channel == scope) p.id,
@@ -742,8 +874,16 @@ class WalkieController extends ChangeNotifier {
   // ---------------------------------------------------------------- PTT
 
   Future<void> pushToTalk(bool down) async {
+    if (privateTalkTo != null) {
+      if (!down) await talkToFriend(privateTalkTo!, false);
+      return;
+    }
     if (down == transmitting) return;
     if (down && recording != null) return;
+    if (down && announcementMode && !isAdmin) {
+      _notice('Announcement mode: only the admin can talk on $channelTitle.');
+      return;
+    }
     transmitting = down;
     if (!down) {
       talkLatched = false;
@@ -996,9 +1136,9 @@ class WalkieController extends ChangeNotifier {
 
   // ------------------------------------------------------- voice messages
 
-  Future<void> startRecording({int? toPeer}) async {
+  Future<void> startRecording({int? toPeer, bool toFriend = false}) async {
     if (recording != null || transmitting) return;
-    final rec = Recording(toPeer, DateTime.now());
+    final rec = Recording(toPeer, DateTime.now(), toFriend: toFriend);
     recording = rec;
     _audio.stopClip();
     playingKey = null;
@@ -1037,13 +1177,21 @@ class WalkieController extends ChangeNotifier {
       _notice('Too short. Hold the button while you talk.');
       return;
     }
-    final m = messenger;
+    final m = rec.toFriend ? friendMessenger : messenger;
     if (m == null) return;
-    final e = await m.send(clip, toPeer: rec.toPeer, channel: scope);
-    final who = rec.toPeer == null ? channelLabel : nameOf(rec.toPeer!);
+    final e = await m.send(
+      clip,
+      toPeer: rec.toPeer,
+      channel: rec.toFriend ? friendScope : scope,
+    );
+    final who = rec.toPeer == null
+        ? channelLabel
+        : (rec.toFriend ? friendName(rec.toPeer!) : nameOf(rec.toPeer!));
     final reachable = rec.toPeer == null
         ? e.recipients.isNotEmpty
-        : manager.isReachable(rec.toPeer!);
+        : (rec.toFriend
+              ? friendLinks.isOnline(rec.toPeer!)
+              : manager.isReachable(rec.toPeer!));
     _notice(
       reachable
           ? 'Sending voice message (${formatDuration(clip.durationMs)}) to $who'
@@ -1053,6 +1201,10 @@ class WalkieController extends ChangeNotifier {
 
   void _onVoiceMessage(InboxEntry e) {
     final name = e.senderName.isEmpty ? nameOf(e.sender) : e.senderName;
+    if (isMuted(e.sender)) {
+      notifyListeners();
+      return;
+    }
     if (foreground) {
       _notice('Voice message from $name (${formatDuration(e.durationMs)})');
     }
@@ -1066,7 +1218,7 @@ class WalkieController extends ChangeNotifier {
   }
 
   Future<void> playMessage(InboxEntry e) async {
-    final m = messenger;
+    final m = _messengerFor(e);
     if (m == null || transmitting || recording != null) return;
     final body = await m.bodyOf(e);
     final clip = body == null ? null : VoiceClip.tryDecode(body);
@@ -1092,14 +1244,848 @@ class WalkieController extends ChangeNotifier {
 
   Future<void> deleteMessage(InboxEntry e) async {
     if (playingKey == e.key) stopPlayback();
-    await messenger?.deleteReceived(e);
+    await _messengerFor(e)?.deleteReceived(e);
     notifyListeners();
   }
 
   Future<void> cancelOutgoing(int msgId) async {
     await messenger?.cancel(msgId);
+    await friendMessenger?.cancel(msgId);
     notifyListeners();
   }
+
+  // ================================================================ v1.5
+
+  /// Scope used for friend voice messages / chats (not a real channel).
+  static const friendScope = 0x40000;
+
+  late final FriendLinks friendLinks;
+  Messenger? friendMessenger;
+  ChatStore? chats;
+
+  // ------------------------------------------------------------- hello x
+
+  Map<String, Object?> _helloExtras() {
+    final n = settings.channelNames[scope];
+    return {
+      'v': featureLevel,
+      if (n != null && !n.isEmpty) ...{
+        'cn': n.name,
+        'ce': n.emoji,
+        'ct': n.updated,
+      },
+      if (isPrivate && settings.channelAdmins[scope] == nodeId) 'adm': 1,
+      if (isPrivate &&
+          settings.channelAdmins[scope] == nodeId &&
+          settings.announceScopes.contains(scope))
+        'ann': 1,
+    };
+  }
+
+  /// Learn the channel name / admin / announcement mode from presence.
+  void _adoptChannelInfo(List<Peer> list) {
+    var dirty = false;
+    final admin = settings.channelAdmins[scope];
+    for (final p in list) {
+      if (p.channel != scope) continue;
+      final x = p.info;
+      // Admin: trust the first phone that claims it (see README).
+      if (isPrivate && admin == null && x['adm'] == 1) {
+        settings.channelAdmins[scope] = p.id;
+        dirty = true;
+      }
+      if (isPrivate && settings.channelAdmins[scope] == p.id) {
+        _annSeen[scope] = x['ann'] == 1;
+      }
+      final t = (x['ct'] as num?)?.toInt();
+      final cn = x['cn'], ce = x['ce'];
+      if (t == null || cn is! String || ce is! String) continue;
+      final adminNow = settings.channelAdmins[scope];
+      if (isPrivate && adminNow != null && adminNow != p.id) continue;
+      final mine = settings.channelNames[scope];
+      if (mine == null || t > mine.updated) {
+        settings.channelNames[scope] = ChannelName(
+          cn.length > 30 ? cn.substring(0, 30) : cn,
+          ce.length > 8 ? ce.substring(0, 8) : ce,
+          t,
+        );
+        dirty = true;
+      }
+    }
+    if (dirty) unawaited(settingsStore.save(settings));
+  }
+
+  final Map<int, bool> _annSeen = {};
+
+  /// Name + emoji of the current channel, or null.
+  ChannelName? get channelName {
+    final n = settings.channelNames[scope];
+    return n == null || n.isEmpty ? null : n;
+  }
+
+  ChannelName? channelNameOf(int scope) {
+    final n = settings.channelNames[scope];
+    return n == null || n.isEmpty ? null : n;
+  }
+
+  /// "🔥 Family" or "CH 3".
+  String get channelTitle {
+    final n = channelName;
+    if (n == null) return channelLabel;
+    return [n.emoji, n.name].where((s) => s.isNotEmpty).join(' ');
+  }
+
+  Future<void> setChannelName(String name, String emoji) async {
+    if (isPrivate && adminId != null && !isAdmin) {
+      _notice('Only the channel admin can rename this channel.');
+      return;
+    }
+    final n = name.trim(), e = emoji.trim();
+    settings.channelNames[scope] = ChannelName(
+      n.length > 30 ? n.substring(0, 30) : n,
+      e.length > 8 ? e.substring(0, 8) : e,
+      DateTime.now().millisecondsSinceEpoch,
+    );
+    await settingsStore.save(settings);
+    await manager.sendHello();
+    _updateServiceText();
+    notifyListeners();
+  }
+
+  // ------------------------------------------------------------- admin
+
+  int? get adminId => isPrivate ? settings.channelAdmins[scope] : null;
+  bool get isAdmin => adminId == nodeId;
+
+  /// Only the admin may talk on this channel.
+  bool get announcementMode {
+    if (!isPrivate) return false;
+    if (isAdmin) return settings.announceScopes.contains(scope);
+    return _annSeen[scope] ?? false;
+  }
+
+  /// Make me admin of the current private channel (the creator does this
+  /// when setting it up).
+  Future<void> claimAdmin() async {
+    if (!isPrivate) return;
+    settings.channelAdmins[scope] = nodeId;
+    await settingsStore.save(settings);
+    await manager.sendHello();
+    notifyListeners();
+  }
+
+  Future<void> setAnnouncementMode(bool on) async {
+    if (!isAdmin) return;
+    if (on) {
+      settings.announceScopes.add(scope);
+    } else {
+      settings.announceScopes.remove(scope);
+    }
+    await settingsStore.save(settings);
+    await manager.sendHello();
+    notifyListeners();
+  }
+
+  final Map<int, Completer<void>> _rekeyAcks = {};
+  final Set<int> _rekeysHandled = {};
+  bool kicking = false;
+
+  /// Remove [peerId] from this private channel: everyone else moves to a
+  /// new random passcode (sent to them encrypted with the old one); the
+  /// removed phone is not told it.
+  Future<void> kick(int peerId) async {
+    if (!isAdmin || kicking) return;
+    final ch = channel, oldScope = scope;
+    final members = manager.reachablePeersOn(oldScope)..remove(peerId);
+    final kickedName = nameOf(peerId);
+    kicking = true;
+    notifyListeners();
+    final pass = _randomPasscode();
+    final rid = Random().nextInt(0x7FFFFFFF) + 1;
+    final acked = <int>{};
+    try {
+      await Future.wait([
+        for (final m in members)
+          () async {
+            final done = Completer<void>();
+            final key = rid ^ m;
+            _rekeyAcks[key] = done;
+            for (var i = 0; i < 10 && !done.isCompleted; i++) {
+              await manager.sendControlTo(
+                m,
+                ControlMessage(
+                  ControlKind.rekey,
+                  to: m,
+                  id: rid,
+                  x: {
+                    'pc': pass,
+                    'ex': [peerId],
+                  },
+                ),
+              );
+              await Future.any([
+                done.future,
+                Future<void>.delayed(const Duration(seconds: 1)),
+              ]);
+            }
+            _rekeyAcks.remove(key);
+            if (done.isCompleted) acked.add(m);
+          }(),
+      ]);
+      final name = settings.channelNames[oldScope];
+      final ann = settings.announceScopes.contains(oldScope);
+      settings.privateChannels[ch] = pass;
+      await settingsStore.save(settings);
+      await setChannel(ch);
+      settings.channelAdmins[scope] = nodeId;
+      if (name != null) settings.channelNames[scope] = name;
+      if (ann) settings.announceScopes.add(scope);
+      await chats?.rename(
+        channelConversation(oldScope),
+        channelConversation(scope),
+      );
+      await settingsStore.save(settings);
+      await manager.sendHello();
+      final missed = members.difference(acked);
+      _notice(
+        missed.isEmpty
+            ? 'Removed $kickedName. ${acked.length} phones moved to the new passcode.'
+            : 'Removed $kickedName. Not confirmed: '
+                  '${missed.map(nameOf).join(', ')}. Give them the new '
+                  'passcode (tap the lock).',
+      );
+    } finally {
+      kicking = false;
+      notifyListeners();
+    }
+  }
+
+  static String _randomPasscode() {
+    const a = 'abcdefghjkmnpqrstuvwxyz23456789';
+    final r = Random.secure();
+    return List.generate(10, (_) => a[r.nextInt(a.length)]).join();
+  }
+
+  Future<void> _onRekey(InboundControl c) async {
+    final m = c.message;
+    final rid = m.id;
+    if (rid == null) return;
+    if (m.kind == ControlKind.rekeyAck) {
+      _rekeyAcks[rid ^ c.peerId]?.complete();
+      return;
+    }
+    // A new passcode from our admin, for the channel we are on.
+    if (!isPrivate || c.channel != scope || adminId != c.peerId) return;
+    final pc = m.x['pc'];
+    if (pc is! String || pc.length < 6) return;
+    final ack = ControlMessage(ControlKind.rekeyAck, to: c.peerId, id: rid);
+    await manager.sendControlTo(c.peerId, ack);
+    if (!_rekeysHandled.add(rid)) return;
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    await manager.sendControlTo(c.peerId, ack);
+    final ch = channel, oldScope = scope, admin = c.peerId;
+    final name = settings.channelNames[oldScope];
+    settings.privateChannels[ch] = pc;
+    await settingsStore.save(settings);
+    await setChannel(ch);
+    settings.channelAdmins[scope] = admin;
+    if (name != null) settings.channelNames[scope] = name;
+    await chats?.rename(
+      channelConversation(oldScope),
+      channelConversation(scope),
+    );
+    await settingsStore.save(settings);
+    _notice(
+      '${nameOf(admin)} (admin) changed the passcode of $channelTitle; '
+      'you were moved automatically.',
+    );
+  }
+
+  // -------------------------------------------------------- mute / block
+
+  bool isMuted(int id) => settings.muted.contains(id);
+  bool isBlocked(int id) => settings.blocked.containsKey(id);
+
+  Future<void> setMuted(int id, bool on) async {
+    if (on) {
+      settings.muted.add(id);
+      _audio.peerStopped(id);
+    } else {
+      settings.muted.remove(id);
+    }
+    notifyListeners();
+    await settingsStore.save(settings);
+  }
+
+  Future<void> setBlocked(int id, bool on, {String? name}) async {
+    if (on) {
+      settings.blocked[id] = name ?? nameOf(id);
+      _audio.peerStopped(id);
+    } else {
+      settings.blocked.remove(id);
+    }
+    manager.blocked
+      ..clear()
+      ..addAll(settings.blocked.keys);
+    notifyListeners();
+    await settingsStore.save(settings);
+  }
+
+  // ------------------------------------------------------------- friends
+
+  List<Friend> get friends => friendLinks.friends;
+  bool isFriend(int id) => friendLinks.isFriend(id);
+  bool friendOnline(int id) => friendLinks.isOnline(id);
+
+  /// "Wi-Fi", "Bluetooth", "Internet" or null when offline.
+  String? friendVia(int id) => switch (friendLinks.bestLink(id)) {
+    TransportKind.lan => 'Wi-Fi',
+    TransportKind.ble => 'Bluetooth',
+    TransportKind.internet => 'Internet',
+    _ => null,
+  };
+
+  int get onlineFriends => friends.where((f) => friendOnline(f.id)).length;
+
+  /// Friend requests waiting for an answer.
+  final List<FriendRequest> friendRequests = [];
+  final _friendRequestStream = StreamController<FriendRequest>.broadcast();
+  Stream<FriendRequest> get friendRequestStream => _friendRequestStream.stream;
+
+  final Map<int, ({SimpleKeyPair kp, int id, DateTime at})> _outgoingReqs = {};
+
+  /// Ask [peerId] (on this channel, in reach) to be friends. They see a
+  /// prompt; if they accept, both phones get the same pair key.
+  Future<void> requestFriend(int peerId) async {
+    final p = manager.peer(peerId);
+    if (p == null || !manager.isReachable(peerId)) {
+      _notice('${nameOf(peerId)} is out of reach.');
+      return;
+    }
+    if (!p.supportsChat) {
+      _notice('${nameOf(peerId)} needs to update the app (1.5 or newer).');
+      return;
+    }
+    final kp = await PairKey.newKeyPair();
+    final pk = await PairKey.publicKeyOf(kp);
+    final rid = Random().nextInt(0x7FFFFFFF) + 1;
+    _outgoingReqs[peerId] = (kp: kp, id: rid, at: DateTime.now());
+    for (var i = 0; i < 3; i++) {
+      if (_outgoingReqs[peerId]?.id != rid) return;
+      await manager.sendControlTo(
+        peerId,
+        ControlMessage(
+          ControlKind.friendReq,
+          to: peerId,
+          name: name,
+          id: rid,
+          x: {'pk': pk},
+        ),
+      );
+      if (i == 0) _notice('Friend request sent to ${nameOf(peerId)}.');
+      await Future<void>.delayed(const Duration(milliseconds: 1200));
+    }
+  }
+
+  Future<void> _onFriendControl(InboundControl c) async {
+    final m = c.message;
+    final rid = m.id;
+    final pk = m.x['pk'];
+    switch (m.kind) {
+      case ControlKind.friendReq:
+        if (rid == null || pk is! String) return;
+        if (friendRequests.any((r) => r.from == c.peerId && r.id == rid)) {
+          return;
+        }
+        friendRequests.removeWhere((r) => r.from == c.peerId);
+        final r = FriendRequest(
+          from: c.peerId,
+          name: (m.name?.isNotEmpty ?? false) ? m.name! : nameOf(c.peerId),
+          id: rid,
+          publicKey: pk,
+          at: DateTime.now(),
+        );
+        friendRequests.add(r);
+        if (!_friendRequestStream.isClosed) _friendRequestStream.add(r);
+        if (!foreground) {
+          await bridge.showInfo(
+            nid: 0x30000 + (c.peerId & 0xFFFF),
+            title: 'Friend request from ${r.name}',
+            text: 'Open Walkie Talkie to accept or decline.',
+          );
+        }
+        notifyListeners();
+      case ControlKind.friendAcc:
+        final o = _outgoingReqs[c.peerId];
+        if (o == null || o.id != rid || pk is! String) return;
+        _outgoingReqs.remove(c.peerId);
+        final key = await PairKey.agree(o.kp, pk, nodeId, c.peerId);
+        await _addFriend(
+          c.peerId,
+          (m.name?.isNotEmpty ?? false) ? m.name! : nameOf(c.peerId),
+          key,
+        );
+        _notice(
+          '${nameOf(c.peerId)} accepted. Safety code ${key.safetyCode} '
+          '(should match on both phones).',
+        );
+      case ControlKind.friendDec:
+        final o = _outgoingReqs[c.peerId];
+        if (o == null || o.id != rid) return;
+        _outgoingReqs.remove(c.peerId);
+        _notice('${nameOf(c.peerId)} declined the friend request.');
+      default:
+        return;
+    }
+  }
+
+  /// Answer a friend request. Returns the safety code when accepted.
+  Future<String?> answerFriendRequest(FriendRequest r, bool accept) async {
+    friendRequests.remove(r);
+    notifyListeners();
+    if (!accept) {
+      await manager.sendControlTo(
+        r.from,
+        ControlMessage(ControlKind.friendDec, to: r.from, id: r.id),
+      );
+      return null;
+    }
+    final kp = await PairKey.newKeyPair();
+    final pk = await PairKey.publicKeyOf(kp);
+    final key = await PairKey.agree(kp, r.publicKey, nodeId, r.from);
+    final msg = ControlMessage(
+      ControlKind.friendAcc,
+      to: r.from,
+      name: name,
+      id: r.id,
+      x: {'pk': pk},
+    );
+    await _addFriend(r.from, r.name, key);
+    for (var i = 0; i < 3; i++) {
+      await manager.sendControlTo(r.from, msg);
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+    }
+    return key.safetyCode;
+  }
+
+  Future<void> _addFriend(int id, String name, PairKey key) async {
+    settings.friends.removeWhere((f) => f.id == id);
+    settings.friends.add(
+      Friend(id: id, name: name, key: key, added: DateTime.now()),
+    );
+    friendLinks.setFriends(settings.friends);
+    await settingsStore.save(settings);
+    unawaited(friendLinks.sendPresence());
+    notifyListeners();
+  }
+
+  Future<void> removeFriend(int id) async {
+    settings.friends.removeWhere((f) => f.id == id);
+    friendLinks.setFriends(settings.friends);
+    await settingsStore.save(settings);
+    notifyListeners();
+  }
+
+  PairKey? _qrPending;
+  Timer? _qrExpiry;
+
+  /// Text for "my friend QR": valid for 10 minutes, for one scan.
+  String friendQrText() {
+    final code = PairKey.randomSecret();
+    final key = PairKey.fromQrCode(code, nodeId);
+    final old = _qrPending;
+    if (old != null) friendLinks.removePending(old);
+    _qrPending = key;
+    friendLinks.addPending(key);
+    unawaited(friendLinks.sendPresence());
+    _qrExpiry?.cancel();
+    _qrExpiry = Timer(const Duration(minutes: 10), () {
+      friendLinks.removePending(key);
+      if (_qrPending == key) _qrPending = null;
+    });
+    return PairKey.qrText(ownerId: nodeId, ownerName: name, code: code);
+  }
+
+  /// Someone's friend QR was scanned. Returns an error text, or null.
+  Future<String?> addFriendFromQr(String text) async {
+    final q = PairKey.parseQr(text);
+    if (q == null) return 'That is not a Walkie Talkie friend code.';
+    if (q.id == nodeId) return 'That is your own code.';
+    await _addFriend(
+      q.id,
+      q.name.isEmpty ? callSignFor(q.id) : q.name,
+      PairKey.fromQrCode(q.code, q.id),
+    );
+    _notice('Added ${q.name}. They see you as soon as you are both online.');
+    return null;
+  }
+
+  Future<void> _onPaired((int, String, PairKey) e) async {
+    final (id, n, key) = e;
+    friendLinks.removePending(key);
+    if (_qrPending == key) _qrPending = null;
+    await _addFriend(id, n.isEmpty ? callSignFor(id) : n, key);
+    _notice(
+      '${n.isEmpty ? callSignFor(id) : n} scanned your code: friends now.',
+    );
+  }
+
+  String friendName(int id) => friendLinks.friend(id)?.name ?? nameOf(id);
+
+  // ------------------------------------------------- private talk (1:1)
+
+  /// Friend we are talking to privately right now.
+  int? privateTalkTo;
+  final Map<int, Timer> _friendTalkTimers = {};
+
+  /// Friends whose private talk is playing now.
+  Set<int> get friendsTalking => _friendTalkTimers.keys.toSet();
+
+  Future<void> talkToFriend(int id, bool down) async {
+    if (down) {
+      if (transmitting || recording != null) return;
+      if (!friendLinks.isOnline(id)) {
+        _notice('${friendName(id)} is offline. Send a voice message instead.');
+        return;
+      }
+      privateTalkTo = id;
+      transmitting = true;
+      _stopReplay();
+      _audio.stopClip();
+      playingKey = null;
+      notifyListeners();
+      try {
+        await _audio.startTransmit(_sendPrivate);
+      } catch (e) {
+        error = 'Mic error: $e';
+        privateTalkTo = null;
+        transmitting = false;
+        notifyListeners();
+      }
+    } else {
+      if (privateTalkTo == null) return;
+      try {
+        await _audio.stopTransmit(_sendPrivate);
+      } catch (_) {}
+      privateTalkTo = null;
+      transmitting = false;
+      talkLatched = false;
+      notifyListeners();
+    }
+  }
+
+  void _sendPrivate(Uint8List opus) {
+    final id = privateTalkTo;
+    if (id == null) return;
+    unawaited(
+      friendLinks.send(
+        id,
+        friendLinks.frame(
+          FrameType.audio,
+          opus,
+          seq: friendLinks.nextAudioSeq(),
+        ),
+      ),
+    );
+  }
+
+  void _onFriendFrame(FriendInbound f) {
+    if (f.frame.type != FrameType.audio) return;
+    final id = f.friendId;
+    if (transmitting || recording != null || isMuted(id)) return;
+    if (_audio.playingClip) {
+      _stopReplay();
+      _audio.stopClip();
+      playingKey = null;
+    }
+    final isNew = !_friendTalkTimers.containsKey(id);
+    _friendTalkTimers[id]?.cancel();
+    _friendTalkTimers[id] = Timer(const Duration(milliseconds: 800), () {
+      _friendTalkTimers.remove(id);
+      _audio.peerStopped(id);
+      bridge.cancelTalking(id);
+      if (_talkingPrev.isEmpty && _friendTalkTimers.isEmpty) {
+        _audio.setFocus(false);
+      }
+      notifyListeners();
+    });
+    if (isNew) {
+      _audio.setFocus(true);
+      if (!foreground) {
+        bridge.showTalking(peer: id, name: friendName(id), channel: channel);
+      }
+      notifyListeners();
+    }
+    _audio.play(id, f.frame.seq, f.frame.payload);
+  }
+
+  // ---------------------------------------------------------------- chat
+
+  /// Chat for the current channel.
+  String get channelChat => channelConversation(scope);
+
+  int get unreadChannelChat => chats?.unread(channelChat) ?? 0;
+  int unreadFriendChat(int id) => chats?.unread(friendConversation(id)) ?? 0;
+  int get unreadFriendChats =>
+      chats?.unreadWhere((c) => c.startsWith('f')) ?? 0;
+
+  List<ChatMessage> chatMessages(String conv) =>
+      chats?.messages(conv) ?? const [];
+
+  Future<void> markChatRead(String conv) async => chats?.markRead(conv);
+
+  int? friendOf(String conv) =>
+      conv.startsWith('f') ? int.tryParse(conv.substring(1)) : null;
+
+  String chatTitle(String conv) {
+    final f = friendOf(conv);
+    if (f != null) return friendName(f);
+    final s = int.tryParse(conv.substring(1)) ?? 0;
+    if (s == scope) return channelTitle;
+    final n = channelNameOf(s);
+    return n != null ? '${n.emoji} ${n.name}'.trim() : labelFor(s);
+  }
+
+  /// Phones here that cannot see chats (older app versions).
+  List<Peer> get peersWithoutChat => [
+    for (final p in peers)
+      if (p.channel == scope && !p.supportsChat) p,
+  ];
+
+  Future<ChatMessage?> _sendChat(
+    String conv,
+    ChatBody body, {
+    ChatBody? bleBody,
+    bool quiet = false,
+  }) async {
+    final friend = friendOf(conv);
+    final m = friend != null ? friendMessenger : messenger;
+    final store = chats;
+    if (m == null || store == null) return null;
+    if (friend == null && conv != channelChat) {
+      _notice('Switch to that channel to chat there.');
+      return null;
+    }
+    final e = await m.sendChat(
+      body,
+      toPeer: friend,
+      channel: friend != null ? friendScope : scope,
+      bleBody: bleBody,
+    );
+    final msg = ChatMessage.fromBody(
+      body,
+      id: e.msgId,
+      sender: nodeId,
+      senderName: name,
+      mine: true,
+      at: DateTime.now(),
+    );
+    await store.add(conv, msg, photo: body.data);
+    if (!quiet) {
+      if (friend != null && !friendLinks.isOnline(friend)) {
+        _notice(
+          '${friendName(friend)} is offline: it is sent when they are back '
+          '(up to 24 h).',
+        );
+      } else if (friend == null && e.recipients.isEmpty) {
+        _notice(
+          peersWithoutChat.isNotEmpty
+              ? 'Saved. Phones here need app 1.5 or newer to see chats.'
+              : 'Saved. It is delivered to the first phones on $channelTitle '
+                    '(up to 24 h).',
+        );
+      }
+    }
+    notifyListeners();
+    return msg;
+  }
+
+  Future<void> sendChatText(String conv, String text) async {
+    final t = text.trim();
+    if (t.isEmpty) return;
+    await _sendChat(
+      conv,
+      ChatBody.text(
+        t.length > 2000 ? t.substring(0, 2000) : t,
+        sentAt: DateTime.now(),
+      ),
+    );
+  }
+
+  /// Compress (<= 150 KB) and send a photo; Bluetooth gets a thumbnail.
+  Future<void> sendPhoto(String conv, Uint8List raw) async {
+    final p = await preparePhoto(raw);
+    if (p == null) {
+      _notice('That picture could not be read.');
+      return;
+    }
+    final body = ChatBody(
+      type: ChatType.photo,
+      data: p.jpeg,
+      width: p.width,
+      height: p.height,
+      sentAt: DateTime.now(),
+    );
+    await _sendChat(
+      conv,
+      body,
+      bleBody: body.copyWith(data: p.thumbnail, thumbnailOnly: true),
+    );
+  }
+
+  Future<({double lat, double lng, double? acc})?> _locate() async {
+    try {
+      if (!await Permission.locationWhenInUse.isGranted &&
+          !(await Permission.locationWhenInUse.request()).isGranted) {
+        _notice('Location permission is needed to share where you are.');
+        return null;
+      }
+    } catch (_) {}
+    final l = await bridge.getLocation();
+    if (l == null) _notice('Could not get your location. Is location on?');
+    return l;
+  }
+
+  final Map<String, _LiveShare> _live = {};
+  bool isSharingLive(String conv) => _live.containsKey(conv);
+  DateTime? liveUntil(String conv) => _live[conv]?.until;
+
+  /// Share where I am now; with [live], keep updating it every 30 s for
+  /// that long (while the app runs).
+  Future<void> shareLocation(String conv, {Duration? live}) async {
+    final l = await _locate();
+    if (l == null) return;
+    if (live == null) {
+      await _sendChat(
+        conv,
+        ChatBody(
+          type: ChatType.location,
+          lat: l.lat,
+          lng: l.lng,
+          accuracy: l.acc,
+          sentAt: DateTime.now(),
+        ),
+      );
+      return;
+    }
+    await stopLiveLocation(conv, announce: false);
+    final share = _LiveShare(
+      Random().nextInt(0x7FFFFFFF) + 1,
+      DateTime.now().add(live),
+    );
+    _live[conv] = share;
+    await _sendLive(conv, share, l);
+    share.timer = Timer.periodic(const Duration(seconds: 30), (_) async {
+      if (DateTime.now().isAfter(share.until) ||
+          (friendOf(conv) == null && conv != channelChat)) {
+        await stopLiveLocation(conv);
+        return;
+      }
+      final l = await bridge.getLocation();
+      if (l != null && _live[conv] == share) await _sendLive(conv, share, l);
+    });
+    notifyListeners();
+  }
+
+  Future<void> _sendLive(
+    String conv,
+    _LiveShare s,
+    ({double lat, double lng, double? acc}) l, {
+    DateTime? until,
+  }) async {
+    // Only the newest position matters: drop an older update that has
+    // not gone out yet.
+    final prev = s.lastMsgId;
+    if (prev != null) {
+      final m = friendOf(conv) != null ? friendMessenger : messenger;
+      final e = m?.outbox.byId(prev);
+      if (e != null && e.delivered.isEmpty) await m!.cancel(prev);
+    }
+    final msg = await _sendChat(
+      conv,
+      ChatBody(
+        type: ChatType.location,
+        lat: l.lat,
+        lng: l.lng,
+        accuracy: l.acc,
+        liveUntil: until ?? s.until,
+        liveId: s.liveId,
+        sentAt: DateTime.now(),
+      ),
+      quiet: s.lastMsgId != null,
+    );
+    s.lastMsgId = msg?.id;
+    s.last = l;
+  }
+
+  Future<void> stopLiveLocation(String conv, {bool announce = true}) async {
+    final s = _live.remove(conv);
+    if (s == null) return;
+    s.timer?.cancel();
+    final l = s.last;
+    if (announce && l != null) {
+      await _sendLive(conv, s, l, until: DateTime.now());
+    }
+    notifyListeners();
+  }
+
+  Future<void> openMap(ChatMessage m) async {
+    final url = m.mapsUrl;
+    if (url == null) return;
+    if (!await bridge.openUrl(url)) _notice(url);
+  }
+
+  Future<Uint8List?> chatPhoto(ChatMessage m) =>
+      chats?.photo(m) ?? Future.value(null);
+
+  Future<void> _onChat(ChatArrival a, {required bool friend}) async {
+    final store = chats;
+    if (store == null) return;
+    final conv = friend
+        ? friendConversation(a.sender)
+        : channelConversation(a.channel);
+    final name = friend
+        ? friendName(a.sender)
+        : (a.senderName.isEmpty ? nameOf(a.sender) : a.senderName);
+    final m = ChatMessage.fromBody(
+      a.body,
+      id: a.msgId,
+      sender: a.sender,
+      senderName: name,
+      mine: false,
+      at: a.body.sentAt != null && a.body.liveId != null
+          ? a.body.sentAt!
+          : a.receivedAt,
+    );
+    final lid = a.body.liveId;
+    final update = lid != null && store.hasLive(a.sender, lid);
+    final isNew = await store.add(conv, m, photo: a.body.data);
+    if (!isNew || update) {
+      notifyListeners();
+      return;
+    }
+    if (openChat != conv) {
+      final what = switch (a.body.type) {
+        ChatType.text => a.body.text,
+        ChatType.photo => 'Photo',
+        ChatType.location =>
+          a.body.liveUntil != null ? 'Live location' : 'Location',
+      };
+      if (foreground) {
+        _notice('$name: $what');
+      } else {
+        await bridge.showInfo(
+          nid: 0x20000 + (a.sender & 0xFFFF),
+          title: friend ? '$name (private)' : '$name on ${chatTitle(conv)}',
+          text: what.length > 120 ? '${what.substring(0, 120)}...' : what,
+        );
+      }
+    }
+    notifyListeners();
+  }
+
+  /// Conversation on screen now (no notices for it).
+  String? openChat;
 
   // ---------------------------------------------------------------- settings
 
@@ -1133,7 +2119,13 @@ class WalkieController extends ChangeNotifier {
 
   /// Make [ch] private with [passcode], or public again with null. Applies
   /// right away when [ch] is the current channel.
-  Future<void> setChannelPrivacy(int ch, String? passcode) async {
+  /// [makeAdmin]: I am setting this channel up and become its admin
+  /// (can rename it, remove people and turn on announcement mode).
+  Future<void> setChannelPrivacy(
+    int ch,
+    String? passcode, {
+    bool makeAdmin = false,
+  }) async {
     final p = passcode == null ? null : ChannelKey.normalize(passcode);
     if (p == null || p.isEmpty) {
       settings.privateChannels.remove(ch);
@@ -1143,6 +2135,7 @@ class WalkieController extends ChangeNotifier {
     await settingsStore.save(settings);
     if (ch == channel) {
       await setChannel(ch);
+      if (makeAdmin && isPrivate) await claimAdmin();
     } else {
       notifyListeners();
     }
@@ -1195,6 +2188,17 @@ class WalkieController extends ChangeNotifier {
       t.cancel();
     }
     _talkLimit?.cancel();
+    _qrExpiry?.cancel();
+    for (final t in _friendTalkTimers.values) {
+      t.cancel();
+    }
+    for (final l in _live.values) {
+      l.timer?.cancel();
+    }
+    friendLinks.dispose();
+    friendMessenger?.dispose();
+    chats?.dispose();
+    _friendRequestStream.close();
     history?.dispose();
     _lifecycle?.dispose();
     messenger?.dispose();
