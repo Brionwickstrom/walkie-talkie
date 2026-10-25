@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../app/walkie_controller.dart';
 import '../core/peer.dart';
 import '../core/transport.dart';
+import '../update/update_ui.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key, required this.controller});
@@ -17,11 +18,20 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   WalkieController get c => widget.controller;
   Timer? _tick;
+  final UpdateFlow _updates = UpdateFlow();
+  String _version = '';
 
   @override
   void initState() {
     super.initState();
     c.start();
+    _updates.updater.currentVersionLabel().then((v) {
+      if (mounted) setState(() => _version = v);
+    }).catchError((_) {});
+    // Quiet update check shortly after start (after permission prompts).
+    Future.delayed(const Duration(seconds: 4), () {
+      if (mounted) _updates.check(context);
+    });
     // Refresh link ages / debug lines.
     _tick = Timer.periodic(
       const Duration(milliseconds: 500),
@@ -127,6 +137,25 @@ class _HomePageState extends State<HomePage> {
                 Navigator.pop(ctx);
               },
               child: const Text('Save'),
+            ),
+            const Divider(height: 32),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    _version.isEmpty ? 'Version' : 'Version $_version',
+                    style: Theme.of(ctx).textTheme.bodyMedium,
+                  ),
+                ),
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.system_update),
+                  label: const Text('Check for updates'),
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    _updates.check(context, userInitiated: true);
+                  },
+                ),
+              ],
             ),
           ],
         ),

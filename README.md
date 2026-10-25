@@ -185,3 +185,51 @@ flutter test
 dart run tool/relay_server.dart 8080
 flutter run --dart-define=RELAY_URL=ws://<your-ip>:8080/
 ```
+
+## In-app updates (GitHub Releases)
+
+The Android app updates itself from the public repo
+[Brionwickstrom/walkie-talkie](https://github.com/Brionwickstrom/walkie-talkie/releases).
+
+- A few seconds after start, and when you tap **Settings → Check for
+  updates**, the app calls
+  `https://api.github.com/repos/Brionwickstrom/walkie-talkie/releases/latest`.
+- The release tag (`v1.2.0` or `v1.2.0+4`) is compared with the running
+  version from `package_info_plus` (`lib/update/app_version.dart`; build
+  numbers are compared modulo 1000 because arm64 split APKs report
+  `2000 + build` as their versionCode).
+- If newer, a dialog shows the release notes. **Update** downloads the
+  `WalkieTalkie.apk` asset with a progress bar into the app cache and opens
+  the Android installer through a `FileProvider` (`walkie/update` platform
+  channel in `MainActivity.kt`, `REQUEST_INSTALL_PACKAGES` permission).
+- The first time, Android asks to allow **Install unknown apps** for Walkie
+  Talkie; the app explains this and opens that settings page.
+- **Later** hides the startup prompt for that version until the next launch.
+- iOS: no-op (Settings shows the version only).
+
+The settings sheet shows the current version, e.g. `1.1.0 (2003)`.
+
+### Releasing an update
+
+1. On the Windows PC (the only machine with the Android SDK):
+   `powershell -ExecutionPolicy Bypass -File tool\release.ps1 -Version 1.2.0 -Build 4`
+   (the build number must go up every time). This bumps `pubspec.yaml`, runs
+   analyze + tests and builds `dist\WalkieTalkie.apk`.
+2. Copy `dist\WalkieTalkie.apk` and the changed `pubspec.yaml` to the Linux box
+   (the PC has no `gh` login), commit, push, then:
+   `gh release create v1.2.0 WalkieTalkie.apk --repo Brionwickstrom/walkie-talkie --title "Walkie Talkie 1.2.0" --notes "What changed, in plain words"`
+3. Phones pick it up the next time the app starts.
+
+The asset must be an `.apk` (preferably named `WalkieTalkie.apk`) and the tag
+must look like `vX.Y.Z`; drafts and pre-releases are ignored by
+`releases/latest`.
+
+### Signing (later step)
+
+Release APKs are currently signed with the PC's Android **debug** keystore
+(`~/.android/debug.keystore`), so builds from that PC update the installed app
+in place. Android only accepts an update signed with the same key, so do not
+build releases on another machine or change keys casually. Moving to a
+dedicated release keystore (`key.properties` + `.jks`, never committed) is a
+planned later step and will require one manual uninstall/reinstall on each
+phone.

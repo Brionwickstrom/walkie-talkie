@@ -60,7 +60,7 @@ class RelayServer {
   }
 
   Future<void> close() async {
-    for (final members in _channels.values) {
+    for (final members in _channels.values.toList()) {
       for (final ws in members.toList()) {
         await ws.close();
       }

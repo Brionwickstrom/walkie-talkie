@@ -46,3 +46,17 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# Build outputs / release artifacts (APKs are attached to GitHub Releases)
+*.apk
+*.aab
+*.part
+/dist/
+
+# Secrets and machine-local files
+*.keystore
+*.jks
+key.properties
+local.properties
+.env
+.env.*
