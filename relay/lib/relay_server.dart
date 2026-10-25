@@ -16,6 +16,16 @@ import 'dart:io';
 /// Hardening: max message size, per-connection rate limit (messages and
 /// bytes per second, token bucket), sockets that stay silent for
 /// [idleTimeout] are dropped, room name / count limits.
+/// Bump with every relay change so `/healthz` shows which deploy is live.
+const String relayVersion = '1.3.1';
+
+/// e.g. "relay 1.3.1 commit 1a2b3c4 rooms 2 clients 3" (Render sets
+/// RENDER_GIT_COMMIT for the running deploy).
+String get _commit {
+  final c = Platform.environment['RENDER_GIT_COMMIT'] ?? '';
+  return c.length > 7 ? c.substring(0, 7) : c;
+}
+
 class RelayServer {
   RelayServer._(
     this._server, {
@@ -39,6 +49,13 @@ class RelayServer {
   int get port => _server.port;
 
   int clientCount(String room) => _rooms[room]?.length ?? 0;
+
+  String get versionLabel {
+    final clients = _rooms.values.fold<int>(0, (n, r) => n + r.length);
+    return 'relay $relayVersion'
+        '${_commit.isEmpty ? '' : ' commit $_commit'}'
+        ' rooms ${_rooms.length} clients $clients';
+  }
 
   static Future<RelayServer> bind({
     Object address = '0.0.0.0',
@@ -78,7 +95,8 @@ class RelayServer {
         req.response
           ..statusCode = ok ? HttpStatus.ok : HttpStatus.notFound
           ..headers.contentType = ContentType.text
-          ..write(ok ? 'ok\n' : 'not found\n');
+          ..headers.set('cache-control', 'no-store')
+          ..write(ok ? 'ok $versionLabel\n' : 'not found\n');
         await req.response.close();
         return;
       }
