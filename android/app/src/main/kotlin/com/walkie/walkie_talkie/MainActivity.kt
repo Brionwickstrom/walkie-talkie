@@ -20,6 +20,9 @@ class MainActivity : FlutterActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Notifier.ensureChannels(this)
+        // Voices play on the media stream: make the volume buttons change
+        // that (not the ringer) while the app is open, on every phone.
+        volumeControlStream = android.media.AudioManager.STREAM_MUSIC
         if (savedInstanceState == null) handle(intent)
     }
 

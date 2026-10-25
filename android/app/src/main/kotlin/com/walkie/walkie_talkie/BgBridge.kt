@@ -120,6 +120,14 @@ object BgBridge {
             }
             "filesDir" -> result.success(ctx.filesDir.absolutePath)
             "manufacturer" -> result.success(Build.MANUFACTURER ?: "")
+            // Walkie audio plays on the media stream (STREAM_MUSIC, loud
+            // speaker). Fraction 0..1 of its volume, for the "volume low" hint.
+            "mediaVolume" -> {
+                val am = ctx.getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
+                val max = am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+                val cur = am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC)
+                result.success(if (max > 0) cur.toDouble() / max else 1.0)
+            }
             "ignoringBattery" -> {
                 val pm = ctx.getSystemService(Context.POWER_SERVICE) as PowerManager
                 result.success(pm.isIgnoringBatteryOptimizations(ctx.packageName))

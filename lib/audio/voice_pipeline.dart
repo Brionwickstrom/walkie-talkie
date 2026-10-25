@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import '../core/frame.dart';
+import 'agc.dart';
 import 'codec.dart';
 import 'pcm_chunker.dart';
 
@@ -8,7 +9,25 @@ import 'pcm_chunker.dart';
 /// on the way out, Opus packets -> PCM (with loss concealment) on the way
 /// in. The native mic/speaker plumbing lives in [AudioEngine].
 class VoicePipeline {
-  VoicePipeline({required this.encoderFactory, required this.decoderFactory});
+  VoicePipeline({
+    required this.encoderFactory,
+    required this.decoderFactory,
+    this.micAgc = false,
+    this.playbackAgc = false,
+    double Function(int peerId)? volumeOf,
+  }) : volumeOf = volumeOf ?? ((_) => 1.0);
+
+  /// Even out the mic level before encoding (see [Agc]).
+  final bool micAgc;
+
+  /// Even out each sender's level on playback (helps with phones on older
+  /// builds that send without AGC), then apply [volumeOf] and a limiter.
+  final bool playbackAgc;
+
+  /// Per-person playback volume, linear 0..2 (1 = normal).
+  final double Function(int peerId) volumeOf;
+  final Agc _micAgc = Agc();
+  final Map<int, Agc> _rxAgc = {};
 
   final VoiceEncoder Function() encoderFactory;
   final VoiceDecoder Function() decoderFactory;
@@ -22,7 +41,10 @@ class VoicePipeline {
 
   List<Uint8List> encodeMic(Uint8List pcmBytes) {
     final enc = _encoder ??= encoderFactory();
-    return [for (final f in _chunker.add(pcmBytes)) enc.encode(f)];
+    return [
+      for (final f in _chunker.add(pcmBytes))
+        enc.encode(micAgc ? _micAgc.process(f) : f),
+    ];
   }
 
   List<Uint8List> endTransmission() {
@@ -50,6 +72,13 @@ class VoicePipeline {
     }
     st.lastSeq = seq;
     out.add(st.decoder.decode(packet));
+    final vol = volumeOf(peerId);
+    if (playbackAgc || vol != 1.0) {
+      final agc = _rxAgc.putIfAbsent(peerId, Agc.new);
+      for (final f in out) {
+        agc.process(f, volume: vol, agc: playbackAgc);
+      }
+    }
     return out;
   }
 

@@ -189,12 +189,12 @@ class WalkieController extends ChangeNotifier {
     final up = rs.where((r) => r.status == TransportStatus.running).toList();
     if (up.isNotEmpty) {
       final r = up.first;
-      final others = up.length > 1 ? ' +${up.length - 1} more' : '';
+      final others = up.length > 1 ? ' (${up.length} relays)' : '';
       return (
         status: TransportStatus.running,
         text:
             'Internet: connected${r.network != null ? ' via ${r.network}' : ''}'
-            ' (${host(r)}$others)',
+            '$others',
       );
     }
     final starting = rs.where((r) => r.status == TransportStatus.starting);
@@ -255,6 +255,7 @@ class WalkieController extends ChangeNotifier {
     _wasVisible = foreground;
 
     await _requestPermissions();
+    _audio.setVolumes(settings.peerVolumes);
     try {
       await _audio.init();
     } catch (e) {
@@ -456,7 +457,69 @@ class WalkieController extends ChangeNotifier {
 
   // --------------------------------------------------------------- peers
 
+  /// Phones that dropped off in the last [leftShownFor], shown greyed out
+  /// as "left" so people can see who just went away.
+  static const leftShownFor = Duration(seconds: 30);
+  final Map<int, ({String name, int channel, DateTime at})> _left = {};
+
+  List<({int id, String name, int channel, DateTime at})> get recentlyLeft {
+    final now = DateTime.now();
+    _left.removeWhere((_, v) => now.difference(v.at) > leftShownFor);
+    return [
+      for (final e in _left.entries)
+        (
+          id: e.key,
+          name: e.value.name,
+          channel: e.value.channel,
+          at: e.value.at,
+        ),
+    ]..sort((a, b) => b.at.compareTo(a.at));
+  }
+
+  /// Per-person playback volume, 0..2 (1 = 100 %).
+  double volumeOf(int peerId) => settings.peerVolumes[peerId] ?? 1.0;
+
+  Future<void> setPeerVolume(int peerId, double v) async {
+    final x = v.clamp(0.0, 2.0);
+    if ((x - 1.0).abs() < 0.02) {
+      settings.peerVolumes.remove(peerId);
+    } else {
+      settings.peerVolumes[peerId] = x;
+    }
+    _audio.setVolumes(settings.peerVolumes);
+    notifyListeners();
+    await settingsStore.save(settings);
+  }
+
+  /// Media volume 0..1 on Android (voices play on the media stream).
+  double? mediaVolume;
+
+  Future<void> refreshMediaVolume() async {
+    final v = await bridge.mediaVolume();
+    if (v != mediaVolume) {
+      mediaVolume = v;
+      notifyListeners();
+    }
+  }
+
+  Future<void> setShowDiagnostics(bool on) async {
+    settings.showDiagnostics = on;
+    notifyListeners();
+    await settingsStore.save(settings);
+  }
+
   void _onPeers(List<Peer> list) {
+    final ids = {for (final p in list) p.id};
+    for (final old in peers) {
+      if (!ids.contains(old.id)) {
+        _left[old.id] = (
+          name: old.displayName,
+          channel: old.channel,
+          at: DateTime.now(),
+        );
+      }
+    }
+    _left.removeWhere((id, _) => ids.contains(id));
     for (final p in list) {
       if (!p.talking) _audio.peerStopped(p.id);
     }
@@ -676,7 +739,7 @@ class WalkieController extends ChangeNotifier {
     playingKey = e.key;
     await m.markPlayed(e);
     notifyListeners();
-    await _audio.playClip(clip.packets);
+    await _audio.playClip(clip.packets, fromPeer: e.sender);
     if (playingKey == e.key) playingKey = null;
     if (_talkingPrev.isEmpty) await _audio.setFocus(false);
     notifyListeners();
@@ -721,6 +784,8 @@ class WalkieController extends ChangeNotifier {
     }
     if (token != _channelToken) return; // a newer switch won
     await manager.setChannel(ch, key: key);
+    _left.clear(); // a private switch forgets everyone; not "left"
+
     settings.channel = ch;
     unawaited(settingsStore.save(settings));
     _updateServiceText();

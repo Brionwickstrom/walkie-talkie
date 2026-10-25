@@ -18,8 +18,11 @@ class AppSettings {
     this.stayReachable = true,
     this.startOnBoot = false,
     this.batteryPromptShown = false,
+    this.showDiagnostics = false,
     Map<int, String>? privateChannels,
-  }) : privateChannels = privateChannels ?? {} {
+    Map<int, double>? peerVolumes,
+  }) : privateChannels = privateChannels ?? {},
+       peerVolumes = peerVolumes ?? {} {
     // v1.1.x prefilled the name box with "Phone 38EA", so pressing Save
     // stored it as if typed. Treat that as "never customized".
     if (customName != null &&
@@ -50,6 +53,29 @@ class AppSettings {
 
   /// The battery-optimization explanation was shown once already.
   bool batteryPromptShown;
+
+  /// Per-person playback volume (peer id -> 0..2, 1 = normal).
+  final Map<int, double> peerVolumes;
+
+  static String encodeVolumes(Map<int, double> m) =>
+      jsonEncode({for (final e in m.entries) '${e.key}': e.value});
+
+  static Map<int, double> decodeVolumes(String? s) {
+    if (s == null || s.isEmpty) return {};
+    try {
+      final m = jsonDecode(s) as Map<String, dynamic>;
+      return {
+        for (final e in m.entries)
+          if (int.tryParse(e.key) != null && e.value is num)
+            int.parse(e.key): (e.value as num).toDouble().clamp(0.0, 2.0),
+      };
+    } catch (_) {
+      return {};
+    }
+  }
+
+  /// Home screen "Details" (link diagnostics) expanded.
+  bool showDiagnostics;
 
   /// Passcodes of the channels marked private (channel -> passcode).
   /// Channels not in the map are public.
@@ -121,6 +147,8 @@ class SharedPrefsSettingsStore implements SettingsStore {
   static const _kBoot = 'start_on_boot';
   static const _kBattery = 'battery_prompt_shown';
   static const _kPrivate = 'private_channels';
+  static const _kDiag = 'show_diagnostics';
+  static const _kVolumes = 'peer_volumes';
 
   @override
   Future<AppSettings> load({required int defaultChannel}) async {
@@ -145,6 +173,8 @@ class SharedPrefsSettingsStore implements SettingsStore {
       startOnBoot: prefs?.getBool(_kBoot) ?? false,
       batteryPromptShown: prefs?.getBool(_kBattery) ?? false,
       privateChannels: AppSettings.decodePrivate(prefs?.getString(_kPrivate)),
+      showDiagnostics: prefs?.getBool(_kDiag) ?? false,
+      peerVolumes: AppSettings.decodeVolumes(prefs?.getString(_kVolumes)),
     );
   }
 
@@ -170,6 +200,11 @@ class SharedPrefsSettingsStore implements SettingsStore {
       await prefs.setBool(_kReach, s.stayReachable);
       await prefs.setBool(_kBoot, s.startOnBoot);
       await prefs.setBool(_kBattery, s.batteryPromptShown);
+      await prefs.setBool(_kDiag, s.showDiagnostics);
+      await prefs.setString(
+        _kVolumes,
+        AppSettings.encodeVolumes(s.peerVolumes),
+      );
       await prefs.setString(
         _kPrivate,
         AppSettings.encodePrivate(s.privateChannels),

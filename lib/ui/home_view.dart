@@ -1,0 +1,784 @@
+import 'dart:math' as math;
+
+import 'package:flutter/material.dart';
+
+import '../core/transport.dart';
+
+/// One row in the people list (presentation only, no controller).
+class PersonView {
+  const PersonView({
+    required this.id,
+    required this.name,
+    this.me = false,
+    this.talking = false,
+    this.left = false,
+    this.links = const [],
+    this.active,
+    this.lastHeard,
+    this.elsewhere,
+    this.ringStatus,
+    this.debug,
+    this.volume = 1.0,
+  });
+
+  final int id;
+
+  /// Playback volume set for this person (1 = 100 %).
+  final double volume;
+  final String name;
+  final bool me;
+  final bool talking;
+
+  /// Dropped off recently (shown greyed out for ~30 s).
+  final bool left;
+  final List<TransportKind> links;
+  final TransportKind? active;
+
+  /// Time since we last heard them (or since they left).
+  final Duration? lastHeard;
+
+  /// "On CH 4" when they are on another channel; null = on ours.
+  final String? elsewhere;
+  final String? ringStatus;
+
+  /// Diagnostics line, only shown with Details on.
+  final String? debug;
+
+  bool get here => !left && elsewhere == null;
+}
+
+IconData transportIcon(TransportKind k) => switch (k) {
+  TransportKind.lan => Icons.wifi,
+  TransportKind.ble => Icons.bluetooth,
+  TransportKind.internet => Icons.public,
+};
+
+String transportName(TransportKind k) => switch (k) {
+  TransportKind.lan => 'Wi-Fi',
+  TransportKind.ble => 'Bluetooth',
+  TransportKind.internet => 'Internet',
+};
+
+/// Stable, pleasant color per phone id.
+Color avatarColor(int id) {
+  final hue = (id * 137.508) % 360;
+  return HSLColor.fromAHSL(1, hue, 0.55, 0.45).toColor();
+}
+
+String initials(String name) {
+  final words = name
+      .split(RegExp(r'[\s\-_]+'))
+      .where((w) => w.isNotEmpty && RegExp(r'[A-Za-z0-9]').hasMatch(w[0]))
+      .toList();
+  if (words.isEmpty) return name.isEmpty ? '?' : name[0].toUpperCase();
+  if (words.length == 1) {
+    final w = words.first;
+    return (w.length > 1 ? w.substring(0, 2) : w).toUpperCase();
+  }
+  return (words[0][0] + words[1][0]).toUpperCase();
+}
+
+String agoText(Duration d) {
+  final s = d.inSeconds;
+  if (s < 2) return 'just now';
+  if (s < 60) return '${s}s ago';
+  return '${d.inMinutes}m ago';
+}
+
+/// The whole home screen below the app bar.
+class HomeBody extends StatelessWidget {
+  const HomeBody({
+    super.key,
+    this.banners = const [],
+    required this.links,
+    required this.internet,
+    required this.showDetails,
+    required this.onToggleDetails,
+    this.details = const [],
+    required this.channelLabel,
+    this.isPrivate = false,
+    required this.me,
+    required this.people,
+    required this.onRing,
+    required this.onBeep,
+    required this.onMessage,
+    this.onVolume,
+    this.notice,
+    this.onEditMe,
+    this.error,
+    this.queued,
+    required this.actions,
+    required this.ptt,
+  });
+
+  final List<Widget> banners;
+  final List<(TransportKind, TransportStatus)> links;
+  final ({TransportStatus status, String text}) internet;
+  final bool showDetails;
+  final ValueChanged<bool> onToggleDetails;
+  final List<String> details;
+  final String channelLabel;
+  final bool isPrivate;
+  final PersonView me;
+  final List<PersonView> people;
+  final ValueChanged<PersonView> onRing;
+  final ValueChanged<PersonView> onBeep;
+  final ValueChanged<PersonView> onMessage;
+
+  /// Long-press on a person: volume slider etc.
+  final ValueChanged<PersonView>? onVolume;
+
+  /// e.g. the "media volume is low" hint.
+  final Widget? notice;
+  final VoidCallback? onEditMe;
+  final String? error;
+  final Widget? queued;
+  final Widget actions;
+  final Widget ptt;
+
+  @override
+  Widget build(BuildContext context) {
+    final here = people.where((p) => p.here).length + 1;
+    final theme = Theme.of(context);
+    return Column(
+      children: [
+        ...banners,
+        StatusRow(
+          links: links,
+          internet: internet,
+          showDetails: showDetails,
+          onToggleDetails: onToggleDetails,
+        ),
+        if (showDetails && details.isNotEmpty)
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 120),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: SelectableText(
+                details.join('\n'),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  fontFamily: 'monospace',
+                  fontSize: 11,
+                  color: Colors.grey,
+                ),
+              ),
+            ),
+          ),
+        ?notice,
+        if (error != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            child: Text(
+              error!,
+              style: TextStyle(color: theme.colorScheme.error),
+            ),
+          ),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(8, 4, 8, 6),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.groups,
+                      size: 22,
+                      color: theme.colorScheme.primary,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '$here on $channelLabel',
+                        key: const Key('people-count'),
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    if (isPrivate)
+                      Icon(
+                        Icons.lock,
+                        size: 18,
+                        color: theme.colorScheme.primary,
+                      ),
+                  ],
+                ),
+              ),
+              PersonCard(person: me, onEdit: onEditMe),
+              if (people.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 24,
+                  ),
+                  child: Column(
+                    children: [
+                      Icon(
+                        Icons.person_search,
+                        size: 40,
+                        color: theme.colorScheme.outline,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Nobody on $channelLabel yet.\nOthers will appear '
+                        'here automatically.',
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.bodyLarge,
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Same Wi-Fi, Bluetooth nearby or the internet all '
+                        'work. Voice messages you record now are delivered '
+                        'when someone shows up.',
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
+                ),
+              for (final p in people)
+                PersonCard(
+                  person: p,
+                  showDebug: showDetails,
+                  onRing: () => onRing(p),
+                  onBeep: () => onBeep(p),
+                  onMessage: () => onMessage(p),
+                  onLongPress: onVolume == null ? null : () => onVolume!(p),
+                ),
+            ],
+          ),
+        ),
+        ?queued,
+        actions,
+        const SizedBox(height: 6),
+        ptt,
+        const SizedBox(height: 12),
+      ],
+    );
+  }
+}
+
+/// Small link icons + "Internet: connected via Wi-Fi" + Details toggle.
+class StatusRow extends StatelessWidget {
+  const StatusRow({
+    super.key,
+    required this.links,
+    required this.internet,
+    required this.showDetails,
+    required this.onToggleDetails,
+  });
+  final List<(TransportKind, TransportStatus)> links;
+  final ({TransportStatus status, String text}) internet;
+  final bool showDetails;
+  final ValueChanged<bool> onToggleDetails;
+
+  @override
+  Widget build(BuildContext context) {
+    final netColor = switch (internet.status) {
+      TransportStatus.running => Colors.green,
+      TransportStatus.starting => Colors.orange,
+      _ => Colors.redAccent,
+    };
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 4, 0, 0),
+      child: Row(
+        children: [
+          for (final (k, s) in links)
+            Tooltip(
+              message: '${transportName(k)}: ${s.name}',
+              child: Padding(
+                padding: const EdgeInsets.only(right: 6),
+                child: Icon(
+                  transportIcon(k),
+                  size: 18,
+                  color: s == TransportStatus.running
+                      ? Colors.green
+                      : Colors.grey,
+                ),
+              ),
+            ),
+          const SizedBox(width: 4),
+          Expanded(
+            child: Text(
+              internet.text,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: netColor,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: () => onToggleDetails(!showDetails),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('Details'),
+                Icon(showDetails ? Icons.expand_less : Icons.expand_more),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A person on the channel (or "You").
+class PersonCard extends StatelessWidget {
+  const PersonCard({
+    super.key,
+    required this.person,
+    this.showDebug = false,
+    this.onRing,
+    this.onBeep,
+    this.onMessage,
+    this.onEdit,
+    this.onLongPress,
+  });
+  final PersonView person;
+  final VoidCallback? onLongPress;
+  final bool showDebug;
+  final VoidCallback? onRing;
+  final VoidCallback? onBeep;
+  final VoidCallback? onMessage;
+  final VoidCallback? onEdit;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = person;
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final faded = p.left || p.elsewhere != null;
+    final status = <Widget>[];
+    if (p.me) {
+      status.add(
+        Text(
+          p.talking ? 'You are talking' : 'This phone',
+          style: theme.textTheme.bodySmall,
+        ),
+      );
+    } else if (p.left) {
+      status.add(
+        Text(
+          'Left${p.lastHeard != null ? ' ${agoText(p.lastHeard!)}' : ''}',
+          style: theme.textTheme.bodySmall?.copyWith(
+            fontStyle: FontStyle.italic,
+          ),
+        ),
+      );
+    } else {
+      for (final k in p.links) {
+        final on = k == p.active;
+        status.add(
+          Tooltip(
+            message: transportName(k),
+            child: Icon(
+              transportIcon(k),
+              size: 16,
+              color: on ? cs.primary : cs.outline,
+            ),
+          ),
+        );
+      }
+      if (p.links.isEmpty) {
+        status.add(Text('no path', style: theme.textTheme.bodySmall));
+      }
+      if ((p.volume - 1).abs() > 0.01) {
+        status.add(
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                p.volume == 0 ? Icons.volume_off : Icons.volume_up,
+                size: 15,
+                color: cs.tertiary,
+              ),
+              Text(
+                '${(p.volume * 100).round()}%',
+                style: theme.textTheme.bodySmall?.copyWith(color: cs.tertiary),
+              ),
+            ],
+          ),
+        );
+      }
+      status.add(
+        Text(
+          [
+            if (p.active != null) 'via ${transportName(p.active!)}',
+            if (p.elsewhere != null) p.elsewhere!,
+            if (p.lastHeard != null) agoText(p.lastHeard!),
+          ].join(' · '),
+          style: theme.textTheme.bodySmall?.copyWith(color: cs.outline),
+        ),
+      );
+    }
+
+    final card = Card(
+      margin: const EdgeInsets.symmetric(vertical: 4),
+      color: p.talking
+          ? cs.primaryContainer
+          : p.me
+          ? cs.surfaceContainerHighest
+          : null,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: p.talking
+            ? BorderSide(color: cs.primary, width: 2)
+            : BorderSide.none,
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onLongPress: onLongPress,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
+          child: Row(
+            children: [
+              Avatar(id: p.id, name: p.name, talking: p.talking),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Wrap(
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      spacing: 8,
+                      runSpacing: 2,
+                      children: [
+                        Text(
+                          p.name,
+                          maxLines: 2,
+                          softWrap: true,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.titleLarge?.copyWith(
+                            fontWeight: FontWeight.w600,
+                            height: 1.15,
+                          ),
+                        ),
+                        if (p.me) const _Tag(text: 'You'),
+                        if (p.talking && !p.me)
+                          _Tag(text: 'Talking', color: cs.primary),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 2,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: status,
+                    ),
+                    if (p.ringStatus != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(
+                          p.ringStatus!,
+                          style: TextStyle(
+                            color: cs.primary,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    if (showDebug && p.debug != null)
+                      Text(
+                        p.debug!,
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 11,
+                          color: Colors.grey,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              if (p.me && onEdit != null)
+                IconButton(
+                  tooltip: 'Change your name',
+                  icon: const Icon(Icons.edit),
+                  onPressed: onEdit,
+                ),
+              if (!p.me && !p.left) ...[
+                GestureDetector(
+                  onLongPress: onBeep,
+                  // No tooltip: its long-press would swallow "hold to beep".
+                  child: IconButton(
+                    icon: const Icon(Icons.ring_volume),
+                    onPressed: onRing,
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Voice message',
+                  icon: const Icon(Icons.mic),
+                  onPressed: onMessage,
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+    return faded ? Opacity(opacity: 0.5, child: card) : card;
+  }
+}
+
+class _Tag extends StatelessWidget {
+  const _Tag({required this.text, this.color});
+  final String text;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = color ?? Theme.of(context).colorScheme.secondary;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: c.withValues(alpha: 0.18),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(color: c, fontWeight: FontWeight.w700, fontSize: 12),
+      ),
+    );
+  }
+}
+
+/// Initials in a colored circle; pulses while the person talks.
+class Avatar extends StatefulWidget {
+  const Avatar({
+    super.key,
+    required this.id,
+    required this.name,
+    this.talking = false,
+    this.size = 48,
+  });
+  final int id;
+  final String name;
+  final bool talking;
+  final double size;
+
+  @override
+  State<Avatar> createState() => _AvatarState();
+}
+
+class _AvatarState extends State<Avatar> with SingleTickerProviderStateMixin {
+  late final AnimationController _pulse = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 900),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.talking) _pulse.repeat();
+  }
+
+  @override
+  void didUpdateWidget(Avatar old) {
+    super.didUpdateWidget(old);
+    if (widget.talking && !_pulse.isAnimating) {
+      _pulse.repeat();
+    } else if (!widget.talking && _pulse.isAnimating) {
+      _pulse.stop();
+      _pulse.value = 0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = widget.size;
+    final color = avatarColor(widget.id);
+    final circle = Container(
+      width: s,
+      height: s,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+      child: Text(
+        initials(widget.name),
+        textScaler: TextScaler.noScaling,
+        style: TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w700,
+          fontSize: s * 0.36,
+        ),
+      ),
+    );
+    return SizedBox(
+      width: s + 12,
+      height: s + 12,
+      child: AnimatedBuilder(
+        animation: _pulse,
+        builder: (context, child) {
+          final t = _pulse.value;
+          return Stack(
+            alignment: Alignment.center,
+            children: [
+              if (widget.talking)
+                Container(
+                  width: s + 12 * t,
+                  height: s + 12 * t,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: Theme.of(context).colorScheme.primary
+                          .withValues(alpha: 1 - t),
+                      width: 3,
+                    ),
+                  ),
+                ),
+              child!,
+              if (widget.talking)
+                Positioned(
+                  right: 0,
+                  bottom: 0,
+                  child: Container(
+                    padding: const EdgeInsets.all(3),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.primary,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.graphic_eq,
+                      size: 14 + 2 * math.sin(t * math.pi),
+                      color: Theme.of(context).colorScheme.onPrimary,
+                    ),
+                  ),
+                ),
+            ],
+          );
+        },
+        child: circle,
+      ),
+    );
+  }
+}
+
+/// The big round push-to-talk button. [size] scales with screen height.
+class PttButton extends StatelessWidget {
+  const PttButton({
+    super.key,
+    required this.transmitting,
+    required this.busy,
+    required this.onChanged,
+    this.size = 160,
+  });
+  final bool transmitting;
+  final bool busy;
+  final ValueChanged<bool> onChanged;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = transmitting
+        ? Colors.red
+        : busy
+        ? Colors.orange
+        : Theme.of(context).colorScheme.primary;
+    final d = transmitting ? size * 1.08 : size;
+    return SizedBox(
+      width: size * 1.08,
+      height: size * 1.08,
+      child: Center(
+        child: Listener(
+          onPointerDown: (_) => onChanged(true),
+          onPointerUp: (_) => onChanged(false),
+          onPointerCancel: (_) => onChanged(false),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 120),
+            width: d,
+            height: d,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: color,
+              boxShadow: [
+                BoxShadow(
+                  color: color.withValues(alpha: 0.4),
+                  blurRadius: transmitting ? 30 : 12,
+                ),
+              ],
+            ),
+            alignment: Alignment.center,
+            child: FittedBox(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      transmitting ? Icons.mic : Icons.mic_none,
+                      size: size * 0.32,
+                      color: Colors.white,
+                    ),
+                    Text(
+                      transmitting
+                          ? 'TALKING'
+                          : busy
+                          ? 'RECEIVING'
+                          : 'HOLD TO TALK',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Ring all / Beep / Hold: message, wrapping on narrow screens.
+class ChannelActions extends StatelessWidget {
+  const ChannelActions({
+    super.key,
+    required this.onRingAll,
+    required this.onBeepAll,
+    required this.record,
+  });
+  final VoidCallback onRingAll;
+  final VoidCallback onBeepAll;
+  final Widget record;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = OutlinedButton.styleFrom(
+      visualDensity: VisualDensity.compact,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+    );
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6),
+      child: Wrap(
+        alignment: WrapAlignment.center,
+        spacing: 6,
+        runSpacing: 4,
+        children: [
+          OutlinedButton.icon(
+            style: style,
+            icon: const Icon(Icons.ring_volume, size: 18),
+            label: const Text('Ring all'),
+            onPressed: onRingAll,
+          ),
+          OutlinedButton.icon(
+            style: style,
+            icon: const Icon(Icons.notifications_active, size: 18),
+            label: const Text('Beep'),
+            onPressed: onBeepAll,
+          ),
+          record,
+        ],
+      ),
+    );
+  }
+}

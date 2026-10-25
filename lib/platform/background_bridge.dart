@@ -118,6 +118,9 @@ class BackgroundBridge {
   Future<String> manufacturer() async =>
       await _call<String>('manufacturer') ?? '';
 
+  /// Media-stream volume 0..1 (what walkie voices play on); null off Android.
+  Future<double?> mediaVolume() => _call<double>('mediaVolume');
+
   /// True when Android won't put the app to sleep.
   Future<bool> ignoringBatteryOptimizations() async =>
       await _call<bool>('ignoringBattery') ?? true;

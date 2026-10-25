@@ -5,6 +5,7 @@ import 'package:audio_session/audio_session.dart';
 import 'package:flutter_pcm_sound/flutter_pcm_sound.dart';
 import 'package:record/record.dart' hide IosAudioCategory;
 
+import 'agc.dart';
 import 'codec.dart';
 import 'opus_voice_codec.dart';
 import 'playout_buffer.dart';
@@ -36,6 +37,14 @@ class AudioEngine {
   ];
   int _micBufferIndex = 0;
 
+  /// Per-person playback volume (linear 0..2), set from the person card.
+  final Map<int, double> _volumes = {};
+  void setVolumes(Map<int, double> v) {
+    _volumes
+      ..clear()
+      ..addAll(v);
+  }
+
   /// Frames dropped on playback to keep latency bounded (debug).
   int get playbackDropped => _playout.dropped;
 
@@ -47,6 +56,9 @@ class AudioEngine {
     _pipeline = VoicePipeline(
       encoderFactory: OpusVoiceEncoder.new,
       decoderFactory: OpusVoiceDecoder.new,
+      micAgc: true,
+      playbackAgc: true,
+      volumeOf: (id) => _volumes[id] ?? 1.0,
     );
     final session = await AudioSession.instance;
     _session = session;
@@ -96,6 +108,10 @@ class AudioEngine {
             noiseSuppress: true,
             autoGain: true,
             streamBufferSize: _micBufferBytes[_micBufferIndex],
+            // Do not start a Bluetooth SCO (phone-call) link for the mic:
+            // it re-routes and quietens playback on phones with a headset
+            // / car kit paired. Mode stays NORMAL, speaker stays media.
+            androidConfig: const AndroidRecordConfig(manageBluetooth: false),
           ),
         );
       } catch (e) {
@@ -159,12 +175,14 @@ class AudioEngine {
 
   /// Play a recorded voice message (list of Opus packets). Completes when
   /// it finished or [stopClip] was called.
-  Future<void> playClip(List<Uint8List> packets) async {
+  Future<void> playClip(List<Uint8List> packets, {int? fromPeer}) async {
     if (!_ready) return;
     stopClip();
     await setFocus(true);
     final dec = OpusVoiceDecoder();
     _clipDecoder = dec;
+    final agc = Agc();
+    final vol = fromPeer == null ? 1.0 : (_volumes[fromPeer] ?? 1.0);
     final done = Completer<void>();
     _clipDone = done;
     var i = 0;
@@ -175,7 +193,7 @@ class AudioEngine {
       // Stay at most ~200 ms ahead of real time so stopClip is quick.
       while (i < packets.length && i * VoiceFormat.frameMs < elapsed + 200) {
         try {
-          final pcm = dec.decode(packets[i]);
+          final pcm = agc.process(dec.decode(packets[i]), volume: vol);
           FlutterPcmSound.feed(
             PcmArrayInt16(
               bytes: pcm.buffer.asByteData(
