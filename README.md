@@ -31,8 +31,13 @@ lib/
     voice_pipeline.dart     Opus encode / per-peer decode with packet-loss concealment
     opus_voice_codec.dart   libopus via opus_codec (16 kHz mono, 12 kbps, VOIP, in-band FEC)
     audio_engine.dart       record (mic PCM stream) + flutter_pcm_sound (playback) + audio_session
-  app/walkie_controller.dart  glue: permissions, PTT, channel, settings
-  ui/home_page.dart         big hold-to-talk button, channel picker, peer list with link icons
+  messaging/                ring/beep (ringer), voice messages (voice_clip, voice_transfer,
+                            outbox = store-and-forward, inbox, messenger), storage
+  platform/background_bridge.dart  Android service / notifications channel ("walkie/bg")
+  app/walkie_controller.dart  glue: permissions, PTT, rings, messages, background service
+  app/call_signs.dart       default call signs
+  ui/home_page.dart         hold-to-talk, ring/beep/record buttons, peer list, settings
+  ui/inbox_page.dart        received + queued voice messages
 tool/relay_server.dart      `dart run tool/relay_server.dart [port]`
 ```
 
@@ -101,6 +106,71 @@ audio. The relay scopes by channel server-side.
   added later as another `Transport` (the relay would then carry signaling,
   and you'd still need TURN for symmetric NATs).
 
+## Rings, beeps, voice messages and staying reachable (v1.2)
+
+### Stay reachable when the app is closed (Android)
+* `ListenService.kt` is a foreground service (type `connectedDevice`, no
+  time limit, allowed to start after boot) with a low-priority
+  "Walkie Talkie is listening on CH n" notification (tap = open, **Stop** =
+  stop listening; with the app closed Stop quits the app completely).
+* The Flutter engine is owned by the process (`EngineHolder.kt`), not the
+  Activity: closing the app or swiping it from recents only detaches the
+  screen, so the Dart side (LAN + BLE + relay links, discovery, rings,
+  voice messages, live audio) keeps running. Platform channels
+  (`walkie/net`, `walkie/update`, `walkie/bg`) are engine-scoped too.
+* A partial wake lock keeps beacons and audio going with the screen off.
+* Settings: **Stay reachable when app is closed** (default on) and **Start
+  listening after phone restarts** (default off; `BootReceiver.kt`, also
+  restarts after an app update). With "stay reachable" off, closing the
+  app stops everything like before.
+* First run asks for notifications (Android 13+) and explains battery
+  optimization, with a Samsung-specific hint (Settings > Battery >
+  Background usage limits > **Never sleeping apps**).
+* Live push-to-talk received in the background takes audio focus (ducks
+  music) and shows "X is talking".
+
+### Ring / Beep
+* Per person: ring button (and Ring / Beep in the menu). **Ring all** and
+  **Beep** ring everyone on your channel.
+* Control messages `ring` / `beep` / `ringAck` (`core/frame.dart`), resent
+  every second until acknowledged (max 6 tries), de-duplicated by id
+  (`messaging/ringer.dart`).
+* The receiver shows a high-priority call-style notification (full-screen
+  over the lock screen when allowed) and plays `res/raw/ring.wav` (a
+  synthesized two-tone warble, ring volume) with vibration for 15 s, with
+  **Answer** (opens the app on that channel) and **Dismiss**. The sender's
+  list shows Ringing... / Ring answered / Ring declined / no answer /
+  could not reach. Beep plays `res/raw/chirp.wav` (roger chirp).
+
+### Voice messages (store-and-forward)
+* Hold **Hold: message** (whole channel), or long-press a person / menu >
+  Voice message, record up to 30 s (Opus, same codec as live talk).
+* Sent as `FrameType.data` frames: 150 B chunks on Bluetooth (one BLE
+  packet), 1000 B on Wi-Fi/internet; selective acks (lowest missing +
+  32-chunk bitmap), sliding window and retransmit timeout per link type
+  (`messaging/voice_transfer.dart`).
+* Not reachable? It stays in the outbox (`messaging/outbox.dart`, saved to
+  disk) and is retried whenever that phone is seen again, for up to 24 h.
+  Channel messages with nobody around go to the first phones that show up
+  on that channel.
+* The receiver stores it (`messaging/inbox.dart`), notifies "Voice message
+  from X (0:12)" with **Play**, and lists it in the inbox (envelope icon)
+  to replay or delete.
+
+### Call signs
+* No custom name -> a stable call sign from the phone's permanent id
+  (`app/call_signs.dart`, ~120 CB / aviation / NATO / silly ones). The
+  dice button in Settings picks another; typing a name overrides it. Old
+  "Phone 38EA" style names are replaced automatically.
+
+### What can't work
+* A phone that is off, has the app force-stopped, or is put to sleep by
+  battery management (Samsung "Deep sleeping apps") can't be reached.
+* There is no push server: when the phones can't reach each other (no
+  shared Wi-Fi, out of Bluetooth range, no relay), rings fail and voice
+  messages wait in the outbox.
+* Older (1.1.x) phones ignore rings and voice messages.
+
 ## Android <-> iPhone limits (important)
 * **No shared Wi-Fi Direct.** Android's Wi-Fi Direct / Wi-Fi Aware and
   Apple's AWDL / MultipeerConnectivity do not interoperate. Google Nearby
@@ -118,7 +188,8 @@ audio. The relay scopes by channel server-side.
   INTERNET, ACCESS_NETWORK_STATE/WIFI_STATE, CHANGE_WIFI_MULTICAST_STATE,
   NEARBY_WIFI_DEVICES, BLUETOOTH_SCAN/CONNECT/ADVERTISE (12+), legacy
   BLUETOOTH/ADMIN/FINE_LOCATION (<= 11), WAKE_LOCK, FOREGROUND_SERVICE(+MIC,
-  CONNECTED_DEVICE). minSdk 24.
+  CONNECTED_DEVICE), POST_NOTIFICATIONS, USE_FULL_SCREEN_INTENT, VIBRATE,
+  RECEIVE_BOOT_COMPLETED, REQUEST_IGNORE_BATTERY_OPTIMIZATIONS. minSdk 24.
 * **iOS** (`Info.plist`): NSMicrophoneUsageDescription,
   NSBluetoothAlwaysUsageDescription, NSLocalNetworkUsageDescription,
   NSBonjourServices (`_walkietalkie._udp`), UIBackgroundModes (audio,
@@ -139,7 +210,7 @@ audio. The relay scopes by channel server-side.
 | Permissions | `permission_handler` | Runtime permissions. |
 
 ## Status of v1
-Tested on the build box (no devices): `flutter analyze` clean; 25 unit tests
+Tested on the build box (no devices): `flutter analyze` clean; 94 unit tests
 pass, covering framing, BLE fragmentation, PCM chunking, the voice pipeline
 (loss concealment, late-packet drop), the TransportManager (best-link
 preference, failover, routing, de-dup, channels, hello), the LAN transport
@@ -155,8 +226,7 @@ plugin APIs but unverified:
 
 **Stubbed / simplified:**
 * Relay has no auth/TLS (put it behind a TLS proxy); no WebRTC yet.
-* Settings (name, relay URL, channel) aren't persisted; node id is random per launch.
-* No foreground service (Android) / background handling beyond plist modes.
+* iOS has no background service (Android only).
 * No floor control: two people can talk at once; incoming audio is muted
   while you transmit.
 * Both phones may connect to each other as BLE centrals (2 links); harmless
@@ -201,7 +271,7 @@ The Android app updates itself from the public repo
 - If newer, a dialog shows the release notes. **Update** downloads the
   `WalkieTalkie.apk` asset with a progress bar into the app cache and opens
   the Android installer through a `FileProvider` (`walkie/update` platform
-  channel in `MainActivity.kt`, `REQUEST_INSTALL_PACKAGES` permission).
+  channel in `NetUpdateBridge.kt`, `REQUEST_INSTALL_PACKAGES` permission).
 - The first time, Android asks to allow **Install unknown apps** for Walkie
   Talkie; the app explains this and opens that settings page.
 - **Later** hides the startup prompt for that version until the next launch.

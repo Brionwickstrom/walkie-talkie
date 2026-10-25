@@ -5,7 +5,12 @@ import 'ui/home_page.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(WalkieApp(controller: await WalkieController.load()));
+  final controller = await WalkieController.load();
+  runApp(WalkieApp(controller: controller));
+  // Normally the home screen starts the controller. When Android starts the
+  // app with no screen (after a reboot, or after it was killed while
+  // "stay reachable" is on) nothing is drawn, so start it here.
+  Future.delayed(const Duration(seconds: 3), controller.start);
 }
 
 class WalkieApp extends StatelessWidget {

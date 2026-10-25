@@ -14,6 +14,24 @@ class ReceivedAudio {
   final Uint8List opus;
 }
 
+/// A [FrameType.data] payload from a peer (voice message chunk / ack).
+class InboundData {
+  InboundData(this.peerId, this.channel, this.payload, this.transport);
+  final int peerId;
+  final int channel;
+  final Uint8List payload;
+  final TransportKind transport;
+}
+
+/// A ring / beep / ring-ack control message from a peer.
+class InboundControl {
+  InboundControl(this.peerId, this.channel, this.message, this.transport);
+  final int peerId;
+  final int channel;
+  final ControlMessage message;
+  final TransportKind transport;
+}
+
 typedef Clock = DateTime Function();
 
 /// Runs every available [Transport] at once and, per peer, routes outgoing
@@ -80,6 +98,8 @@ class TransportManager {
   Timer? _pruneTimer;
 
   final _audio = StreamController<ReceivedAudio>.broadcast();
+  final _data = StreamController<InboundData>.broadcast();
+  final _controls = StreamController<InboundControl>.broadcast();
   final _peerChanges = StreamController<List<Peer>>.broadcast();
   final _transportChanges = StreamController<void>.broadcast();
 
@@ -88,6 +108,12 @@ class TransportManager {
   bool get isRunning => _running;
 
   Stream<ReceivedAudio> get audio => _audio.stream;
+
+  /// Reliable-transfer payloads ([FrameType.data]).
+  Stream<InboundData> get data => _data.stream;
+
+  /// Ring / beep / ring-ack messages.
+  Stream<InboundControl> get controls => _controls.stream;
   Stream<List<Peer>> get peerChanges => _peerChanges.stream;
   Stream<void> get transportChanges => _transportChanges.stream;
 
@@ -147,6 +173,8 @@ class TransportManager {
   Future<void> dispose() async {
     await stop();
     await _audio.close();
+    await _data.close();
+    await _controls.close();
     await _peerChanges.close();
     await _transportChanges.close();
   }
@@ -232,6 +260,87 @@ class TransportManager {
       channel: _channel,
       seq: _nextAudioSeq(),
       payload: opus,
+    ),
+  );
+
+  Peer? peer(int id) => _peers[id];
+
+  /// Links that a frame to [peerId] would go out on right now: the best
+  /// usable one, plus the runner-up while the best looks stale.
+  List<TransportKind> routeTo(int peerId) {
+    final p = _peers[peerId];
+    if (p == null) return const [];
+    final now = _clock();
+    final links = usableLinks(p, now);
+    if (links.isEmpty) return const [];
+    final bestSeen = p.lastSeen[links.first];
+    if (links.length > 1 &&
+        bestSeen != null &&
+        now.difference(bestSeen) > staleAfter) {
+      return [links[0], links[1]];
+    }
+    return [links.first];
+  }
+
+  /// Best usable link to [peerId], or null if it is not reachable now.
+  TransportKind? bestLinkTo(int peerId) {
+    final r = routeTo(peerId);
+    return r.isEmpty ? null : r.first;
+  }
+
+  bool isReachable(int peerId) => routeTo(peerId).isNotEmpty;
+
+  /// Peers currently reachable and on [channel].
+  Set<int> reachablePeersOn(int channel) => {
+    for (final p in _peers.values)
+      if (p.channel == channel && isReachable(p.id)) p.id,
+  };
+
+  /// Unicast [frame] to one peer over its best link(s). False if the peer
+  /// is not reachable right now.
+  Future<bool> sendFrameTo(int peerId, Frame frame) async {
+    final route = routeTo(peerId);
+    if (route.isEmpty) return false;
+    final bytes = frame.encode();
+    await Future.wait(
+      route.map((k) => _safeSend(_transportOf(k)!, bytes, {peerId})),
+    );
+    return true;
+  }
+
+  Future<bool> sendControlTo(int peerId, ControlMessage msg) => sendFrameTo(
+    peerId,
+    Frame.control(
+      senderId: localNodeId,
+      channel: _channel,
+      seq: _nextSeq(),
+      message: msg,
+    ),
+  );
+
+  /// Send [msg] to every reachable peer on our channel. Returns their ids.
+  Future<Set<int>> sendControlToChannel(ControlMessage msg) async {
+    final targets = reachablePeersOn(_channel);
+    await _sendToChannel(
+      Frame.control(
+        senderId: localNodeId,
+        channel: _channel,
+        seq: _nextSeq(),
+        message: msg,
+      ),
+    );
+    return targets;
+  }
+
+  /// Unicast a [FrameType.data] payload to one peer.
+  Future<bool> sendData(int peerId, Uint8List payload) => sendFrameTo(
+    peerId,
+    Frame(
+      type: FrameType.data,
+      senderId: localNodeId,
+      channel: _channel,
+      seq: _nextSeq(),
+      payload: payload,
     ),
   );
 
@@ -388,11 +497,32 @@ class TransportManager {
               case ControlKind.talkEnd:
                 peer.talking = false;
                 changed = true;
+              case ControlKind.ring:
+              case ControlKind.beep:
+              case ControlKind.ringAck:
+                if (msg.to == null || msg.to == localNodeId) {
+                  if (!_controls.isClosed) {
+                    _controls.add(
+                      InboundControl(
+                        f.senderId,
+                        f.channel,
+                        msg,
+                        inbound.transport,
+                      ),
+                    );
+                  }
+                }
             }
           }
         case FrameType.audio:
           if (f.channel == _channel) {
             _audio.add(ReceivedAudio(f.senderId, f.seq, f.payload));
+          }
+        case FrameType.data:
+          if (!_data.isClosed) {
+            _data.add(
+              InboundData(f.senderId, f.channel, f.payload, inbound.transport),
+            );
           }
       }
     }

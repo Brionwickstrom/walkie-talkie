@@ -1,3 +1,4 @@
+import '../app/call_signs.dart';
 import 'transport.dart';
 
 /// What we know about one remote phone.
@@ -21,8 +22,7 @@ class Peer {
   /// Transport currently used to send to this peer (best live link).
   TransportKind? activeLink;
 
-  String get displayName =>
-      name.isNotEmpty ? name : 'Phone ${id.toRadixString(16).padLeft(8, '0')}';
+  String get displayName => name.isNotEmpty ? name : callSignFor(id);
 
   Set<TransportKind> liveLinks(DateTime now, Duration timeout) => {
     for (final e in lastSeen.entries)

@@ -2,6 +2,8 @@ import 'dart:math';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'call_signs.dart';
+
 /// Everything that must survive an app restart: the phone's stable id (so
 /// other phones keep showing the same name), its display name, the channel
 /// and the relay URL.
@@ -11,7 +13,18 @@ class AppSettings {
     this.customName,
     required this.channel,
     this.relayUrl,
-  });
+    this.callSignSalt = 0,
+    this.stayReachable = true,
+    this.startOnBoot = false,
+    this.batteryPromptShown = false,
+  }) {
+    // v1.1.x prefilled the name box with "Phone 38EA", so pressing Save
+    // stored it as if typed. Treat that as "never customized".
+    if (customName != null &&
+        customName!.trim() == legacyDefaultNameFor(nodeId)) {
+      customName = null;
+    }
+  }
 
   /// Generated once on first launch, never changes.
   final int nodeId;
@@ -23,10 +36,29 @@ class AppSettings {
   /// Relay URL the user set; null = app default.
   String? relayUrl;
 
-  static String defaultNameFor(int nodeId) =>
+  /// Reroll counter for the default call sign (0 = original).
+  int callSignSalt;
+
+  /// Keep a foreground service running so rings / voice messages / live
+  /// audio still arrive after the app is closed (Android).
+  bool stayReachable;
+
+  /// Start listening after the phone reboots (Android, needs [stayReachable]).
+  bool startOnBoot;
+
+  /// The battery-optimization explanation was shown once already.
+  bool batteryPromptShown;
+
+  /// Name used by v1.1.x before call signs existed.
+  static String legacyDefaultNameFor(int nodeId) =>
       'Phone ${nodeId.toRadixString(16).padLeft(8, '0').substring(0, 4).toUpperCase()}';
 
-  String get defaultName => defaultNameFor(nodeId);
+  static String defaultNameFor(int nodeId, {int salt = 0}) =>
+      callSignFor(nodeId, salt: salt);
+
+  bool get hasCustomName => customName != null && customName!.trim().isNotEmpty;
+
+  String get defaultName => defaultNameFor(nodeId, salt: callSignSalt);
   String get name => (customName == null || customName!.trim().isEmpty)
       ? defaultName
       : customName!;
@@ -58,6 +90,10 @@ class SharedPrefsSettingsStore implements SettingsStore {
   static const _kName = 'display_name';
   static const _kChannel = 'channel';
   static const _kRelay = 'relay_url';
+  static const _kSalt = 'call_sign_salt';
+  static const _kReach = 'stay_reachable';
+  static const _kBoot = 'start_on_boot';
+  static const _kBattery = 'battery_prompt_shown';
 
   @override
   Future<AppSettings> load({required int defaultChannel}) async {
@@ -77,6 +113,10 @@ class SharedPrefsSettingsStore implements SettingsStore {
       customName: prefs?.getString(_kName),
       channel: prefs?.getInt(_kChannel) ?? defaultChannel,
       relayUrl: prefs?.getString(_kRelay),
+      callSignSalt: prefs?.getInt(_kSalt) ?? 0,
+      stayReachable: prefs?.getBool(_kReach) ?? true,
+      startOnBoot: prefs?.getBool(_kBoot) ?? false,
+      batteryPromptShown: prefs?.getBool(_kBattery) ?? false,
     );
   }
 
@@ -98,6 +138,10 @@ class SharedPrefsSettingsStore implements SettingsStore {
       } else {
         await prefs.setString(_kRelay, r);
       }
+      await prefs.setInt(_kSalt, s.callSignSalt);
+      await prefs.setBool(_kReach, s.stayReachable);
+      await prefs.setBool(_kBoot, s.startOnBoot);
+      await prefs.setBool(_kBattery, s.batteryPromptShown);
     } catch (_) {}
   }
 }

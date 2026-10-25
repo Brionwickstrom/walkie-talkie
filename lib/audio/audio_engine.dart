@@ -19,6 +19,11 @@ class AudioEngine {
   bool _ready = false;
   bool _transmitting = false;
   final _playout = PlayoutBuffer(sampleRate: VoiceFormat.sampleRate);
+  AudioSession? _session;
+  bool _focused = false;
+  Timer? _clipTimer;
+  VoiceDecoder? _clipDecoder;
+  Completer<void>? _clipDone;
 
   /// Mic read sizes to try, smallest (lowest latency) first. The record
   /// plugin's default is 2x the OS minimum, often 80-240 ms per chunk, which
@@ -44,6 +49,7 @@ class AudioEngine {
       decoderFactory: OpusVoiceDecoder.new,
     );
     final session = await AudioSession.instance;
+    _session = session;
     await session.configure(
       AudioSessionConfiguration(
         avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
@@ -139,11 +145,75 @@ class AudioEngine {
     }
   }
 
+  /// Ask Android for audio focus while someone talks / a clip plays (so
+  /// it plays, ducking music, even with the app in the background).
+  Future<void> setFocus(bool on) async {
+    if (on == _focused) return;
+    _focused = on;
+    try {
+      await _session?.setActive(on);
+    } catch (_) {}
+  }
+
+  bool get playingClip => _clipDone != null;
+
+  /// Play a recorded voice message (list of Opus packets). Completes when
+  /// it finished or [stopClip] was called.
+  Future<void> playClip(List<Uint8List> packets) async {
+    if (!_ready) return;
+    stopClip();
+    await setFocus(true);
+    final dec = OpusVoiceDecoder();
+    _clipDecoder = dec;
+    final done = Completer<void>();
+    _clipDone = done;
+    var i = 0;
+    final start = DateTime.now();
+    final totalMs = packets.length * VoiceFormat.frameMs;
+    void pump() {
+      final elapsed = DateTime.now().difference(start).inMilliseconds;
+      // Stay at most ~200 ms ahead of real time so stopClip is quick.
+      while (i < packets.length && i * VoiceFormat.frameMs < elapsed + 200) {
+        try {
+          final pcm = dec.decode(packets[i]);
+          FlutterPcmSound.feed(
+            PcmArrayInt16(
+              bytes: pcm.buffer.asByteData(
+                pcm.offsetInBytes,
+                pcm.lengthInBytes,
+              ),
+            ),
+          );
+        } catch (_) {}
+        i++;
+      }
+      if (i >= packets.length && elapsed > totalMs + 250) stopClip();
+    }
+
+    pump();
+    _clipTimer = Timer.periodic(
+      const Duration(milliseconds: 40),
+      (_) => pump(),
+    );
+    return done.future;
+  }
+
+  void stopClip() {
+    _clipTimer?.cancel();
+    _clipTimer = null;
+    _clipDecoder?.dispose();
+    _clipDecoder = null;
+    final d = _clipDone;
+    _clipDone = null;
+    if (d != null && !d.isCompleted) d.complete();
+  }
+
   void peerStopped(int peerId) {
     if (_ready) _pipeline.resetPeer(peerId);
   }
 
   Future<void> dispose() async {
+    stopClip();
     await _micSub?.cancel();
     await _recorder.dispose();
     if (_ready) {

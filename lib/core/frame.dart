@@ -6,8 +6,12 @@ enum FrameType {
   /// One (or more) Opus packets of push-to-talk audio.
   audio(1),
 
-  /// Small JSON control message (hello / talk start / talk end).
-  control(2);
+  /// Small JSON control message (hello / talk start / talk end / ring...).
+  control(2),
+
+  /// Binary payload for reliable transfers (voice message chunks / acks),
+  /// see `messaging/voice_transfer.dart`. Ignored by v1.1.x phones.
+  data(3);
 
   const FrameType(this.code);
   final int code;
@@ -113,7 +117,27 @@ class Frame {
       'seq=$seq, ${payload.length}B)';
 }
 
-enum ControlKind { hello, talkStart, talkEnd, ping, pong }
+enum ControlKind {
+  hello,
+  talkStart,
+  talkEnd,
+  ping,
+  pong,
+
+  /// Ring someone ([ControlMessage.to]) or, with no `to`, everyone on the
+  /// channel. Repeated until acknowledged; [ControlMessage.id] de-dups.
+  ring,
+
+  /// Short "roger" chirp, same addressing as [ring].
+  beep,
+
+  /// Reply to [ring]/[beep]: [ControlMessage.status] is one of
+  /// [RingStatus] names (delivered / answered / dismissed / missed).
+  ringAck,
+}
+
+/// What happened to a ring on the receiving phone.
+enum RingStatus { sending, delivered, answered, dismissed, missed, unreachable }
 
 /// Small JSON control payload. Kept short because it may travel over BLE.
 class ControlMessage {
@@ -123,9 +147,17 @@ class ControlMessage {
     this.lanAddrs = const [],
     this.to,
     this.time,
+    this.id,
+    this.status,
   });
 
   final ControlKind kind;
+
+  /// Ring/beep id (random), echoed in [ControlKind.ringAck].
+  final int? id;
+
+  /// [ControlKind.ringAck] status ([RingStatus] name).
+  final String? status;
 
   /// Display name, sent with [ControlKind.hello].
   final String? name;
@@ -149,6 +181,8 @@ class ControlMessage {
         if (lanAddrs.isNotEmpty) 'a': lanAddrs,
         if (to != null) 'to': to,
         if (time != null) 't': time,
+        if (id != null) 'i': id,
+        if (status != null) 's': status,
       }),
     ),
   );
@@ -169,6 +203,8 @@ class ControlMessage {
             : const [],
         to: (map['to'] as num?)?.toInt(),
         time: (map['t'] as num?)?.toInt(),
+        id: (map['i'] as num?)?.toInt(),
+        status: map['s'] as String?,
       );
     } catch (_) {
       return null;
