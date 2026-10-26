@@ -3,6 +3,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'frame.dart';
+import 'lobby.dart';
 import 'transport.dart';
 
 /// Off-grid mesh relay ("Relay for others", v1.6.0).
@@ -236,6 +237,7 @@ class MeshRouter {
     this.maxBytesPerSecond = 12 * 1024,
     this.helloRelayInterval = const Duration(seconds: 3),
     this.lobbyRelayInterval = const Duration(seconds: 8),
+    this.probeRelayInterval = const Duration(seconds: 5),
     this.jitterMin = const Duration(milliseconds: 2),
     this.jitterMax = const Duration(milliseconds: 12),
   }) : _clock = clock ?? DateTime.now,
@@ -262,6 +264,10 @@ class MeshRouter {
   /// "Who's where" beacons of one phone are relayed at most this often.
   final Duration lobbyRelayInterval;
   final Map<int, DateTime> _lobbyRelayed = {};
+
+  /// One "who's here?" probe per origin passed on this often (v1.8.5).
+  final Duration probeRelayInterval;
+  final Map<int, DateTime> _probeRelayed = {};
   final Duration jitterMin;
   final Duration jitterMax;
 
@@ -350,6 +356,7 @@ class MeshRouter {
     _expireSeen(now);
     _helloRelayed.removeWhere((_, t) => now.difference(t) > seenTtl);
     _lobbyRelayed.removeWhere((_, t) => now.difference(t) > seenTtl);
+    _probeRelayed.removeWhere((_, t) => now.difference(t) > seenTtl);
   }
 
   // ----------------------------------------------------------- seen cache
@@ -492,7 +499,19 @@ class MeshRouter {
         }
       }
     }
-    if (inner.type == FrameType.lobby) {
+    final probe = inner.type == FrameType.lobby
+        ? LobbyProbe.tryDecodePayload(inner.payload)
+        : null;
+    if (probe != null) {
+      // "Who's here?" probes (v1.8.5) carry their own hop limit and have
+      // their own per-origin limit, so a refresh is not swallowed by the
+      // lobby beacon limit (and a refresh storm is).
+      if (hops >= probe.ttl) return null;
+      final last = _probeRelayed[origin];
+      if (last != null && now.difference(last) < probeRelayInterval) {
+        return null;
+      }
+    } else if (inner.type == FrameType.lobby) {
       final last = _lobbyRelayed[origin];
       if (last != null && now.difference(last) < lobbyRelayInterval) {
         return null;
@@ -507,7 +526,7 @@ class MeshRouter {
       relayer: localId,
       seq: _nextSeq(),
       hops: hops + 1,
-      maxHops: maxHops,
+      maxHops: probe != null && probe.ttl < maxHops ? probe.ttl : maxHops,
       to: to,
       inner: bytes,
     );
@@ -519,7 +538,11 @@ class MeshRouter {
         inner.control?.kind == ControlKind.hello) {
       _helloRelayed[origin] = now;
     }
-    if (inner.type == FrameType.lobby) _lobbyRelayed[origin] = now;
+    if (probe != null) {
+      _probeRelayed[origin] = now;
+    } else if (inner.type == FrameType.lobby) {
+      _lobbyRelayed[origin] = now;
+    }
     relayed++;
     return MeshRelay(
       out,

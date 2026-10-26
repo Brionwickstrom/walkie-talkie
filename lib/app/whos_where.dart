@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
@@ -84,10 +85,123 @@ class WhosWhere extends ChangeNotifier {
     this.relayFactory,
     this.sendRadio,
     this._plan = const PowerPlan(),
+    this.replyPresence,
     DateTime Function()? clock,
     LobbyLimiter? limiter,
+    ProbeReplyLimiter? probeLimiter,
+    Duration Function()? replyJitter,
+    void Function(Duration delay, void Function() run)? schedule,
   }) : _clock = clock ?? DateTime.now,
-       limiter = limiter ?? LobbyLimiter(clock: clock);
+       limiter = limiter ?? LobbyLimiter(clock: clock),
+       probeLimiter = probeLimiter ?? ProbeReplyLimiter(clock: clock),
+       _jitter = replyJitter ?? _randomJitter,
+       _schedule = schedule ?? _timer;
+
+  // ------------------------------------------------ "who's here?" (v1.8.5)
+
+  /// Answers to a probe wait a random 0..[maxReplyJitter] so phones that
+  /// heard the same probe do not all transmit at once.
+  static const Duration maxReplyJitter = Duration(milliseconds: 500);
+
+  /// A probe heard over the LoRa radio is answered over the radio at most
+  /// this often (whoever asks).
+  static const Duration radioReplyInterval = Duration(minutes: 2);
+
+  static final Random _rng = Random();
+  static Duration _randomJitter() =>
+      Duration(milliseconds: _rng.nextInt(maxReplyJitter.inMilliseconds + 1));
+  static void _timer(Duration d, void Function() run) => Timer(d, run);
+
+  /// Sends our presence hello right away (all links, or the radio's
+  /// presence hello when [radio]). Set by the controller.
+  Future<void> Function({required bool radio})? replyPresence;
+  final ProbeReplyLimiter probeLimiter;
+  final Duration Function() _jitter;
+  final void Function(Duration delay, void Function() run) _schedule;
+  DateTime? _lastRadioReply;
+
+  /// Probes answered (tests / Details).
+  int probeReplies = 0;
+  int probeRadioReplies = 0;
+
+  /// Someone refreshed: answer with our presence and lobby beacon, after
+  /// a small random delay, at most once per requester every
+  /// [ProbeReplyLimiter.perRequester]. Over LoRa only every
+  /// [radioReplyInterval].
+  void onProbe(InboundProbe p) {
+    if (!_running || p.peerId == localId) return;
+    final radio = p.transport == TransportKind.lora;
+    if (radio) {
+      final last = _lastRadioReply;
+      final now = _clock();
+      if (last != null && now.difference(last) < radioReplyInterval) return;
+      if (!probeLimiter.allow(p.peerId)) return;
+      _lastRadioReply = now;
+    } else if (!probeLimiter.allow(p.peerId)) {
+      return;
+    }
+    final delay = _jitter();
+    _schedule(delay < Duration.zero ? Duration.zero : delay, () {
+      if (!_running) return;
+      unawaited(_reply(p, radio));
+    });
+  }
+
+  Future<void> _reply(InboundProbe p, bool radio) async {
+    if (radio) {
+      probeRadioReplies++;
+      try {
+        await replyPresence?.call(radio: true);
+      } catch (_) {}
+      _sendRadio();
+      return;
+    }
+    probeReplies++;
+    try {
+      await replyPresence?.call(radio: false);
+    } catch (_) {}
+    if (p.transport == TransportKind.internet) {
+      await _sendRelay();
+    } else {
+      await _sendLocal();
+    }
+  }
+
+  /// Our own refresh: the probe into the relay lobby room too. Reopens the
+  /// room if it should be open and is not, and reconnects it when it is
+  /// down (the probe then goes out once it is joined, if that happens
+  /// within [probeRelayWait]). Nothing in offline power save.
+  Future<bool> probeRelay(Uint8List bytes) async {
+    if (!wantRelay) return false;
+    if (_relay == null) await _syncRelay();
+    final t = _relay;
+    if (t == null) return false;
+    if (t.status == TransportStatus.running) {
+      try {
+        await t.send(bytes);
+      } catch (_) {}
+      return true;
+    }
+    _pendingProbe = (bytes, _clock());
+    try {
+      t.kickDiscovery();
+    } catch (_) {}
+    return true;
+  }
+
+  static const Duration probeRelayWait = Duration(seconds: 3);
+  (Uint8List, DateTime)? _pendingProbe;
+
+  void _flushPendingProbe(Transport t) {
+    final p = _pendingProbe;
+    _pendingProbe = null;
+    if (p == null || _clock().difference(p.$2) > probeRelayWait) return;
+    unawaited(() async {
+      try {
+        await t.send(p.$1);
+      } catch (_) {}
+    }());
+  }
 
   static const Duration minTtl = Duration(seconds: 25);
   static const int maxEntries = 256;
@@ -253,6 +367,11 @@ class WhosWhere extends ChangeNotifier {
           // Only lobby beacons count in the lobby room.
           final f = inb.frame;
           if (f.type != FrameType.lobby) return;
+          final probe = LobbyProbe.tryDecode(f);
+          if (probe != null) {
+            onProbe(InboundProbe(f.senderId, probe, TransportKind.internet));
+            return;
+          }
           final b = LobbyBeacon.tryDecode(f);
           if (b == null) return;
           onLobby(InboundLobby(f.senderId, b, TransportKind.internet));
@@ -260,7 +379,10 @@ class WhosWhere extends ChangeNotifier {
       );
       _relaySubs.add(
         t.statusChanges.listen((s) {
-          if (s == TransportStatus.running) unawaited(_sendRelay());
+          if (s == TransportStatus.running) {
+            _flushPendingProbe(t);
+            unawaited(_sendRelay());
+          }
         }),
       );
       // The status listener above beacons once the room is joined.

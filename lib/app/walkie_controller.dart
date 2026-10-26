@@ -12,6 +12,7 @@ import 'package:cryptography/cryptography.dart' show SimpleKeyPair;
 import 'package:permission_handler/permission_handler.dart';
 
 import '../audio/audio_engine.dart';
+import 'people_refresh.dart';
 import 'power_plan.dart';
 import '../audio/codec.dart';
 import '../audio/codec2_ffi.dart';
@@ -183,8 +184,61 @@ class WalkieController extends ChangeNotifier {
       relayFactory: _lobbyRelayFactory(relays),
       plan: powerPlan,
     );
+    whosWhere.replyPresence = _replyPresence;
     whosWhere.addListener(notifyListeners);
+    peopleRefresh = PeopleRefresh(
+      probe: _probeEveryone,
+      probeRadio: _probeRadio,
+      changes: whosWhere,
+    );
   }
+
+  // ------------------------------------------------ pull-to-refresh (v1.8.5)
+
+  /// Pull-to-refresh on the people list and Who's where.
+  late final PeopleRefresh peopleRefresh;
+  int _probeNonce = Random().nextInt(0x10000);
+  int _probeSeq = 0;
+
+  Uint8List _probeBytes({bool radio = false}) {
+    _probeNonce = (_probeNonce + 1) & 0xFFFF;
+    _probeSeq = (_probeSeq + 1) & 0xFFFF;
+    return LobbyProbe(
+      nonce: _probeNonce,
+      radio: radio,
+    ).encode(senderId: nodeId, seq: _probeSeq);
+  }
+
+  /// "Who's here?" on every fast path: local links (+ sweep, Wi-Fi Direct
+  /// discovery, Bluetooth scan burst), the mesh, the relay channel room
+  /// and the relay lobby room (reconnecting it when down). Offline power
+  /// save: no relay.
+  Future<void> _probeEveryone() async {
+    final bytes = _probeBytes();
+    await manager.probePeople(bytes);
+    await whosWhere.probeRelay(bytes);
+  }
+
+  bool _probeRadio() => manager.sendProbeRadio(_probeBytes(radio: true));
+
+  /// Someone else refreshed: say we are here right now.
+  Future<void> _replyPresence({required bool radio}) =>
+      radio ? manager.sendRadioHello() : manager.sendHello();
+
+  /// A LoRa radio is connected (the "Also ask over radio" option).
+  bool get radioConnected => manager.radio?.status == TransportStatus.running;
+
+  /// Pull-to-refresh: the people on our channel ([whosWhere] false) or
+  /// everyone in Who's where.
+  Future<RefreshResult> refreshPeople({
+    bool radio = false,
+    bool whosWhere = false,
+  }) => peopleRefresh.refresh(
+    radio: radio,
+    count: whosWhere
+        ? () => whosWhereTotal(whosWhereGroups)
+        : () => peers.length,
+  );
 
   /// Who's where (v1.8.2): lobby beacons in / out.
   late final WhosWhere whosWhere;
@@ -685,6 +739,7 @@ class WalkieController extends ChangeNotifier {
     await manager.setOfflineSaver(settings.offlineSaver);
     await manager.start();
     _subs.add(manager.lobby.listen(whosWhere.onLobby));
+    _subs.add(manager.probes.listen(whosWhere.onProbe));
     await whosWhere.setForeground(foreground);
     await whosWhere.setPlan(powerPlan);
     unawaited(whosWhere.start());

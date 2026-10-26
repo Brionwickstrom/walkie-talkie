@@ -331,6 +331,34 @@ decrypt).
 * Private talk to a friend is not saved in the replay history.
 * 1.4 and older phones do not see chats, names, friends or moderation.
 
+## v1.8.5: pull to refresh (who's here?)
+
+* **Pull down** on the Talk screen people list or on Who's where, or tap the
+  small **refresh** button next to the list header, to ask everyone "who's
+  here?" right now instead of waiting for the next beacon.
+* One tiny probe (`LobbyProbe`, a lobby frame starting with `0x50`, 18 bytes)
+  goes out on every fast path at once: Wi-Fi / LAN broadcast + multicast and
+  a one-off subnet sweep, Wi-Fi Direct (a 20 s discovery burst), a Bluetooth
+  scan burst, the relay channel room and the relay lobby room (a dropped
+  relay is reconnected first), and the phone mesh, which passes it on up to
+  the probe's TTL (3 hops) with its own per-phone limit (once per 5 s).
+* Phones that hear it answer straight away with their presence hello and
+  Who's where beacon, after a random 0-500 ms delay so they do not all talk
+  at once, and at most once per 5 s per asking phone. "Show me in Who's
+  where" off: only the channel presence answers, as before.
+* The spinner stops when answers stop arriving (or after about 3 s) and a
+  toast says "Found N people".
+* **LoRa radio:** never on a normal refresh. Hold the refresh button, or tap
+  "Also ask over radio (slow)" in the toast (shown while a radio is
+  connected), to send the probe over the radio too: at most once per
+  2 minutes, and phones answer a radio probe over the radio at most once
+  per 2 minutes. Radio answers can take a minute.
+* **Offline power save:** no relay (nothing is sent to or reconnected on the
+  internet) and no subnet sweep; Wi-Fi / Bluetooth / Wi-Fi Direct / mesh
+  still get the probe.
+* Older versions ignore the probe (it is not a valid lobby beacon), so they
+  just show up on their normal schedule.
+
 ## v1.8.4: map search (find trail maps online, search offline)
 
 * **Search button on the Trip map** (also in full screen). Typing searches

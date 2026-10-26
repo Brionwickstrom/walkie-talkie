@@ -120,6 +120,12 @@ abstract class Transport {
   /// Wi-Fi Direct). Implies [setPowerSaver].
   void setOfflineSaver(bool on) {}
 
+  /// Pull-to-refresh (v1.8.5): look for phones right now, once (a subnet
+  /// sweep, a Wi-Fi Direct discovery burst, a Bluetooth scan burst, a
+  /// relay reconnect when it is down). Cheap and bounded; the normal
+  /// schedule resumes afterwards.
+  void kickDiscovery() {}
+
   /// One-line diagnostic for the debug UI.
   String? get debugInfo => null;
 

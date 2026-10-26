@@ -302,6 +302,10 @@ class RelayTransport extends Transport {
     await ws?.close();
   }
 
+  /// Pull-to-refresh (v1.8.5): reconnect right away when disconnected.
+  @override
+  void kickDiscovery() => unawaited(reconnectNow());
+
   /// Retry now (e.g. the phone just came back online).
   Future<void> reconnectNow() async {
     if (!_wanted || _ws != null) return;
@@ -513,6 +517,9 @@ class MultiRelayTransport extends Transport {
       }
     }
   }
+
+  @override
+  void kickDiscovery() => unawaited(reconnectNow());
 
   /// Retry every disconnected relay right away.
   Future<void> reconnectNow() async {

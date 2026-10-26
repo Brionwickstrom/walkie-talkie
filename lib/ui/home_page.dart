@@ -399,6 +399,9 @@ class _HomePageState extends State<HomePage> {
                     onBeep: (p) => c.ring(toPeer: p.id, beep: true),
                     onMessage: (p) => _openRecordSheet(context, p.id, p.name),
                     onVolume: (p) => _openPersonSheet(context, p),
+                    onRefresh: ({required bool radio}) =>
+                        c.refreshPeople(radio: radio),
+                    radioAvailable: () => c.radioConnected,
                     notice: c.announcementMode && !c.isAdmin
                         ? Card(
                             margin: const EdgeInsets.fromLTRB(8, 4, 8, 0),

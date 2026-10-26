@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 
 import '../app/walkie_controller.dart';
 import '../app/whos_where.dart';
+import '../app/people_refresh.dart';
 import 'home_view.dart';
+import 'people_refresh_view.dart';
 import 'sheets.dart';
 
 /// Who's where (v1.8.2): everyone this phone can see, grouped by channel.
@@ -98,6 +100,9 @@ class _WhosWherePageState extends State<WhosWherePage> {
         onJump: _jump,
         onPerson: _person,
         onShowMe: c.setShowInWhosWhere,
+        onRefresh: ({required bool radio}) =>
+            c.refreshPeople(radio: radio, whosWhere: true),
+        radioAvailable: () => c.radioConnected,
       ),
     );
   }
@@ -115,8 +120,14 @@ class WhosWhereView extends StatelessWidget {
     this.onJump,
     this.onPerson,
     this.onShowMe,
+    this.onRefresh,
+    this.radioAvailable,
   });
   final List<WhoGroup> groups;
+
+  /// Pull-to-refresh / the refresh button (v1.8.5).
+  final Future<RefreshResult> Function({required bool radio})? onRefresh;
+  final bool Function()? radioAvailable;
   final bool showMe;
   final bool offline;
   final bool lobbyOnline;
@@ -139,65 +150,86 @@ class WhosWhereView extends StatelessWidget {
       appBar: AppBar(title: const Text("Who's where")),
       body: SafeArea(
         top: false,
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(8, 4, 8, 16),
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(8, 6, 8, 2),
-              child: Text(
-                total == 0
-                    ? 'Nobody else in range or online yet.'
-                    : '$total ${total == 1 ? 'person' : 'people'} on '
-                          '$channels ${channels == 1 ? 'channel' : 'channels'}',
-                key: const Key('whos-where-summary'),
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
+        child: PeopleRefreshScope(
+          refresh: onRefresh,
+          radioAvailable: radioAvailable,
+          builder: (context, refreshButton) => ListView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.fromLTRB(8, 4, 8, 16),
+            children: [
+              Padding(
+                padding: EdgeInsets.fromLTRB(
+                  8,
+                  6,
+                  refreshButton == null ? 8 : 0,
+                  2,
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        total == 0
+                            ? 'Nobody else in range or online yet.'
+                            : '$total ${total == 1 ? 'person' : 'people'} on '
+                                  '$channels ${channels == 1 ? 'channel' : 'channels'}',
+                        key: const Key('whos-where-summary'),
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    ?refreshButton,
+                  ],
                 ),
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(8, 0, 8, 6),
-              child: Text(
-                offline
-                    ? 'Offline power save: nearby phones only (Wi-Fi, '
-                          'Bluetooth, phone relay).'
-                    : lobbyOnline
-                    ? 'Nearby phones and everyone online.'
-                    : 'Nearby phones (internet lobby connecting...).',
-                style: theme.textTheme.bodySmall,
-              ),
-            ),
-            for (final g in groups)
-              if (g.people.isNotEmpty)
-                _GroupCard(
-                  group: g,
-                  privateHere:
-                      g.channel != null && privateNumbers.contains(g.channel),
-                  onJump: g.canJump && onJump != null ? () => onJump!(g) : null,
-                  onPerson: onPerson == null ? null : (p) => onPerson!(g, p),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(8, 0, 8, 6),
+                child: Text(
+                  offline
+                      ? 'Offline power save: nearby phones only (Wi-Fi, '
+                            'Bluetooth, phone relay).'
+                      : lobbyOnline
+                      ? 'Nearby phones and everyone online.'
+                      : 'Nearby phones (internet lobby connecting...).',
+                  style: theme.textTheme.bodySmall,
                 ),
-            const SizedBox(height: 8),
-            SwitchListTile(
-              key: const Key('whosWhereShowMe'),
-              title: const Text("Show me in Who's where"),
-              subtitle: const Text(
-                'Lets phones on other channels see your name and public '
-                'channel. On a private channel they only see "Private" and '
-                'your call sign, never the channel.',
               ),
-              value: showMe,
-              onChanged: onShowMe,
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
-              child: Text(
-                'Tap a channel to go there, or a person for details. Phones '
-                'on app versions before 1.8.2 only show up when they are '
-                'nearby on a public channel or on your channel.',
-                style: theme.textTheme.bodySmall,
+              for (final g in groups)
+                if (g.people.isNotEmpty)
+                  _GroupCard(
+                    group: g,
+                    privateHere:
+                        g.channel != null && privateNumbers.contains(g.channel),
+                    onJump: g.canJump && onJump != null
+                        ? () => onJump!(g)
+                        : null,
+                    onPerson: onPerson == null ? null : (p) => onPerson!(g, p),
+                  ),
+              const SizedBox(height: 8),
+              SwitchListTile(
+                key: const Key('whosWhereShowMe'),
+                title: const Text("Show me in Who's where"),
+                subtitle: const Text(
+                  'Lets phones on other channels see your name and public '
+                  'channel. On a private channel they only see "Private" and '
+                  'your call sign, never the channel.',
+                ),
+                value: showMe,
+                onChanged: onShowMe,
               ),
-            ),
-          ],
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+                child: Text(
+                  'Tap a channel to go there, or a person for details. Phones '
+                  'on app versions before 1.8.2 only show up when they are '
+                  'nearby on a public channel or on your channel. Pull down '
+                  'to refresh; hold the refresh button to also ask over the '
+                  'radio.',
+                  style: theme.textTheme.bodySmall,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

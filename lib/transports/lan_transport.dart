@@ -619,9 +619,25 @@ class LanTransport extends Transport {
     unawaited(runSweep());
   }
 
-  /// Unicast our last hello to every host on our subnet(s), [sweepBatch]
-  /// at a time. Stops early once a phone answers. Public for tests.
-  Future<void> runSweep() async {
+  /// Pull-to-refresh (v1.8.5): one subnet sweep now, even if someone was
+  /// heard recently (they may not be the only ones). Off in offline power
+  /// save, like the timed sweeps.
+  @override
+  void kickDiscovery() {
+    if (!sweepsAllowed || _sweeping || _socket == null || _ifaces.isEmpty) {
+      return;
+    }
+    kicks++;
+    unawaited(runSweep(force: true));
+  }
+
+  /// Discovery kicks (tests / Details).
+  int kicks = 0;
+
+  /// Unicast our last hello (or the "who's here?" probe that went out
+  /// last) to every host on our subnet(s), [sweepBatch] at a time. Stops
+  /// early once a phone answers, unless [force]. Public for tests.
+  Future<void> runSweep({bool force = false}) async {
     final hello = _lastHello;
     if (_sweeping || hello == null) return;
     _sweeping = true;
@@ -635,7 +651,7 @@ class LanTransport extends Transport {
       var n = 0;
       for (final a in targets) {
         final s = _socket;
-        if (s == null || _hasRecentPeer) break;
+        if (s == null || (!force && _hasRecentPeer)) break;
         _trySend(s, hello, a, targetPort);
         _sweepSent++;
         if (++n % sweepBatch == 0) await Future<void>.delayed(sweepBatchDelay);

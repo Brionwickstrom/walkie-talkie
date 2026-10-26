@@ -272,3 +272,115 @@ class LobbyLimiter {
     return true;
   }
 }
+
+/// "Who's here?" probe (v1.8.5): sent when someone pulls the people list
+/// or Who's where down to refresh. Phones that hear it answer right away
+/// (after a short random delay) with their presence hello and lobby
+/// beacon instead of waiting for their next timer.
+///
+/// It travels as a [FrameType.lobby] frame (public, never sealed) whose
+/// payload starts with [magic] instead of [LobbyBeacon.version], and is
+/// shorter than any beacon, so v1.8.2-v1.8.4 phones fail to decode it as
+/// a beacon and ignore it (older ones drop the frame type).
+///
+/// ```
+/// frame header (12 B: type 7, sender = node id, channel 0, seq)
+/// magic    1 B  0x50 ('P')
+/// ver      1 B  (1)
+/// flags    1 B  bit0 sent over the LoRa radio
+/// ttl      1 B  phone-mesh hops it may travel (1..[maxTtl])
+/// nonce    2 B  per refresh (receivers answer one refresh once)
+/// ```
+class LobbyProbe {
+  LobbyProbe({required this.nonce, int ttl = defaultTtl, this.radio = false})
+    : ttl = ttl.clamp(1, maxTtl);
+
+  static const int magic = 0x50;
+  static const int version = 1;
+  static const int size = 6;
+  static const int defaultTtl = 3;
+  static const int maxTtl = 6;
+
+  /// Identifies one refresh (wraps at 16 bits).
+  final int nonce;
+
+  /// Phone-mesh hop limit.
+  final int ttl;
+
+  /// This copy is (meant to go) over the LoRa radio.
+  final bool radio;
+
+  Uint8List encodePayload() => Uint8List.fromList([
+    magic,
+    version,
+    radio ? 1 : 0,
+    ttl,
+    (nonce >> 8) & 0xFF,
+    nonce & 0xFF,
+  ]);
+
+  Uint8List encode({required int senderId, required int seq}) => Frame(
+    type: FrameType.lobby,
+    senderId: senderId,
+    channel: 0,
+    seq: seq & 0xFFFF,
+    payload: encodePayload(),
+  ).encode();
+
+  static LobbyProbe? tryDecode(Frame f) {
+    if (f.type != FrameType.lobby) return null;
+    return tryDecodePayload(f.payload);
+  }
+
+  /// Null for beacons and anything malformed. Later versions may append
+  /// bytes; they are ignored.
+  static LobbyProbe? tryDecodePayload(Uint8List p) {
+    if (p.length < size || p[0] != magic || p[1] != version) return null;
+    final ttl = p[3];
+    if (ttl == 0) return null;
+    return LobbyProbe(
+      nonce: (p[4] << 8) | p[5],
+      ttl: ttl,
+      radio: p[2] & 1 == 1,
+    );
+  }
+
+  /// Whether [p] (a lobby payload) is a probe rather than a beacon.
+  static bool isProbePayload(Uint8List p) =>
+      p.isNotEmpty && p[0] == magic && p.length >= size;
+}
+
+/// Answer each requester at most once per [perRequester] (a refresh
+/// spinner pulled again and again, or the same probe arriving over Wi-Fi,
+/// Bluetooth and the mesh at once, gets one reply), and keep the number
+/// of tracked requesters bounded.
+class ProbeReplyLimiter {
+  ProbeReplyLimiter({
+    this.perRequester = const Duration(seconds: 5),
+    this.maxTracked = 512,
+    DateTime Function()? clock,
+  }) : _clock = clock ?? DateTime.now;
+
+  final Duration perRequester;
+  final int maxTracked;
+  final DateTime Function() _clock;
+  final Map<int, DateTime> _last = {};
+  int dropped = 0;
+
+  bool allow(int requester) {
+    final now = _clock();
+    final prev = _last[requester];
+    if (prev != null && now.difference(prev) < perRequester) {
+      dropped++;
+      return false;
+    }
+    _last[requester] = now;
+    if (_last.length > maxTracked) {
+      _last.removeWhere((_, t) => now.difference(t) >= perRequester);
+      while (_last.length > maxTracked) {
+        _last.remove(_last.keys.first);
+      }
+    }
+    return true;
+  }
+}

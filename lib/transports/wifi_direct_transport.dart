@@ -252,6 +252,15 @@ class WifiDirectTransport extends Transport {
     }
   }
 
+  /// Pull-to-refresh (v1.8.5): a short fast-discovery burst.
+  @override
+  void kickDiscovery() {
+    if (_status != TransportStatus.running) return;
+    final until = _burstUntil;
+    if (until != null && until.isAfter(DateTime.now())) return;
+    discoverNow(forTime: const Duration(seconds: 20));
+  }
+
   /// Look for Wi-Fi Direct phones now (fast discovery for [forTime]).
   void discoverNow({Duration forTime = const Duration(seconds: 45)}) {
     _burstUntil = DateTime.now().add(forTime);

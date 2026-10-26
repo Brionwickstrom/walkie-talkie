@@ -294,8 +294,28 @@ class BleTransport extends Transport {
     if (on) _saver = true;
   }
 
-  Future<void> _startCentral() async {
-    final mode = _offline
+  /// Pull-to-refresh (v1.8.5): one fast scan burst now. The normal
+  /// schedule (continuous, or duty-cycled in the savers) takes over again
+  /// on the next link check, so the burst stays short.
+  @override
+  void kickDiscovery() {
+    if (_status != TransportStatus.running || BleScanLock.held) return;
+    final last = _lastScanStart;
+    if (last != null &&
+        DateTime.now().difference(last) < const Duration(seconds: 2)) {
+      return;
+    }
+    unawaited(() async {
+      try {
+        await _startCentral(burst: true);
+      } catch (_) {}
+    }());
+  }
+
+  Future<void> _startCentral({bool burst = false}) async {
+    final mode = burst
+        ? fbp.AndroidScanMode.lowLatency
+        : _offline
         ? fbp.AndroidScanMode.lowPower
         : _saver
         ? (_links.isEmpty

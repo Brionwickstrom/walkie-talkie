@@ -85,6 +85,16 @@ class InboundLobby {
   final int? rssi;
 }
 
+/// A "who's here?" probe (v1.8.5, see [LobbyProbe]): someone refreshed
+/// their people list and wants everyone to answer now.
+class InboundProbe {
+  InboundProbe(this.peerId, this.probe, this.transport, {this.hops = 1});
+  final int peerId;
+  final LobbyProbe probe;
+  final TransportKind transport;
+  final int hops;
+}
+
 class InboundControl {
   InboundControl(this.peerId, this.channel, this.message, this.transport);
   final int peerId;
@@ -236,6 +246,7 @@ class TransportManager {
   final _controls = StreamController<InboundControl>.broadcast();
   final _trips = StreamController<InboundTrip>.broadcast();
   final _lobby = StreamController<InboundLobby>.broadcast();
+  final _probes = StreamController<InboundProbe>.broadcast();
   final _peerChanges = StreamController<List<Peer>>.broadcast();
   final _transportChanges = StreamController<void>.broadcast();
 
@@ -282,6 +293,9 @@ class TransportManager {
   /// "Who's where" beacons heard on the local links / phone mesh. They
   /// never create a [Peer] (people list) entry.
   Stream<InboundLobby> get lobby => _lobby.stream;
+
+  /// "Who's here?" probes (v1.8.5) heard on any link, the mesh or LoRa.
+  Stream<InboundProbe> get probes => _probes.stream;
   Stream<List<Peer>> get peerChanges => _peerChanges.stream;
   Stream<void> get transportChanges => _transportChanges.stream;
 
@@ -410,6 +424,7 @@ class TransportManager {
     await _controls.close();
     await _trips.close();
     await _lobby.close();
+    await _probes.close();
     await _peerChanges.close();
     await _transportChanges.close();
   }
@@ -485,11 +500,56 @@ class TransportManager {
   /// The rare LoRa copy of our lobby beacon (v1.8.3, see WhosWhere): one
   /// broadcast packet at the lowest priority, through the radio's rate
   /// limiter. False when no radio is connected.
-  bool sendLobbyRadio(Uint8List bytes) {
+  bool sendLobbyRadio(
+    Uint8List bytes, {
+    LoraPriority priority = LoraPriority.bulk,
+  }) {
     final r = radio;
     if (r == null || r.status != TransportStatus.running) return false;
-    return r.sendRadio(bytes, priority: LoraPriority.bulk);
+    return r.sendRadio(bytes, priority: priority);
   }
+
+  /// Pull-to-refresh (v1.8.5): ask everyone "who's here?" right now.
+  ///
+  /// Sends our presence hello, then the probe ([bytes] from
+  /// [LobbyProbe.encode]) once on every running link except LoRa: Wi-Fi /
+  /// LAN broadcast + multicast, Wi-Fi Direct, Bluetooth and the internet
+  /// relay's channel room. Phones in the phone mesh pass it on up to the
+  /// probe's TTL. Then every transport gets a discovery kick
+  /// ([Transport.kickDiscovery]: subnet sweep, Wi-Fi Direct discovery,
+  /// a Bluetooth scan burst, a relay reconnect when it is down). In
+  /// offline power save the internet relay is left alone.
+  Future<void> probePeople(Uint8List bytes) async {
+    if (!_running) return;
+    probesSent++;
+    // The hello first: the LAN sweep reuses the last hello we sent.
+    await sendHello();
+    mesh.markSeen(meshPacketId(bytes));
+    final targets = _transports
+        .where(
+          (t) =>
+              !t.lowBandwidth &&
+              t.status == TransportStatus.running &&
+              !(_offline && t.kind == TransportKind.internet),
+        )
+        .toList();
+    await Future.wait(targets.map((t) => _safeSend(t, bytes, null)));
+    for (final t in _transports) {
+      if (t.lowBandwidth) continue;
+      if (_offline && t.kind == TransportKind.internet) continue;
+      try {
+        t.kickDiscovery();
+      } catch (_) {}
+    }
+  }
+
+  /// Probes sent by [probePeople] (tests / Details).
+  int probesSent = 0;
+
+  /// The LoRa copy of a "who's here?" probe (only when the user asked for
+  /// it; the caller rate limits). False when no radio is connected.
+  bool sendProbeRadio(Uint8List bytes) =>
+      sendLobbyRadio(bytes, priority: LoraPriority.presence);
 
   /// Broadcast presence on every running transport.
   Future<void> sendHello() => _broadcastControl(
@@ -1215,6 +1275,16 @@ class TransportManager {
     // Who's where before the channel / key checks, without touching the
     // people list. LoRa never carries them.
     if (f.type == FrameType.lobby) {
+      // "Who's here?" probe (v1.8.5): same frame type, its own payload.
+      final probe = LobbyProbe.tryDecode(f);
+      if (probe != null) {
+        if (!_probes.isClosed) {
+          _probes.add(
+            InboundProbe(f.senderId, probe, inbound.transport, hops: hops),
+          );
+        }
+        return;
+      }
       // LoRa copies come rarely (every 15 min, v1.8.3).
       final b = LobbyBeacon.tryDecode(f);
       if (b != null && !_lobby.isClosed) {

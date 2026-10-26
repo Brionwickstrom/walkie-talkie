@@ -2,7 +2,9 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../app/people_refresh.dart';
 import '../core/transport.dart';
+import 'people_refresh_view.dart';
 
 /// One row in the people list (presentation only, no controller).
 class PersonView {
@@ -279,9 +281,17 @@ class HomeBody extends StatelessWidget {
     this.queued,
     this.recent,
     this.headerAction,
+    this.onRefresh,
+    this.radioAvailable,
     required this.actions,
     required this.ptt,
   });
+
+  /// Pull-to-refresh / the refresh button on the people list (v1.8.5).
+  final Future<RefreshResult> Function({required bool radio})? onRefresh;
+
+  /// Offer "Also ask over radio (slow)" after a refresh.
+  final bool Function()? radioAvailable;
 
   /// Trailing button on the "N on CH 3" header (Who's where).
   final Widget? headerAction;
@@ -356,80 +366,86 @@ class HomeBody extends StatelessWidget {
               ),
             ),
           Expanded(
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(8, 4, 8, 6),
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.groups,
-                        size: 22,
-                        color: theme.colorScheme.primary,
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          '$here on $channelLabel',
-                          key: const Key('people-count'),
-                          style: theme.textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                      if (isPrivate)
-                        Icon(
-                          Icons.lock,
-                          size: 18,
-                          color: theme.colorScheme.primary,
-                        ),
-                      ?headerAction,
-                    ],
-                  ),
-                ),
-                PersonCard(person: me, onEdit: onEditMe),
-                if (people.isEmpty)
+            child: PeopleRefreshScope(
+              refresh: onRefresh,
+              radioAvailable: radioAvailable,
+              builder: (context, refreshButton) => ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+                children: [
                   Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 24,
-                      vertical: 24,
-                    ),
-                    child: Column(
+                    padding: const EdgeInsets.fromLTRB(8, 4, 8, 6),
+                    child: Row(
                       children: [
                         Icon(
-                          Icons.person_search,
-                          size: 40,
-                          color: theme.colorScheme.outline,
+                          Icons.groups,
+                          size: 22,
+                          color: theme.colorScheme.primary,
                         ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Nobody on $channelLabel yet.\nOthers will appear '
-                          'here automatically.',
-                          textAlign: TextAlign.center,
-                          style: theme.textTheme.bodyLarge,
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            '$here on $channelLabel',
+                            key: const Key('people-count'),
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
                         ),
-                        const SizedBox(height: 6),
-                        Text(
-                          'Same Wi-Fi, Bluetooth nearby or the internet all '
-                          'work. Voice messages you record now are delivered '
-                          'when someone shows up.',
-                          textAlign: TextAlign.center,
-                          style: theme.textTheme.bodySmall,
-                        ),
+                        if (isPrivate)
+                          Icon(
+                            Icons.lock,
+                            size: 18,
+                            color: theme.colorScheme.primary,
+                          ),
+                        ?refreshButton,
+                        ?headerAction,
                       ],
                     ),
                   ),
-                for (final p in people)
-                  PersonCard(
-                    person: p,
-                    showDebug: showDetails,
-                    onRing: () => onRing(p),
-                    onBeep: () => onBeep(p),
-                    onMessage: () => onMessage(p),
-                    onLongPress: onVolume == null ? null : () => onVolume!(p),
-                  ),
-              ],
+                  PersonCard(person: me, onEdit: onEditMe),
+                  if (people.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 24,
+                      ),
+                      child: Column(
+                        children: [
+                          Icon(
+                            Icons.person_search,
+                            size: 40,
+                            color: theme.colorScheme.outline,
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Nobody on $channelLabel yet.\nOthers will appear '
+                            'here automatically.',
+                            textAlign: TextAlign.center,
+                            style: theme.textTheme.bodyLarge,
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            'Same Wi-Fi, Bluetooth nearby or the internet all '
+                            'work. Voice messages you record now are delivered '
+                            'when someone shows up.',
+                            textAlign: TextAlign.center,
+                            style: theme.textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
+                    ),
+                  for (final p in people)
+                    PersonCard(
+                      person: p,
+                      showDebug: showDetails,
+                      onRing: () => onRing(p),
+                      onBeep: () => onBeep(p),
+                      onMessage: () => onMessage(p),
+                      onLongPress: onVolume == null ? null : () => onVolume!(p),
+                    ),
+                ],
+              ),
             ),
           ),
           ?queued,
