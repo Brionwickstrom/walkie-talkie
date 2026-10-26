@@ -20,6 +20,7 @@ import 'radio_settings.dart';
 import 'sheets.dart';
 import 'trip_page.dart';
 import 'trip_widgets.dart';
+import '../app/power_plan.dart';
 import '../trip/sos.dart';
 
 class HomePage extends StatefulWidget {
@@ -41,6 +42,11 @@ class _HomePageState extends State<HomePage> {
 
   /// 0 = Talk, 1 = Trip.
   int _tab = 0;
+
+  /// Trip map is full screen: no app bar or tab bar (status / navigation
+  /// bar insets are kept by the SafeArea).
+  bool _tripFull = false;
+  bool get _hideBars => _tab == 1 && _tripFull;
   final GlobalKey<TripPageState> _tripKey = GlobalKey();
   final Set<String> _sosShown = {};
   bool _tripWired = false;
@@ -200,108 +206,123 @@ class _HomePageState extends State<HomePage> {
         final mq = MediaQuery.of(context);
         final pttSize = (mq.size.height * 0.17).clamp(104.0, 160.0);
         return Scaffold(
-          appBar: AppBar(
-            titleSpacing: 8,
-            title: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _ChannelPicker(
-                  channel: c.channel,
-                  isPrivate: c.settings.isPrivate,
-                  emojiOf: (ch) => ch == c.channel
-                      ? c.channelName?.emoji ?? ''
-                      : c.channelNameOf(ch)?.emoji ?? '',
-                  onChanged: (ch) => c.setChannel(ch),
-                ),
-                IconButton(
-                  tooltip: c.isPrivate
-                      ? 'Private channel (tap for passcode)'
-                      : 'Make this channel private',
-                  icon: c.switchingChannel
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : Icon(c.isPrivate ? Icons.lock : Icons.lock_open),
-                  onPressed: () => showPrivacySheet(context, c),
-                ),
-              ],
-            ),
-            actions: [
-              IconButton(
-                tooltip: 'Chat on this channel',
-                icon: Badge(
-                  isLabelVisible: c.unreadChannelChat > 0,
-                  label: Text('${c.unreadChannelChat}'),
-                  child: const Icon(Icons.chat_bubble_outline),
-                ),
-                onPressed: () => _openChat(context, c.channelChat),
-              ),
-              IconButton(
-                tooltip: 'Friends',
-                icon: Badge(
-                  isLabelVisible:
-                      c.unreadFriendChats + c.friendRequests.length > 0,
-                  label: Text(
-                    '${c.unreadFriendChats + c.friendRequests.length}',
+          appBar: _hideBars
+              ? null
+              : AppBar(
+                  titleSpacing: 8,
+                  title: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _ChannelPicker(
+                        channel: c.channel,
+                        isPrivate: c.settings.isPrivate,
+                        emojiOf: (ch) => ch == c.channel
+                            ? c.channelName?.emoji ?? ''
+                            : c.channelNameOf(ch)?.emoji ?? '',
+                        onChanged: (ch) => c.setChannel(ch),
+                      ),
+                      IconButton(
+                        tooltip: c.isPrivate
+                            ? 'Private channel (tap for passcode)'
+                            : 'Make this channel private',
+                        icon: c.switchingChannel
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : Icon(c.isPrivate ? Icons.lock : Icons.lock_open),
+                        onPressed: () => showPrivacySheet(context, c),
+                      ),
+                    ],
                   ),
-                  child: Icon(
-                    c.onlineFriends > 0 ? Icons.people : Icons.people_outline,
-                  ),
+                  actions: [
+                    IconButton(
+                      tooltip: 'Chat on this channel',
+                      icon: Badge(
+                        isLabelVisible: c.unreadChannelChat > 0,
+                        label: Text('${c.unreadChannelChat}'),
+                        child: const Icon(Icons.chat_bubble_outline),
+                      ),
+                      onPressed: () => _openChat(context, c.channelChat),
+                    ),
+                    IconButton(
+                      tooltip: 'Friends',
+                      icon: Badge(
+                        isLabelVisible:
+                            c.unreadFriendChats + c.friendRequests.length > 0,
+                        label: Text(
+                          '${c.unreadFriendChats + c.friendRequests.length}',
+                        ),
+                        child: Icon(
+                          c.onlineFriends > 0
+                              ? Icons.people
+                              : Icons.people_outline,
+                        ),
+                      ),
+                      onPressed: () => _openFriends(context),
+                    ),
+                    IconButton(
+                      tooltip: 'Voice messages',
+                      icon: Badge(
+                        isLabelVisible: c.unplayedMessages > 0,
+                        label: Text('${c.unplayedMessages}'),
+                        child: const Icon(Icons.voicemail),
+                      ),
+                      onPressed: () => _openInbox(context),
+                    ),
+                    IconButton(
+                      tooltip: 'Settings',
+                      icon: const Icon(Icons.settings),
+                      onPressed: () => _openSettings(context),
+                    ),
+                  ],
                 ),
-                onPressed: () => _openFriends(context),
-              ),
-              IconButton(
-                tooltip: 'Voice messages',
-                icon: Badge(
-                  isLabelVisible: c.unplayedMessages > 0,
-                  label: Text('${c.unplayedMessages}'),
-                  child: const Icon(Icons.voicemail),
+          bottomNavigationBar: _hideBars
+              ? null
+              : NavigationBar(
+                  key: const Key('mainTabs'),
+                  height: 60,
+                  labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+                  selectedIndex: _tab,
+                  onDestinationSelected: (i) {
+                    _wireTrip();
+                    setState(() {
+                      _tab = i;
+                      _tripFull = false;
+                    });
+                  },
+                  destinations: [
+                    const NavigationDestination(
+                      icon: Icon(Icons.record_voice_over_outlined),
+                      selectedIcon: Icon(Icons.record_voice_over),
+                      label: 'Talk',
+                    ),
+                    NavigationDestination(
+                      icon: Badge(
+                        isLabelVisible: _tripAlerts > 0,
+                        label: Text('$_tripAlerts'),
+                        child: Icon(
+                          c.trip?.sos.active != null
+                              ? Icons.sos
+                              : Icons.terrain_outlined,
+                          color: c.trip?.sos.active != null ? Colors.red : null,
+                        ),
+                      ),
+                      selectedIcon: const Icon(Icons.terrain),
+                      label: 'Trip',
+                    ),
+                  ],
                 ),
-                onPressed: () => _openInbox(context),
-              ),
-              IconButton(
-                tooltip: 'Settings',
-                icon: const Icon(Icons.settings),
-                onPressed: () => _openSettings(context),
-              ),
-            ],
-          ),
-          bottomNavigationBar: NavigationBar(
-            key: const Key('mainTabs'),
-            height: 60,
-            labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-            selectedIndex: _tab,
-            onDestinationSelected: (i) {
-              _wireTrip();
-              setState(() => _tab = i);
-            },
-            destinations: [
-              const NavigationDestination(
-                icon: Icon(Icons.record_voice_over_outlined),
-                selectedIcon: Icon(Icons.record_voice_over),
-                label: 'Talk',
-              ),
-              NavigationDestination(
-                icon: Badge(
-                  isLabelVisible: _tripAlerts > 0,
-                  label: Text('$_tripAlerts'),
-                  child: Icon(
-                    c.trip?.sos.active != null
-                        ? Icons.sos
-                        : Icons.terrain_outlined,
-                    color: c.trip?.sos.active != null ? Colors.red : null,
-                  ),
-                ),
-                selectedIcon: const Icon(Icons.terrain),
-                label: 'Trip',
-              ),
-            ],
-          ),
           body: _tab == 1
               ? SafeArea(
-                  child: TripPage(key: _tripKey, controller: c),
+                  child: TripPage(
+                    key: _tripKey,
+                    controller: c,
+                    onFullScreen: (v) => setState(() => _tripFull = v),
+                  ),
                 )
               : SafeArea(
                   child: HomeBody(
@@ -921,6 +942,26 @@ class _HomePageState extends State<HomePage> {
                 ],
                 const Divider(height: 32),
                 _SectionTitle('Off-grid (no internet)'),
+                SwitchListTile(
+                  key: const Key('offlineSaver'),
+                  contentPadding: EdgeInsets.zero,
+                  secondary: Icon(
+                    Icons.energy_savings_leaf,
+                    color: c.settings.offlineSaver ? Colors.green : null,
+                  ),
+                  title: const Text('Offline power save'),
+                  subtitle: Text(
+                    'For when you know there is no internet (a hike) and '
+                    'want the longest battery life. Turns off the internet '
+                    'relay, network searching and live location, slows '
+                    'Bluetooth, GPS and check-ins, and makes the app dark '
+                    'and dim. Talk, receive, phone relay, the radio, SOS and '
+                    'quick messages keep working. '
+                    '${const PowerPlan(offline: true).estimate}',
+                  ),
+                  value: c.settings.offlineSaver,
+                  onChanged: c.setOfflineSaver,
+                ),
                 SwitchListTile(
                   key: const Key('relayForOthers'),
                   contentPadding: EdgeInsets.zero,

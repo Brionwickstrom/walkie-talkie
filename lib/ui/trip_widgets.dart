@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../app/walkie_controller.dart';
 import '../trip/geo.dart';
@@ -57,123 +59,439 @@ class BearingArrow extends StatelessWidget {
   );
 }
 
-/// Big red SOS button: hold 3 s to send, or tap and confirm.
-class SosButton extends StatefulWidget {
-  const SosButton({super.key, required this.onSend});
+/// Small red SOS button (v1.8.1) that is hard to set off by accident:
+/// slide it to the right to arm it, then keep holding for 3 s (a ring
+/// fills up). A plain tap only shows how; pocket touches and taps do
+/// nothing. Letting go before the ring is full cancels.
+class SosSlideButton extends StatefulWidget {
+  const SosSlideButton({
+    super.key,
+    required this.onSend,
+    this.holdFor = const Duration(seconds: 3),
+    this.slide = 84,
+  });
   final VoidCallback onSend;
+  final Duration holdFor;
+
+  /// How far (logical px) the button must be slid to arm.
+  final double slide;
+
+  static const size = 46.0;
+  static const hint = 'Slide and hold to send SOS';
+
   @override
-  State<SosButton> createState() => _SosButtonState();
+  State<SosSlideButton> createState() => _SosSlideButtonState();
 }
 
-class _SosButtonState extends State<SosButton>
+class _SosSlideButtonState extends State<SosSlideButton>
     with SingleTickerProviderStateMixin {
   late final AnimationController _hold =
-      AnimationController(vsync: this, duration: const Duration(seconds: 3))
+      AnimationController(vsync: this, duration: widget.holdFor)
         ..addStatusListener((s) {
-          if (s == AnimationStatus.completed) {
-            _hold.reset();
-            widget.onSend();
-          }
+          if (s == AnimationStatus.completed) _fire();
         });
+  double _dx = 0;
+  bool _dragging = false;
+  bool _armed = false;
+  bool _hint = false;
+  Timer? _hintTimer;
 
   @override
   void dispose() {
+    _hintTimer?.cancel();
     _hold.dispose();
     super.dispose();
   }
 
-  Future<void> _confirm() async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        icon: const Icon(Icons.sos, color: Colors.red, size: 40),
-        title: const Text('Send SOS?'),
-        content: const Text(
-          'Everyone in range gets a loud alarm with your location, over '
-          'every path (internet, Wi-Fi, Bluetooth, phone relay and the '
-          'LoRa radio). It repeats until someone answers.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Send SOS'),
-          ),
-        ],
-      ),
-    );
-    if (ok == true) widget.onSend();
+  void _fire() {
+    HapticFeedback.heavyImpact();
+    _reset();
+    widget.onSend();
+  }
+
+  void _reset() {
+    _hold.reset();
+    if (!mounted) return;
+    setState(() {
+      _dx = 0;
+      _dragging = false;
+      _armed = false;
+    });
+  }
+
+  void _showHint() {
+    HapticFeedback.selectionClick();
+    _hintTimer?.cancel();
+    setState(() => _hint = true);
+    _hintTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _hint = false);
+    });
+  }
+
+  void _onStart(DragStartDetails _) {
+    HapticFeedback.selectionClick();
+    _hintTimer?.cancel();
+    setState(() {
+      _dragging = true;
+      _hint = false;
+    });
+  }
+
+  void _onUpdate(DragUpdateDetails d) {
+    final dx = (_dx + d.delta.dx).clamp(0.0, widget.slide);
+    final armed = _armed
+        ? dx >=
+              widget.slide *
+                  0.6 // hysteresis: slide back to disarm
+        : dx >= widget.slide;
+    if (armed && !_armed) {
+      HapticFeedback.mediumImpact();
+      _hold.forward(from: 0);
+    } else if (!armed && _armed) {
+      _hold.reset();
+    }
+    setState(() {
+      _dx = dx;
+      _armed = armed;
+    });
+  }
+
+  void _onEnd([Object? _]) {
+    if (_hold.isCompleted) return;
+    _reset();
   }
 
   @override
   Widget build(BuildContext context) {
+    const size = SosSlideButton.size;
+    final slide = widget.slide;
     return Semantics(
       button: true,
-      label: 'SOS. Hold for 3 seconds, or tap to confirm',
-      child: Listener(
-        onPointerDown: (_) => _hold.forward(from: 0),
-        onPointerUp: (_) {
-          if (_hold.isAnimating) _hold.reset();
-        },
-        onPointerCancel: (_) => _hold.reset(),
-        child: GestureDetector(
-          onTap: _confirm,
-          child: AnimatedBuilder(
-            animation: _hold,
-            builder: (context, _) => Container(
-              key: const Key('sosButton'),
-              height: 64,
-              decoration: BoxDecoration(
-                color: Colors.red.shade700,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Stack(
-                children: [
-                  Positioned.fill(
-                    child: FractionallySizedBox(
-                      alignment: Alignment.centerLeft,
-                      widthFactor: _hold.value,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: Colors.red.shade900,
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                      ),
+      label: 'SOS. Slide right, then hold for 3 seconds',
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            if (_dragging)
+              Positioned(
+                left: 0,
+                top: 0,
+                width: size + slide,
+                height: size,
+                child: IgnorePointer(
+                  child: Container(
+                    key: const Key('sosTrack'),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.55),
+                      borderRadius: BorderRadius.circular(size / 2),
+                      border: Border.all(color: Colors.red.shade300),
+                    ),
+                    alignment: Alignment.centerRight,
+                    padding: const EdgeInsets.only(right: 6),
+                    child: Icon(
+                      _armed ? Icons.touch_app : Icons.double_arrow,
+                      color: Colors.white70,
+                      size: 20,
                     ),
                   ),
-                  Center(
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
+                ),
+              ),
+            if (_hint || _dragging)
+              Positioned(
+                left: 0,
+                bottom: size + 6,
+                child: IgnorePointer(
+                  child: Container(
+                    key: const Key('sosHint'),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.8),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      _armed
+                          ? 'Keep holding... ${(widget.holdFor.inMilliseconds * (1 - _hold.value) / 1000).ceil()}'
+                          : _dragging
+                          ? 'Slide all the way, then hold'
+                          : SosSlideButton.hint,
+                      softWrap: false,
+                      style: const TextStyle(color: Colors.white, fontSize: 13),
+                    ),
+                  ),
+                ),
+              ),
+            // Keyed: the track / hint appear before it mid-drag, and the
+            // gesture must survive that rebuild.
+            Positioned(
+              key: const ValueKey('sosKnob'),
+              left: _dx,
+              top: 0,
+              child: GestureDetector(
+                key: const Key('sosButton'),
+                behavior: HitTestBehavior.opaque,
+                onTap: _showHint,
+                onHorizontalDragStart: _onStart,
+                onHorizontalDragUpdate: _onUpdate,
+                onHorizontalDragEnd: _onEnd,
+                onHorizontalDragCancel: _onEnd,
+                child: AnimatedBuilder(
+                  animation: _hold,
+                  builder: (context, _) => SizedBox(
+                    width: size,
+                    height: size,
+                    child: Stack(
+                      alignment: Alignment.center,
                       children: [
-                        const Icon(Icons.sos, color: Colors.white, size: 32),
-                        const SizedBox(width: 10),
-                        Flexible(
-                          child: Text(
-                            _hold.isAnimating
-                                ? 'Keep holding... ${(3 - _hold.value * 3).ceil()}'
-                                : 'Hold 3 s for SOS',
-                            style: const TextStyle(
+                        Container(
+                          width: size - 6,
+                          height: size - 6,
+                          decoration: BoxDecoration(
+                            color: _armed
+                                ? Colors.red.shade900
+                                : Colors.red.shade700,
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Colors.white, width: 2),
+                            boxShadow: const [
+                              BoxShadow(blurRadius: 3, color: Colors.black38),
+                            ],
+                          ),
+                          alignment: Alignment.center,
+                          child: const Text(
+                            'SOS',
+                            style: TextStyle(
                               color: Colors.white,
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w900,
                             ),
                           ),
                         ),
+                        if (_armed)
+                          SizedBox(
+                            width: size,
+                            height: size,
+                            child: CircularProgressIndicator(
+                              key: const Key('sosRing'),
+                              value: _hold.value,
+                              strokeWidth: 4,
+                              color: Colors.white,
+                              backgroundColor: Colors.red.shade200,
+                            ),
+                          ),
                       ],
                     ),
                   ),
-                ],
+                ),
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// My SOS is on (small, in a map corner): tap for who answered / cancel.
+class SosActivePill extends StatelessWidget {
+  const SosActivePill({super.key, required this.acks, required this.onTap});
+  final int acks;
+  final VoidCallback onTap;
+  @override
+  Widget build(BuildContext context) => Material(
+    color: Colors.red.shade700,
+    shape: const StadiumBorder(side: BorderSide(color: Colors.white, width: 2)),
+    elevation: 3,
+    child: InkWell(
+      key: const Key('sosActive'),
+      customBorder: const StadiumBorder(),
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Text(
+          acks == 0 ? 'SOS ON' : 'SOS ON · $acks answered',
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+/// Offline power save status chip (Trip tab): tap to turn it on / off.
+class OfflineSaverChip extends StatelessWidget {
+  const OfflineSaverChip({super.key, required this.on, required this.onTap});
+  final bool on;
+  final VoidCallback onTap;
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Material(
+      color: on ? Colors.green.shade700 : cs.surface.withValues(alpha: 0.92),
+      shape: const StadiumBorder(),
+      elevation: 2,
+      child: InkWell(
+        key: const Key('offlineSaverChip'),
+        customBorder: const StadiumBorder(),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.energy_savings_leaf,
+                size: 18,
+                color: on ? Colors.white : Colors.green.shade700,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                on ? 'Power save on' : 'Power save',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: on ? Colors.white : cs.onSurface,
+                ),
+              ),
+            ],
           ),
         ),
       ),
     );
   }
+}
+
+/// Trip tab layout (v1.8.1): a big map with a small guarded SOS in its
+/// bottom-left corner and the panel below; or the map alone, edge to edge
+/// ([full]), with the same controls and SOS. Back leaves full screen.
+class TripLayout extends StatelessWidget {
+  const TripLayout({
+    super.key,
+    required this.full,
+    required this.onFull,
+    required this.map,
+    required this.panel,
+    required this.sos,
+    this.controls = const [],
+    this.fullControls = const [],
+    this.topLeft = const [],
+  });
+  final bool full;
+  final ValueChanged<bool> onFull;
+
+  /// The map itself (fills its box).
+  final Widget map;
+  final Widget panel;
+
+  /// [SosSlideButton] or [SosActivePill].
+  final Widget sos;
+
+  /// Round map buttons (recenter, layers, offline, pin), top right under
+  /// the full-screen toggle.
+  final List<Widget> controls;
+
+  /// Extra buttons only in full screen (zoom: pinch works too, and the
+  /// smaller map has no room for them).
+  final List<Widget> fullControls;
+
+  /// Chips top left (power save, waiting for GPS).
+  final List<Widget> topLeft;
+
+  /// Share of the height the map gets when not full screen.
+  static const mapShare = 0.6;
+
+  @override
+  Widget build(BuildContext context) {
+    final mapStack = Stack(
+      children: [
+        Positioned.fill(child: map),
+        Positioned(
+          right: 8,
+          top: 8,
+          bottom: 8,
+          child: SingleChildScrollView(
+            child: Column(
+              children: [
+                RoundMapButton(
+                  key: const Key('mapFullScreen'),
+                  icon: full ? Icons.fullscreen_exit : Icons.fullscreen,
+                  tip: full ? 'Exit full screen' : 'Full-screen map',
+                  onTap: () => onFull(!full),
+                ),
+                ...controls,
+                if (full) ...fullControls,
+              ],
+            ),
+          ),
+        ),
+        Positioned(
+          left: 8,
+          top: 8,
+          right: 64,
+          child: Wrap(spacing: 6, runSpacing: 6, children: topLeft),
+        ),
+        Positioned(left: 12, bottom: 22, child: sos),
+      ],
+    );
+    return PopScope(
+      canPop: !full,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && full) onFull(false);
+      },
+      // Same tree in both modes so the map keeps its camera and tiles.
+      child: LayoutBuilder(
+        builder: (context, box) {
+          final mapH = full
+              ? box.maxHeight
+              : (box.maxHeight * mapShare).clamp(240.0, 640.0);
+          return Column(
+            children: [
+              SizedBox(
+                key: const Key('tripMap'),
+                height: mapH,
+                child: mapStack,
+              ),
+              if (!full) Expanded(child: panel),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// Round button on the map.
+class RoundMapButton extends StatelessWidget {
+  const RoundMapButton({
+    super.key,
+    required this.icon,
+    required this.tip,
+    required this.onTap,
+    this.color,
+  });
+  final IconData icon;
+  final String tip;
+  final VoidCallback onTap;
+  final Color? color;
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 6),
+    child: Material(
+      color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.92),
+      shape: const CircleBorder(),
+      elevation: 2,
+      child: IconButton(
+        tooltip: tip,
+        icon: Icon(icon, color: color),
+        onPressed: onTap,
+      ),
+    ),
+  );
 }
 
 /// My SOS is active: who answered, cancel.

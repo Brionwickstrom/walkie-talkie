@@ -110,6 +110,12 @@ abstract class Transport {
   /// flows; discovery of new phones and failure detection get slower.
   void setPowerSaver(bool on) {}
 
+  /// Offline power save (see [PowerPlan]): the strongest saver. Transports
+  /// that need the internet are stopped by the manager; the others cut
+  /// discovery to the minimum (sweeps off, short scan bursts, on-demand
+  /// Wi-Fi Direct). Implies [setPowerSaver].
+  void setOfflineSaver(bool on) {}
+
   /// One-line diagnostic for the debug UI.
   String? get debugInfo => null;
 

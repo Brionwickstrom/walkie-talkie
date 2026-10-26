@@ -264,6 +264,12 @@ class MeshRouter {
   /// send beacons, we just do not pass anything on.
   bool enabled = true;
 
+  /// Offline power save: our own hellos / beacons are slower, so trust
+  /// what neighbours told us for longer (2x).
+  double timeoutScale = 1;
+  Duration get _nbTimeout => neighbourTimeout * timeoutScale;
+  Duration get _bcTimeout => beaconTimeout * timeoutScale;
+
   final Map<int, _Neighbour> _neighbours = {};
   final LinkedHashMap<int, DateTime> _seen = LinkedHashMap();
   final Map<int, DateTime> _helloRelayed = {};
@@ -289,9 +295,7 @@ class MeshRouter {
     final now = _clock();
     return {
       for (final e in _neighbours.entries)
-        if (e.value.heard.values.any(
-          (t) => now.difference(t) <= neighbourTimeout,
-        ))
+        if (e.value.heard.values.any((t) => now.difference(t) <= _nbTimeout))
           e.key,
     };
   }
@@ -303,7 +307,7 @@ class MeshRouter {
     return {
       for (final id in directNeighbours())
         if (_neighbours[id]!.beaconAt != null &&
-            now.difference(_neighbours[id]!.beaconAt!) <= beaconTimeout)
+            now.difference(_neighbours[id]!.beaconAt!) <= _bcTimeout)
           id,
     };
   }
@@ -315,7 +319,7 @@ class MeshRouter {
     final now = _clock();
     return {
       for (final e in n.heard.entries)
-        if (now.difference(e.value) <= neighbourTimeout) e.key,
+        if (now.difference(e.value) <= _nbTimeout) e.key,
     };
   }
 
@@ -323,7 +327,7 @@ class MeshRouter {
   bool neighbourHears(int n, int id) {
     final nb = _neighbours[n];
     if (nb == null || nb.beaconAt == null) return false;
-    if (_clock().difference(nb.beaconAt!) > beaconTimeout) return false;
+    if (_clock().difference(nb.beaconAt!) > _bcTimeout) return false;
     return nb.hears.contains(id);
   }
 
@@ -335,7 +339,7 @@ class MeshRouter {
   void prune() {
     final now = _clock();
     _neighbours.removeWhere((_, n) {
-      n.heard.removeWhere((_, t) => now.difference(t) > neighbourTimeout * 3);
+      n.heard.removeWhere((_, t) => now.difference(t) > _nbTimeout * 3);
       return n.heard.isEmpty;
     });
     _expireSeen(now);
@@ -389,9 +393,7 @@ class MeshRouter {
     if (offGrid) {
       final now = _clock();
       final n = _neighbours.putIfAbsent(f.senderId, _Neighbour.new);
-      _wasNew = !n.heard.values.any(
-        (t) => now.difference(t) <= neighbourTimeout,
-      );
+      _wasNew = !n.heard.values.any((t) => now.difference(t) <= _nbTimeout);
       n.heard[via] = now;
     }
     if (f.type != FrameType.mesh) {

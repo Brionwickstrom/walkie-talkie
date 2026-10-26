@@ -42,6 +42,7 @@ class AppSettings {
     this.batteryPromptShown = false,
     this.showDiagnostics = false,
     this.powerSaver = false,
+    this.offlineSaver = false,
     this.volumeKeyPtt = false,
     this.headsetPtt = false,
     this.toggleTalk = false,
@@ -126,6 +127,11 @@ class AppSettings {
 
   /// Battery saver: slower beacons / scans / keep-alives.
   bool powerSaver;
+
+  /// Offline power save (v1.8.1): no internet relay, no network sweeps,
+  /// slow Bluetooth / GPS / announcements, dim dark UI. Talk, receive,
+  /// mesh relay, LoRa, SOS and quick messages keep working.
+  bool offlineSaver;
 
   /// Hold volume-down to talk (app open; background with the optional
   /// accessibility service).
@@ -306,6 +312,7 @@ class SharedPrefsSettingsStore implements SettingsStore {
   static const _kDiag = 'show_diagnostics';
   static const _kVolumes = 'peer_volumes';
   static const _kSaver = 'power_saver';
+  static const _kOffline = 'offline_saver';
   static const _kVolPtt = 'vol_ptt';
   static const _kHeadset = 'headset_ptt';
   static const _kToggle = 'toggle_talk';
@@ -365,6 +372,7 @@ class SharedPrefsSettingsStore implements SettingsStore {
       showDiagnostics: prefs?.getBool(_kDiag) ?? false,
       peerVolumes: AppSettings.decodeVolumes(prefs?.getString(_kVolumes)),
       powerSaver: prefs?.getBool(_kSaver) ?? false,
+      offlineSaver: prefs?.getBool(_kOffline) ?? false,
       volumeKeyPtt: prefs?.getBool(_kVolPtt) ?? false,
       headsetPtt: prefs?.getBool(_kHeadset) ?? false,
       toggleTalk: prefs?.getBool(_kToggle) ?? false,
@@ -403,6 +411,7 @@ class SharedPrefsSettingsStore implements SettingsStore {
       await prefs.setBool(_kBattery, s.batteryPromptShown);
       await prefs.setBool(_kDiag, s.showDiagnostics);
       await prefs.setBool(_kSaver, s.powerSaver);
+      await prefs.setBool(_kOffline, s.offlineSaver);
       await prefs.setBool(_kVolPtt, s.volumeKeyPtt);
       await prefs.setBool(_kHeadset, s.headsetPtt);
       await prefs.setBool(_kToggle, s.toggleTalk);

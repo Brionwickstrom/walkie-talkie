@@ -19,15 +19,46 @@ class WalkieApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Walkie Talkie',
-      theme: ThemeData(colorSchemeSeed: Colors.teal, useMaterial3: true),
-      darkTheme: ThemeData(
-        colorSchemeSeed: Colors.teal,
-        brightness: Brightness.dark,
-        useMaterial3: true,
+    return ValueListenableBuilder<bool>(
+      valueListenable: controller.offlineUi,
+      builder: (context, offline, home) => MaterialApp(
+        title: 'Walkie Talkie',
+        theme: ThemeData(colorSchemeSeed: Colors.teal, useMaterial3: true),
+        darkTheme: ThemeData(
+          colorSchemeSeed: Colors.teal,
+          brightness: Brightness.dark,
+          useMaterial3: true,
+        ),
+        // Offline power save: dark (OLED pixels off) and dimmed.
+        themeMode: offline ? ThemeMode.dark : ThemeMode.system,
+        builder: (context, child) => OfflineDim(on: offline, child: child!),
+        home: home,
       ),
-      home: HomePage(controller: controller),
+      child: HomePage(controller: controller),
     );
   }
+}
+
+/// Dims the whole app (offline power save). Touches pass through.
+class OfflineDim extends StatelessWidget {
+  const OfflineDim({super.key, required this.on, required this.child});
+  final bool on;
+  final Widget child;
+
+  /// How much darker the app gets.
+  static const dim = 0.35;
+
+  @override
+  Widget build(BuildContext context) => Stack(
+    children: [
+      child,
+      if (on)
+        const Positioned.fill(
+          child: IgnorePointer(
+            key: Key('offlineDim'),
+            child: ColoredBox(color: Color.fromRGBO(0, 0, 0, dim)),
+          ),
+        ),
+    ],
+  );
 }

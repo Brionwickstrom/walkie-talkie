@@ -5,6 +5,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import '../app/power_plan.dart';
 import '../core/transport.dart';
 import '../core/transport_manager.dart' show InboundTrip;
 import 'geo.dart';
@@ -234,18 +235,42 @@ class TripController extends ChangeNotifier {
 
   bool get visible => _visible;
 
+  /// Offline power save (v1.8.1): slower GPS and check-ins, no live
+  /// position updates, no map / weather downloads. SOS stays at full
+  /// speed and priority; quick messages, pins and check-ins still go out.
+  bool get offlineSaver => _offline;
+  bool _offline = false;
+  PowerPlan get plan => PowerPlan(saver: host.powerSaver, offline: _offline);
+
+  Future<void> setOfflineSaver(bool on) async {
+    if (on == _offline) return;
+    _offline = on;
+    tiles.online = plan.mapTileDownloads;
+    await _updateLocationNeed();
+    notifyListeners();
+  }
+
+  /// Check-in period in use (offline: slower, see [PowerPlan]).
+  int get checkInMinutesNow => plan.checkInMinutes(settings.checkInMinutes);
+
+  /// Battery saver switched (re-pick the GPS interval).
+  Future<void> onPowerChanged() => _updateLocationNeed();
+
   bool get _needLocation =>
       settings.tripMode || recorder.recording || sos.active != null || _visible;
 
   Duration get _wantedInterval {
     final now = _clock();
+    final p = plan;
     if (sos.active != null) return const Duration(seconds: 5);
     if (recorder.recording) {
-      return recorder.interval(now, saver: host.powerSaver);
+      return recorder.interval(now, saver: p.transportSaver);
     }
-    if (_visible) return const Duration(seconds: 5);
-    return Duration(seconds: host.powerSaver ? 60 : 20);
+    return p.gpsInterval(visible: _visible, sosActive: false);
   }
+
+  /// GPS interval asked for right now (tests / debug).
+  Duration? get locationInterval => _locInterval;
 
   Future<void> _updateLocationNeed() async {
     if (!_started) return;
@@ -289,6 +314,8 @@ class TripController extends ChangeNotifier {
 
   void _maybeSendLive() {
     if (!settings.tripMode) return;
+    // Offline power save: no live updates (check-ins still carry it).
+    if (!plan.liveLocation) return;
     final f = myFix;
     if (f == null) return;
     final now = _clock();
@@ -335,7 +362,7 @@ class TripController extends ChangeNotifier {
     sos.tick();
     _ticks++;
     if (settings.tripMode) {
-      final every = settings.checkInMinutes;
+      final every = checkInMinutesNow;
       if (every > 0 && myFix != null) {
         final last = _lastCheckIn;
         if (last == null || now.difference(last) >= Duration(minutes: every)) {
@@ -777,6 +804,7 @@ class TripController extends ChangeNotifier {
   }
 
   Future<void> maybeRefreshWeather() async {
+    if (!plan.weatherAutoRefresh) return;
     final t = _weatherTried;
     if (t != null &&
         DateTime.now().difference(t) < const Duration(minutes: 10)) {

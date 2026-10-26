@@ -3,6 +3,7 @@ import 'dart:collection';
 import 'dart:math';
 import 'dart:typed_data';
 
+import '../app/power_plan.dart';
 import '../lora/lora_transport.dart';
 
 import 'channel_crypto.dart';
@@ -153,8 +154,15 @@ class TransportManager {
   bool get powerSaver => _saver;
   bool _saver = false;
   static const saverHelloInterval = Duration(milliseconds: 2500);
-  Duration get currentHelloInterval =>
-      _saver ? saverHelloInterval : helloInterval;
+  Duration get currentHelloInterval => _offline
+      ? PowerPlan.offlineHello
+      : (_saver ? saverHelloInterval : helloInterval);
+
+  /// Offline power save (see [PowerPlan]): internet transports stopped,
+  /// every other transport in its strongest saver, slow hellos / beacons.
+  bool get offlineSaver => _offline;
+  bool _offline = false;
+  bool get _slow => _saver || _offline;
 
   /// How long [p] may stay silent before a link counts as dead: longer for
   /// phones that announced a slow (battery saver) hello.
@@ -270,6 +278,8 @@ class TransportManager {
     // not prevent the others from working.
     await Future.wait(
       _transports.map((t) async {
+        // Offline power save: the internet relay stays off.
+        if (_offline && t.kind == TransportKind.internet) return;
         try {
           await t.start(localNodeId: localNodeId, channel: scope);
         } catch (_) {
@@ -291,7 +301,7 @@ class TransportManager {
     _helloTimer = Timer.periodic(currentHelloInterval, (_) async {
       await sendHello();
       _maybeRadioHello();
-      if (!_saver) await sendPings();
+      if (!_slow) await sendPings();
       final now = _clock();
       final last = _lastBeacon;
       if (last == null ||
@@ -308,13 +318,46 @@ class TransportManager {
     _saver = on;
     for (final t in _transports) {
       try {
-        t.setPowerSaver(on);
+        t.setPowerSaver(_slow);
       } catch (_) {}
     }
     if (_running) {
       _startHelloTimer();
       await sendHello();
     }
+  }
+
+  /// Turn offline power save on/off: stops (or restarts) the internet
+  /// transports and puts the rest in their strongest saver. Stacks with
+  /// [setPowerSaver] (turning offline off goes back to the saver setting).
+  Future<void> setOfflineSaver(bool on) async {
+    if (on == _offline) return;
+    _offline = on;
+    mesh.timeoutScale = on ? 2 : 1;
+    for (final t in _transports) {
+      try {
+        t.setOfflineSaver(on);
+        t.setPowerSaver(_slow);
+      } catch (_) {}
+    }
+    if (_running) {
+      await Future.wait(
+        _transports.where((t) => t.kind == TransportKind.internet).map((
+          t,
+        ) async {
+          try {
+            if (on) {
+              await t.stop();
+            } else {
+              await t.start(localNodeId: localNodeId, channel: scope);
+            }
+          } catch (_) {}
+        }),
+      );
+      _startHelloTimer();
+      await sendHello();
+    }
+    if (!_transportChanges.isClosed) _transportChanges.add(null);
   }
 
   Future<void> stop() async {
@@ -401,7 +444,7 @@ class TransportManager {
     ControlMessage(
       ControlKind.hello,
       name: localName,
-      interval: _saver ? saverHelloInterval.inMilliseconds : null,
+      interval: _slow ? currentHelloInterval.inMilliseconds : null,
       x: helloExtras?.call() ?? const {},
       lanAddrs: [
         for (final t in _transports)

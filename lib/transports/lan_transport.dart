@@ -135,6 +135,15 @@ class LanTransport extends Transport {
 
   @override
   void setPowerSaver(bool on) => _saver = on;
+
+  /// Offline power save: no subnet sweeps. Broadcast / multicast / known
+  /// addresses keep working while the phone is on a network (with no
+  /// network there is nothing to send on anyway).
+  bool _offline = false;
+  bool get sweepsAllowed => enableSweep && !_offline;
+
+  @override
+  void setOfflineSaver(bool on) => _offline = on;
   static const Duration _ifaceRefresh = Duration(seconds: 5);
   static const Duration _saveEvery = Duration(seconds: 30);
 
@@ -599,7 +608,7 @@ class LanTransport extends Transport {
   }
 
   void _maybeSweep(DateTime now) {
-    if (!enableSweep || _sweeping || _ifaces.isEmpty) return;
+    if (!sweepsAllowed || _sweeping || _ifaces.isEmpty) return;
     if (_hasRecentPeer) return;
     final since = _lastPeerHeard ?? _startedAt;
     if (since == null || now.difference(since) < sweepAfter) return;

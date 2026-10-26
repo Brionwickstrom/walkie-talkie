@@ -194,13 +194,16 @@ class BleTransport extends Transport {
       // Battery saver: scan in short bursts (duty cycle) instead of
       // continuously. Existing links stay up; new phones take longer to
       // be found over Bluetooth.
-      final cycle = _links.isEmpty ? saverScanCycleIdle : saverScanCycleLinked;
+      final cycle = _offline
+          ? (_links.isEmpty ? offlineScanCycleIdle : offlineScanCycleLinked)
+          : (_links.isEmpty ? saverScanCycleIdle : saverScanCycleLinked);
+      final burst = _offline ? offlineScanOn : saverScanOn;
       final since = _lastScanStart == null
           ? null
           : now.difference(_lastScanStart!);
       try {
         if (fbp.FlutterBluePlus.isScanningNow) {
-          if (since == null || since >= saverScanOn) {
+          if (since == null || since >= burst) {
             await fbp.FlutterBluePlus.stopScan();
           }
         } else if (since == null || since >= cycle) {
@@ -277,8 +280,24 @@ class BleTransport extends Transport {
   @override
   void setPowerSaver(bool on) => _saver = on;
 
+  /// Offline power save: even shorter bursts, longer gaps, low-power scan
+  /// mode. (Advertising already uses Android's low-power default.)
+  bool _offline = false;
+  bool get offlineSaver => _offline;
+  static const offlineScanOn = Duration(seconds: 5);
+  static const offlineScanCycleIdle = Duration(seconds: 45);
+  static const offlineScanCycleLinked = Duration(seconds: 120);
+
+  @override
+  void setOfflineSaver(bool on) {
+    _offline = on;
+    if (on) _saver = true;
+  }
+
   Future<void> _startCentral() async {
-    final mode = _saver
+    final mode = _offline
+        ? fbp.AndroidScanMode.lowPower
+        : _saver
         ? (_links.isEmpty
               ? fbp.AndroidScanMode.balanced
               : fbp.AndroidScanMode.lowPower)

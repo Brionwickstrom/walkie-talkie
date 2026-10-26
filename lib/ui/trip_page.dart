@@ -29,8 +29,16 @@ GeoPoint gp(LatLng p) => GeoPoint(p.latitude, p.longitude);
 /// with distance and direction, trails, weather, network and offline maps.
 /// Works online and offline (every message takes whatever path reaches).
 class TripPage extends StatefulWidget {
-  const TripPage({super.key, required this.controller, this.focus});
+  const TripPage({
+    super.key,
+    required this.controller,
+    this.focus,
+    this.onFullScreen,
+  });
   final WalkieController controller;
+
+  /// The map went full screen / back (the home screen hides its bars).
+  final ValueChanged<bool>? onFullScreen;
 
   /// Center the map here when opened (e.g. from an SOS alert).
   final GeoPoint? focus;
@@ -47,7 +55,16 @@ class TripPageState extends State<TripPage> {
   bool _mapReady = false;
   bool _follow = true;
   bool _backtrack = false;
+  bool _full = false;
   Track? _shown;
+
+  bool get fullScreen => _full;
+
+  void setFullScreen(bool on) {
+    if (on == _full) return;
+    setState(() => _full = on);
+    widget.onFullScreen?.call(on);
+  }
 
   @override
   void initState() {
@@ -117,16 +134,40 @@ class TripPageState extends State<TripPage> {
             }
           });
         }
-        return LayoutBuilder(
-          builder: (context, box) {
-            final mapH = (box.maxHeight * 0.48).clamp(200.0, 520.0);
-            return Column(
-              children: [
-                SizedBox(height: mapH, child: _mapView(context, trip)),
-                Expanded(child: _panel(context, trip)),
-              ],
-            );
-          },
+        final active = trip.sos.active;
+        return TripLayout(
+          full: _full,
+          onFull: setFullScreen,
+          map: _mapView(context, trip),
+          panel: _panel(context, trip),
+          sos: active != null
+              ? SosActivePill(
+                  acks: active.acks.length,
+                  onTap: () => _activeSosSheet(context, trip),
+                )
+              : SosSlideButton(onSend: trip.startSos),
+          controls: _mapControls(context, trip),
+          fullControls: _zoomControls(),
+          topLeft: [
+            OfflineSaverChip(
+              on: c.settings.offlineSaver,
+              onTap: () => _toggleOffline(context),
+            ),
+            if (trip.myFix == null)
+              Card(
+                margin: EdgeInsets.zero,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  child: Text(
+                    'Waiting for GPS...',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              ),
+          ],
         );
       },
     );
@@ -142,7 +183,6 @@ class TripPageState extends State<TripPage> {
         me?.pos ??
         (trip.people.values.isNotEmpty ? trip.people.values.first.pos : null) ??
         (trip.pins.isNotEmpty ? trip.pins.first.pos : null);
-    final cs = Theme.of(context).colorScheme;
     final track = _shown ?? trip.currentTrack;
     final lines = <Polyline>[
       for (final s in trip.sharedTracks.values)
@@ -306,64 +346,96 @@ class TripPageState extends State<TripPage> {
             ),
           ],
         ),
-        Positioned(
-          right: 8,
-          top: 8,
-          child: Column(
-            children: [
-              _mapButton(
-                _follow ? Icons.my_location : Icons.location_searching,
-                _follow ? 'Following you' : 'Center on me',
-                () {
-                  setState(() => _follow = true);
-                  final f = trip.myFix;
-                  if (f != null) {
-                    _map.move(
-                      ll(f.pos),
-                      _map.camera.zoom < 12 ? 15 : _map.camera.zoom,
-                    );
-                  }
-                },
-                color: _follow ? cs.primary : null,
-              ),
-              _mapButton(
-                Icons.layers,
-                'Map style',
-                () => _styleSheet(context, trip),
-              ),
-              _mapButton(
-                Icons.download_for_offline,
-                'Offline maps',
-                () => _openOffline(context, trip),
-              ),
-              _mapButton(
-                Icons.add_location_alt,
-                'Drop a pin here',
-                () => _addPin(context, trip, gp(_map.camera.center)),
-              ),
-            ],
-          ),
-        ),
-        if (me == null)
-          Positioned(
-            left: 8,
-            top: 8,
-            child: Card(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 6,
-                ),
-                child: Text(
-                  'Waiting for GPS...',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ),
-            ),
-          ),
       ],
     );
   }
+
+  List<Widget> _mapControls(BuildContext context, TripController trip) {
+    final cs = Theme.of(context).colorScheme;
+    return [
+      RoundMapButton(
+        icon: _follow ? Icons.my_location : Icons.location_searching,
+        tip: _follow ? 'Following you' : 'Center on me',
+        onTap: () {
+          setState(() => _follow = true);
+          final f = trip.myFix;
+          if (f != null && _mapReady) {
+            _map.move(ll(f.pos), _map.camera.zoom < 12 ? 15 : _map.camera.zoom);
+          }
+        },
+        color: _follow ? cs.primary : null,
+      ),
+      RoundMapButton(
+        icon: Icons.layers,
+        tip: 'Map style',
+        onTap: () => _styleSheet(context, trip),
+      ),
+      RoundMapButton(
+        icon: Icons.download_for_offline,
+        tip: 'Offline maps',
+        onTap: () => _openOffline(context, trip),
+      ),
+      RoundMapButton(
+        icon: Icons.add_location_alt,
+        tip: 'Drop a pin here',
+        onTap: () => _addPin(context, trip, gp(_map.camera.center)),
+      ),
+    ];
+  }
+
+  List<Widget> _zoomControls() => [
+    RoundMapButton(icon: Icons.add, tip: 'Zoom in', onTap: () => _zoom(1)),
+    RoundMapButton(icon: Icons.remove, tip: 'Zoom out', onTap: () => _zoom(-1)),
+  ];
+
+  void _zoom(double by) {
+    if (!_mapReady) return;
+    final cam = _map.camera;
+    _map.move(cam.center, (cam.zoom + by).clamp(2.0, 19.0));
+  }
+
+  Future<void> _toggleOffline(BuildContext context) async {
+    final on = !c.settings.offlineSaver;
+    await c.setOfflineSaver(on);
+    if (!context.mounted) return;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(
+        content: Text(
+          on
+              ? 'Offline power save on: no internet relay, slower searching '
+                    'and GPS, dim screen. Talk, relay, radio and SOS still work.'
+              : 'Offline power save off.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _activeSosSheet(BuildContext context, TripController trip) =>
+      showAppSheet<void>(
+        context: context,
+        builder: (ctx) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: ListenableBuilder(
+              listenable: trip,
+              builder: (ctx, _) {
+                final a = trip.sos.active;
+                if (a == null) {
+                  return const ListTile(title: Text('SOS cancelled.'));
+                }
+                return ActiveSosCard(
+                  sos: a,
+                  nameOf: c.nameOf,
+                  onCancel: () {
+                    trip.cancelSos();
+                    Navigator.pop(ctx);
+                  },
+                );
+              },
+            ),
+          ),
+        ),
+      );
 
   Widget _label(String s, Color color) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
@@ -380,25 +452,6 @@ class TripPageState extends State<TripPage> {
         fontSize: 10,
         color: Colors.black87,
         fontWeight: FontWeight.w600,
-      ),
-    ),
-  );
-
-  Widget _mapButton(
-    IconData icon,
-    String tip,
-    VoidCallback onTap, {
-    Color? color,
-  }) => Padding(
-    padding: const EdgeInsets.only(bottom: 6),
-    child: Material(
-      color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.92),
-      shape: const CircleBorder(),
-      elevation: 2,
-      child: IconButton(
-        tooltip: tip,
-        icon: Icon(icon, color: color),
-        onPressed: onTap,
       ),
     ),
   );
@@ -700,9 +753,11 @@ class TripPageState extends State<TripPage> {
       ),
       children: [
         if (active != null)
-          ActiveSosCard(sos: active, nameOf: c.nameOf, onCancel: trip.cancelSos)
-        else
-          SosButton(onSend: trip.startSos),
+          ActiveSosCard(
+            sos: active,
+            nameOf: c.nameOf,
+            onCancel: trip.cancelSos,
+          ),
         for (final s in trip.sos.incoming.where((s) => !s.cancelled))
           Card(
             color: s.ackedAt == null ? cs.errorContainer : null,
@@ -761,6 +816,35 @@ class TripPageState extends State<TripPage> {
           value: trip.settings.tripMode,
           onChanged: (v) => trip.update((s) => s.tripMode = v),
         ),
+        SwitchListTile(
+          key: const Key('tripOfflineSaver'),
+          contentPadding: EdgeInsets.zero,
+          secondary: Icon(
+            Icons.energy_savings_leaf,
+            color: c.settings.offlineSaver ? Colors.green : null,
+          ),
+          title: const Text('Offline power save'),
+          subtitle: Text(
+            c.settings.offlineSaver
+                ? 'On: internet relay, live location and map downloads off; '
+                      'GPS every ${trip.plan.gpsInterval(visible: false, sosActive: false).inSeconds} s in the background'
+                      '${trip.settings.checkInMinutes > 0 ? ', check-in every ${trip.checkInMinutesNow} min' : ''}. '
+                      'Talk, relay, radio, SOS and quick messages still work.'
+                : 'For hikes with no signal: longest battery life '
+                      '(about 1.5-2x standby, estimate).',
+          ),
+          value: c.settings.offlineSaver,
+          onChanged: (v) => c.setOfflineSaver(v),
+        ),
+        if (c.settings.offlineSaver)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              icon: const Icon(Icons.radar, size: 18),
+              label: const Text('Look for nearby phones now'),
+              onPressed: c.scanNearbyNow,
+            ),
+          ),
         Text('Quick messages', style: theme.textTheme.titleSmall),
         CannedBar(trip: trip, onEdit: () => _editCanned(context, trip)),
         const Divider(),

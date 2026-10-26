@@ -782,3 +782,29 @@ build releases on another machine or change keys casually. Moving to a
 dedicated release keystore (`key.properties` + `.jks`, never committed) is a
 planned later step and will require one manual uninstall/reinstall on each
 phone.
+
+## v1.8.1: full-screen map, guarded SOS, Offline power save
+
+* **Full-screen map:** the Trip map is bigger by default (60% of the
+  screen) and the new full-screen button (top right) opens it edge to edge,
+  hiding the panel, app bar and tab bar while keeping clear of the status
+  and navigation bars. Recenter, map style, offline maps, pins and zoom
+  stay on the map; the exit button or the back gesture leaves full screen.
+* **Smaller SOS that is hard to press by accident:** a small red SOS
+  button in the map's bottom-left corner (also in full screen). Slide it
+  right to arm, then keep holding 3 s while a ring fills; haptics on arm
+  and send. A tap only shows "Slide and hold to send SOS"; pocket touches
+  do nothing. While an SOS is on, the corner shows "SOS ON" (tap for who
+  answered and Cancel); the panel still shows the full SOS card.
+* **Offline power save** (Settings > Off-grid, or the leaf chip / switch
+  on the Trip tab), for when you know there is no internet: the internet
+  relay and friend relay rooms close (no reconnects on network changes),
+  LAN subnet sweeps stop, Wi-Fi Direct discovery runs only on "Look for
+  nearby phones now", Bluetooth scans in short low-power bursts, hellos /
+  mesh beacons every 4 s, friend presence every 7 s, GPS every 90 s in the
+  background (15 s on the Trip tab), check-ins doubled (max 15 min), live
+  location and map / weather downloads off, and the app turns dark and
+  dimmed (no screen-on lock). Push-to-talk, receiving, the phone mesh
+  relay, the Meshtastic radio, SOS (full speed and priority) and quick
+  messages keep working. Stacks with Battery saver. Rough effect: about
+  1.5-2x the standby time of Normal (estimate, varies by phone).

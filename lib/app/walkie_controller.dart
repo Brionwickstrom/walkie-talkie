@@ -11,6 +11,7 @@ import 'package:cryptography/cryptography.dart' show SimpleKeyPair;
 import 'package:permission_handler/permission_handler.dart';
 
 import '../audio/audio_engine.dart';
+import 'power_plan.dart';
 import '../audio/codec.dart';
 import '../audio/codec2_ffi.dart';
 import '../audio/opus_voice_codec.dart';
@@ -530,6 +531,7 @@ class WalkieController extends ChangeNotifier {
       }),
     );
     await manager.setPowerSaver(settings.powerSaver);
+    await manager.setOfflineSaver(settings.offlineSaver);
     await manager.start();
     _subs.add(radioDevice.changes.listen((_) => notifyListeners()));
     radioDevice.start();
@@ -550,6 +552,7 @@ class WalkieController extends ChangeNotifier {
 
     // Friends: presence, private talk.
     friendLinks.setPowerSaver(settings.powerSaver);
+    friendLinks.setOfflineSaver(settings.offlineSaver);
     friendLinks.start();
     _subs.add(friendLinks.changes.listen((_) => notifyListeners()));
     _subs.add(friendLinks.inbound.listen(_onFriendFrame));
@@ -649,6 +652,7 @@ class WalkieController extends ChangeNotifier {
             'WalkieTalkie/$ver (+https://github.com/Brionwickstrom/walkie-talkie)',
       );
       await t.start();
+      await t.setOfflineSaver(settings.offlineSaver);
       trip = t;
     } catch (e) {
       debugPrint('trip: $e');
@@ -1036,6 +1040,43 @@ class WalkieController extends ChangeNotifier {
     await settingsStore.save(settings);
     await manager.setPowerSaver(on);
     friendLinks.setPowerSaver(on);
+    await trip?.onPowerChanged();
+  }
+
+  /// Offline power save on (the app theme listens: dim + dark).
+  late final ValueNotifier<bool> offlineUi = ValueNotifier(
+    settings.offlineSaver,
+  );
+
+  /// What runs in the current battery mode.
+  PowerPlan get powerPlan =>
+      PowerPlan(saver: settings.powerSaver, offline: settings.offlineSaver);
+
+  /// Offline power save (Settings > Off-grid, or the Trip tab chip): the
+  /// internet relay and friend relay rooms close, discovery slows right
+  /// down, live location stops and the app goes dim and dark. Talk,
+  /// receive, phone relay, the radio, SOS and quick messages keep working.
+  Future<void> setOfflineSaver(bool on) async {
+    if (settings.offlineSaver == on) return;
+    settings.offlineSaver = on;
+    offlineUi.value = on;
+    notifyListeners();
+    await settingsStore.save(settings);
+    await manager.setOfflineSaver(on);
+    friendLinks.setOfflineSaver(on);
+    await trip?.setOfflineSaver(on);
+    if (on) {
+      for (final conv in _live.keys.toList()) {
+        await stopLiveLocation(conv);
+      }
+    }
+    notifyListeners();
+  }
+
+  /// "Look for phones now" (offline power save keeps discovery slow).
+  void scanNearbyNow() {
+    _wifiDirect?.discoverNow();
+    unawaited(manager.sendHello());
   }
 
   Future<void> setUrgentLoud(bool on) async {
@@ -2483,6 +2524,12 @@ class WalkieController extends ChangeNotifier {
   Future<void> shareLocation(String conv, {Duration? live}) async {
     final l = await _locate();
     if (l == null) return;
+    if (live != null && !powerPlan.liveLocation) {
+      _notice(
+        'Live location is off in Offline power save. Sent where you are now.',
+      );
+      live = null;
+    }
     if (live == null) {
       await _sendChat(
         conv,

@@ -228,11 +228,49 @@ class WifiDirectTransport extends Transport {
     _setStatus(TransportStatus.running, 'searching');
   }
 
-  Duration get _discoveryInterval =>
-      Duration(seconds: _inGroup ? 120 : (_saver ? 90 : 30));
+  Duration get _discoveryInterval => _burstUntil != null
+      ? const Duration(seconds: 10)
+      : _offline
+      ? const Duration(minutes: 15)
+      : Duration(seconds: _inGroup ? 120 : (_saver ? 90 : 30));
+
+  /// Offline power save: discovery only on demand ([discoverNow]).
+  bool _offline = false;
+  bool get offlineSaver => _offline;
+  DateTime? _burstUntil;
+  Timer? _burstTimer;
+
+  /// Current discovery period (tests / debug).
+  Duration get discoveryInterval => _discoveryInterval;
+
+  @override
+  void setOfflineSaver(bool on) {
+    _offline = on;
+    if (on) _saver = true;
+    if (_status == TransportStatus.running) {
+      unawaited(_platform.setDiscoveryInterval(_discoveryInterval));
+    }
+  }
+
+  /// Look for Wi-Fi Direct phones now (fast discovery for [forTime]).
+  void discoverNow({Duration forTime = const Duration(seconds: 45)}) {
+    _burstUntil = DateTime.now().add(forTime);
+    _burstTimer?.cancel();
+    _burstTimer = Timer(forTime, () {
+      _burstUntil = null;
+      if (_status == TransportStatus.running) {
+        unawaited(_platform.setDiscoveryInterval(_discoveryInterval));
+      }
+    });
+    if (_status == TransportStatus.running) {
+      unawaited(_platform.setDiscoveryInterval(_discoveryInterval));
+    }
+  }
 
   @override
   Future<void> stop() async {
+    _burstTimer?.cancel();
+    _burstUntil = null;
     await _eventsSub?.cancel();
     _eventsSub = null;
     _closeSocket();

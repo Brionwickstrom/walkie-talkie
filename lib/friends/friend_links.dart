@@ -188,12 +188,40 @@ class FriendLinks {
     if (_running) _restartTimer();
   }
 
+  /// Offline power save: friend relay rooms closed (no internet sockets),
+  /// presence every [offlinePresenceInterval] over the nearby links.
+  static const offlinePresenceInterval = Duration(seconds: 7);
+  bool _offline = false;
+  bool get offlineSaver => _offline;
+
+  /// Friend relay rooms open right now (tests / debug).
+  int get openRelays => _relays.length;
+
+  void setOfflineSaver(bool on) {
+    if (on == _offline) return;
+    _offline = on;
+    if (on) {
+      for (final r in _relays.keys.toList()) {
+        _closeRelay(r);
+      }
+    } else if (_running) {
+      for (final f in _friends.values) {
+        _openRelay(f.key);
+      }
+      for (final k in _pending.values) {
+        _openRelay(k);
+      }
+    }
+    if (_running) _restartTimer();
+  }
+
+  Duration get currentPresenceInterval => _offline
+      ? offlinePresenceInterval
+      : (_saver ? saverPresenceInterval : presenceInterval);
+
   void _restartTimer() {
     _timer?.cancel();
-    _timer = Timer.periodic(
-      _saver ? saverPresenceInterval : presenceInterval,
-      (_) => sendPresence(),
-    );
+    _timer = Timer.periodic(currentPresenceInterval, (_) => sendPresence());
   }
 
   void setFriends(List<Friend> list) {
@@ -231,7 +259,7 @@ class FriendLinks {
 
   void _openRelay(PairKey k) {
     final f = relayFactory;
-    if (f == null || _relays.containsKey(k.room)) return;
+    if (f == null || _offline || _relays.containsKey(k.room)) return;
     final t = f(k.room);
     _relays[k.room] = t;
     _relaySubs[k.room] = t.frames.listen(handle);
