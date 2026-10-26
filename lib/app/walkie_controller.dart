@@ -935,6 +935,9 @@ class WalkieController extends ChangeNotifier {
 
   /// Send a mic packet and keep it in the history (marked "You").
   void _sendAndKeep(Uint8List opus) {
+    // Never on the channel while not talking on it (or while talking
+    // privately to a friend).
+    if (privateTalkTo != null) return;
     manager.sendAudio(opus);
     history?.addPacket(
       scope: scope,
@@ -1785,8 +1788,16 @@ class WalkieController extends ChangeNotifier {
   Future<void> talkToFriend(int id, bool down) async {
     if (down) {
       if (transmitting || recording != null) return;
-      if (!friendLinks.isOnline(id)) {
-        _notice('${friendName(id)} is offline. Send a voice message instead.');
+      // Private talk only ever goes out sealed with the pair key over the
+      // friend link; there is no fallback to the channel.
+      if (!canTalkPrivately(id)) {
+        _notice(
+          friendLinks.isFriend(id)
+              ? 'Not connected privately yet: ${friendName(id)} is not '
+                    'reachable. Send a voice message instead.'
+              : 'Not connected privately yet: you are not friends on both '
+                    'phones.',
+        );
         return;
       }
       privateTalkTo = id;
@@ -1815,9 +1826,13 @@ class WalkieController extends ChangeNotifier {
     }
   }
 
+  /// The friend is paired (pair key) and heard recently on some path.
+  bool canTalkPrivately(int id) =>
+      friendLinks.friend(id) != null && friendLinks.isOnline(id);
+
   void _sendPrivate(Uint8List opus) {
     final id = privateTalkTo;
-    if (id == null) return;
+    if (id == null || !transmitting) return;
     unawaited(
       friendLinks.send(
         id,

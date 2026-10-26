@@ -362,6 +362,9 @@ class FriendLinks {
         final o = k.open(f);
         if (o == null) continue;
         final msg = o.control;
+        // They have the key: count them as heard, so private talk works
+        // right away in both directions once the friend is added here.
+        _seen.putIfAbsent(f.senderId, () => {})[inb.transport] = _clock();
         if (msg?.kind == ControlKind.fhello &&
             !_friends.containsKey(f.senderId) &&
             _pairedSeen.add('${k.encoded}/${f.senderId}')) {

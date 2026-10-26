@@ -345,6 +345,14 @@ app or "Stop" on the notification stops all audio. Voice messages are also
 remembered by id across restarts (shown/announced once, every copy acked),
 and senders give up on a phone after 30 unanswered attempts.
 
+Private talk heard by everyone (same root cause): with the mic stuck on for
+the channel, "Hold to talk" to a friend found the mic "already on" and did
+not re-route it, so the voice kept going to the whole channel. Now a new
+talk session always restarts the mic for its own destination, channel audio
+is never sent while talking privately, and 1:1 talk is refused ("Not
+connected privately yet") unless the friend is paired and heard on a
+pair-key-sealed link; there is no channel fallback.
+
 ## Android <-> iPhone limits (important)
 * **No shared Wi-Fi Direct.** Android's Wi-Fi Direct / Wi-Fi Aware and
   Apple's AWDL / MultipeerConnectivity do not interoperate. Google Nearby

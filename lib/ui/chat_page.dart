@@ -282,7 +282,8 @@ class FriendTalkBar extends StatelessWidget {
                         : online
                         ? 'Online${via != null ? ' via $via' : ''} · '
                               'end-to-end encrypted'
-                        : 'Offline · messages wait up to 24 h',
+                        : 'Not connected privately yet · messages wait '
+                              'up to 24 h',
                     style: TextStyle(
                       color: hearing ? Colors.orange.shade800 : null,
                       fontWeight: hearing ? FontWeight.w600 : null,
