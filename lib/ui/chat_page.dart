@@ -5,6 +5,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../app/walkie_controller.dart';
 import 'chat_view.dart';
 import 'home_view.dart';
+import 'sheets.dart';
 
 /// Chat for the current channel, or with one friend (private, with a
 /// hold-to-talk button and voice messages).
@@ -37,7 +38,7 @@ class _ChatPageState extends State<ChatPage> {
   Future<void> _attach() async {
     final conv = widget.conv;
     final live = c.isSharingLive(conv);
-    await showModalBottomSheet<void>(
+    await showAppSheet<void>(
       context: context,
       builder: (ctx) => SafeArea(
         child: Column(

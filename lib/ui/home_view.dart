@@ -283,122 +283,126 @@ class HomeBody extends StatelessWidget {
   Widget build(BuildContext context) {
     final here = people.where((p) => p.here).length + 1;
     final theme = Theme.of(context);
-    return Column(
-      children: [
-        ...banners,
-        StatusRow(
-          links: links,
-          internet: internet,
-          showDetails: showDetails,
-          onToggleDetails: onToggleDetails,
-        ),
-        if (showDetails && details.isNotEmpty)
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 120),
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: SelectableText(
-                details.join('\n'),
-                style: theme.textTheme.bodySmall?.copyWith(
-                  fontFamily: 'monospace',
-                  fontSize: 11,
-                  color: Colors.grey,
-                ),
-              ),
-            ),
+    // Edge to edge (Android 15+): keep the talk button above the
+    // navigation bar and nothing under the status bar.
+    return SafeArea(
+      child: Column(
+        children: [
+          ...banners,
+          StatusRow(
+            links: links,
+            internet: internet,
+            showDetails: showDetails,
+            onToggleDetails: onToggleDetails,
           ),
-        ?notice,
-        ?recent,
-        if (error != null)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            child: Text(
-              error!,
-              style: TextStyle(color: theme.colorScheme.error),
-            ),
-          ),
-        Expanded(
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(8, 4, 8, 6),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.groups,
-                      size: 22,
-                      color: theme.colorScheme.primary,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        '$here on $channelLabel',
-                        key: const Key('people-count'),
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                    if (isPrivate)
-                      Icon(
-                        Icons.lock,
-                        size: 18,
-                        color: theme.colorScheme.primary,
-                      ),
-                  ],
-                ),
-              ),
-              PersonCard(person: me, onEdit: onEditMe),
-              if (people.isEmpty)
-                Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 24,
-                    vertical: 24,
+          if (showDetails && details.isNotEmpty)
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 120),
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: SelectableText(
+                  details.join('\n'),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontFamily: 'monospace',
+                    fontSize: 11,
+                    color: Colors.grey,
                   ),
-                  child: Column(
+                ),
+              ),
+            ),
+          ?notice,
+          ?recent,
+          if (error != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              child: Text(
+                error!,
+                style: TextStyle(color: theme.colorScheme.error),
+              ),
+            ),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 4, 8, 6),
+                  child: Row(
                     children: [
                       Icon(
-                        Icons.person_search,
-                        size: 40,
-                        color: theme.colorScheme.outline,
+                        Icons.groups,
+                        size: 22,
+                        color: theme.colorScheme.primary,
                       ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Nobody on $channelLabel yet.\nOthers will appear '
-                        'here automatically.',
-                        textAlign: TextAlign.center,
-                        style: theme.textTheme.bodyLarge,
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          '$here on $channelLabel',
+                          key: const Key('people-count'),
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
                       ),
-                      const SizedBox(height: 6),
-                      Text(
-                        'Same Wi-Fi, Bluetooth nearby or the internet all '
-                        'work. Voice messages you record now are delivered '
-                        'when someone shows up.',
-                        textAlign: TextAlign.center,
-                        style: theme.textTheme.bodySmall,
-                      ),
+                      if (isPrivate)
+                        Icon(
+                          Icons.lock,
+                          size: 18,
+                          color: theme.colorScheme.primary,
+                        ),
                     ],
                   ),
                 ),
-              for (final p in people)
-                PersonCard(
-                  person: p,
-                  showDebug: showDetails,
-                  onRing: () => onRing(p),
-                  onBeep: () => onBeep(p),
-                  onMessage: () => onMessage(p),
-                  onLongPress: onVolume == null ? null : () => onVolume!(p),
-                ),
-            ],
+                PersonCard(person: me, onEdit: onEditMe),
+                if (people.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 24,
+                      vertical: 24,
+                    ),
+                    child: Column(
+                      children: [
+                        Icon(
+                          Icons.person_search,
+                          size: 40,
+                          color: theme.colorScheme.outline,
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Nobody on $channelLabel yet.\nOthers will appear '
+                          'here automatically.',
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.bodyLarge,
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          'Same Wi-Fi, Bluetooth nearby or the internet all '
+                          'work. Voice messages you record now are delivered '
+                          'when someone shows up.',
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.bodySmall,
+                        ),
+                      ],
+                    ),
+                  ),
+                for (final p in people)
+                  PersonCard(
+                    person: p,
+                    showDebug: showDetails,
+                    onRing: () => onRing(p),
+                    onBeep: () => onBeep(p),
+                    onMessage: () => onMessage(p),
+                    onLongPress: onVolume == null ? null : () => onVolume!(p),
+                  ),
+              ],
+            ),
           ),
-        ),
-        ?queued,
-        actions,
-        const SizedBox(height: 6),
-        ptt,
-        const SizedBox(height: 12),
-      ],
+          ?queued,
+          actions,
+          const SizedBox(height: 6),
+          ptt,
+          const SizedBox(height: 12),
+        ],
+      ),
     );
   }
 }

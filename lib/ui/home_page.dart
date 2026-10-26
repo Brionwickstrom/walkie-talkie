@@ -15,6 +15,7 @@ import 'friends_page.dart';
 import 'history_page.dart';
 import 'home_view.dart';
 import 'inbox_page.dart';
+import 'sheets.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key, required this.controller});
@@ -391,7 +392,7 @@ class _HomePageState extends State<HomePage> {
 
   /// Long-press on a person: their volume (0-200 %), beep, ring, message.
   Future<void> _openPersonSheet(BuildContext context, PersonView p) async {
-    await showModalBottomSheet<void>(
+    await showAppSheet<void>(
       context: context,
       builder: (ctx) => ListenableBuilder(
         listenable: c,
@@ -629,7 +630,7 @@ class _HomePageState extends State<HomePage> {
     int peerId,
     String name,
   ) async {
-    await showModalBottomSheet<void>(
+    await showAppSheet<void>(
       context: context,
       builder: (ctx) => ListenableBuilder(
         listenable: c,
@@ -661,7 +662,7 @@ class _HomePageState extends State<HomePage> {
   Future<void> _openSettings(BuildContext context) async {
     final nameCtl = TextEditingController(text: c.settings.customName ?? '');
     final relayCtl = TextEditingController(text: c.relayOverride);
-    await showModalBottomSheet<void>(
+    await showAppSheet<void>(
       context: context,
       isScrollControlled: true,
       builder: (ctx) => ListenableBuilder(
@@ -1410,7 +1411,7 @@ Future<void> showPrivacySheet(BuildContext context, WalkieController c) async {
   var show = false;
   var makeAdmin = true;
   String? err;
-  await showModalBottomSheet<void>(
+  await showAppSheet<void>(
     context: context,
     isScrollControlled: true,
     builder: (ctx) => StatefulBuilder(

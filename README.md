@@ -371,6 +371,11 @@ off, so 1.5.2 refuses to play it:
   by the activity and the listening service), so one isolate owns
   playback. Seen ids are one file (`seen.json`) per messenger, written by
   that isolate; nothing uses a SharedPreferences cache for them.
+* Edge to edge (Android 15+): Settings and every other bottom sheet open
+  below the status bar and keep their last row above the navigation bar
+  (`showAppSheet`). The home screen keeps the talk button above the nav bar
+  (`SafeArea` in `HomeBody`), and History's list pads for the nav bar.
+  `test/insets_test` covers this with a 24 px status bar and 48 px nav bar.
 * Settings > Messages: "Playback log" (what played, from whom, via which
   link, and why audio was blocked; also in Details) and "Clear all messages
   and queues".
