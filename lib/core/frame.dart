@@ -17,7 +17,11 @@ enum FrameType {
   /// the real type and payload are inside the ciphertext and the channel
   /// field holds a key-derived tag. v1.2.x phones do not know this type and
   /// drop it.
-  sealed(4);
+  sealed(4),
+
+  /// Off-grid mesh: a beacon, or another phone's frame passed on by a relay
+  /// (see `core/mesh.dart`). v1.6.0+; older phones drop it.
+  mesh(5);
 
   const FrameType(this.code);
   final int code;
@@ -165,8 +169,9 @@ enum ControlKind {
 
 /// Feature level we announce in hello and friend presence `x.v`:
 /// 15 = v1.5.0-1.5.3 (friends, chat, channel names, moderation),
-/// 16 = v1.5.4 (private reply on the home screen). Absent on older phones.
-const int featureLevel = 16;
+/// 16 = v1.5.4 (private reply on the home screen), 17 = v1.6.0 (mesh relay,
+/// Wi-Fi Direct). Absent on older phones.
+const int featureLevel = 17;
 
 /// Friends need at least this to talk privately (v1.5.4: their big talk
 /// button replies privately instead of to the whole channel).

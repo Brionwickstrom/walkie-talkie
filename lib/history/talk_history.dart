@@ -16,9 +16,13 @@ class TalkTake {
     required this.bytes,
     this.mine = false,
     this.heard = false,
+    this.hops = 1,
   });
 
   final int id;
+
+  /// Radio hops it travelled (2+ = relayed by other phones, v1.6.0).
+  final int hops;
 
   /// Channel number, or a private-channel scope (see TransportManager).
   final int scope;
@@ -44,6 +48,7 @@ class TalkTake {
     'b': bytes,
     if (mine) 'me': true,
     if (heard) 'h': true,
+    if (hops > 1) 'hp': hops,
   };
 
   static TalkTake? fromJson(Object? j) {
@@ -59,6 +64,7 @@ class TalkTake {
         bytes: (j['b'] as num?)?.toInt() ?? 0,
         mine: j['me'] == true,
         heard: j['h'] == true,
+        hops: (j['hp'] as num?)?.toInt() ?? 1,
       );
     } catch (_) {
       return null;
@@ -81,6 +87,7 @@ class _OpenTake {
   final DateTime start;
   bool heard;
   final bool mine;
+  int hops = 1;
   final List<Uint8List> packets = [];
   DateTime last = DateTime.now();
 }
@@ -151,6 +158,7 @@ class TalkHistory {
     required Uint8List opus,
     bool heard = false,
     bool mine = false,
+    int hops = 1,
   }) {
     final now = _clock();
     var t = _open[sender];
@@ -163,6 +171,7 @@ class TalkHistory {
     if (name.isNotEmpty) t.name = name;
     t.packets.add(opus);
     t.last = now;
+    if (hops > t.hops) t.hops = hops;
   }
 
   bool isRecording(int sender) => _open.containsKey(sender);
@@ -189,6 +198,7 @@ class TalkHistory {
       bytes: body.length,
       mine: t.mine,
       heard: t.mine || t.heard,
+      hops: t.hops,
     );
     _takes.add(take);
     _save(() async {

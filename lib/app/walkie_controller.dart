@@ -34,6 +34,7 @@ import '../transports/lan_transport.dart';
 import '../transports/mdns_discovery.dart';
 import '../transports/relay_socket.dart';
 import '../transports/relay_transport.dart';
+import '../transports/wifi_direct_transport.dart';
 import 'call_signs.dart';
 import 'config.dart';
 import 'playback_log.dart';
@@ -89,6 +90,10 @@ class WalkieController extends ChangeNotifier {
          connector: RelayConnector.platform(),
        ) {
     name = settings.name;
+    final wd = Platform.isAndroid
+        ? (WifiDirectTransport()..enabled = settings.wifiDirect)
+        : null;
+    _wifiDirect = wd;
     manager = TransportManager(
       transports: [
         LanTransport(
@@ -98,6 +103,7 @@ class WalkieController extends ChangeNotifier {
               : const LanPlatform(),
           store: const SharedPrefsLanPeerStore(),
         ),
+        ?wd,
         BleTransport(),
         _relay,
       ],
@@ -106,6 +112,14 @@ class WalkieController extends ChangeNotifier {
       channel: settings.channel,
       channelKey: channelKey,
     );
+    manager.relayForOthers = settings.relayForOthers;
+    // Only form a Wi-Fi Direct group with phones we cannot already reach
+    // over a shared Wi-Fi / hotspot.
+    wd?.sharedNetworkWith = (id) {
+      final p = manager.peer(id);
+      if (p == null) return false;
+      return manager.usableLinks(p, DateTime.now()).contains(TransportKind.lan);
+    };
     if (channelKey != null) {
       _keys['${channelKey.channel}\u0000${settings.passcodeFor(channelKey.channel)}'] =
           channelKey;
@@ -169,6 +183,10 @@ class WalkieController extends ChangeNotifier {
   late final Ringer ringer;
   Messenger? messenger;
   final MultiRelayTransport _relay;
+  WifiDirectTransport? _wifiDirect;
+
+  /// Android only; null on iPhone.
+  bool get wifiDirectSupported => _wifiDirect != null;
   final AudioEngine _audio = AudioEngine();
   final BackgroundBridge bridge = BackgroundBridge();
   final List<StreamSubscription<dynamic>> _subs = [];
@@ -444,6 +462,7 @@ class WalkieController extends ChangeNotifier {
           name: nameOf(a.peerId),
           opus: a.opus,
           heard: live && foreground && auto,
+          hops: a.hops,
         );
         if (!live) return;
         if (!auto) {
@@ -877,6 +896,31 @@ class WalkieController extends ChangeNotifier {
     playbackLog.add('setting', 'Auto-play incoming talk ${on ? 'on' : 'off'}');
     notifyListeners();
     await settingsStore.save(settings);
+  }
+
+  /// "Relay for others" (off-grid mesh).
+  Future<void> setRelayForOthers(bool on) async {
+    settings.relayForOthers = on;
+    manager.relayForOthers = on;
+    notifyListeners();
+    await settingsStore.save(settings);
+  }
+
+  /// Wi-Fi Direct on/off (Android).
+  Future<void> setWifiDirect(bool on) async {
+    settings.wifiDirect = on;
+    notifyListeners();
+    await settingsStore.save(settings);
+    final wd = _wifiDirect;
+    if (wd == null) return;
+    wd.enabled = on;
+    try {
+      await wd.stop();
+      if (on && manager.isRunning) {
+        await wd.start(localNodeId: nodeId, channel: manager.scope);
+      }
+    } catch (_) {}
+    notifyListeners();
   }
 
   Future<void> setToggleTalk(bool on) async {
@@ -1784,6 +1828,7 @@ class WalkieController extends ChangeNotifier {
   /// "Wi-Fi", "Bluetooth", "Internet" or null when offline.
   String? friendVia(int id) => switch (friendLinks.bestLink(id)) {
     TransportKind.lan => 'Wi-Fi',
+    TransportKind.wifiDirect => 'Wi-Fi Direct',
     TransportKind.ble => 'Bluetooth',
     TransportKind.internet => 'Internet',
     _ => null,

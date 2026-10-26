@@ -5,13 +5,18 @@ import 'frame.dart';
 
 /// The physical/logical paths a peer can be reached on.
 ///
-/// The default preference order (highest first) is LAN > BLE > internet:
+/// The default preference order (highest first) is LAN > Wi-Fi Direct >
+/// BLE > internet:
 /// LAN has the most bandwidth and lowest latency and needs no internet; BLE
 /// works with no network at all but is short range and low bandwidth; the
 /// internet relay has unlimited range but needs connectivity and adds
 /// latency.
 enum TransportKind {
   lan('Wi-Fi / LAN', 30),
+
+  /// Android Wi-Fi P2P group formed with nearby app phones when there is no
+  /// shared network (v1.6.0).
+  wifiDirect('Wi-Fi Direct', 25),
   ble('Bluetooth LE', 20),
   internet('Internet', 10);
 

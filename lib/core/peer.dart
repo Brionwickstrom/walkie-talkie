@@ -34,6 +34,15 @@ class Peer {
   /// Transport currently used to send to this peer (best live link).
   TransportKind? activeLink;
 
+  /// Last time we heard this peer through other phones (mesh relay), and
+  /// how many radio hops that took (2 = one phone in between).
+  DateTime? meshSeen;
+  int hops = 1;
+
+  /// Hop count to show ("via 2 hops") when the peer is only reachable
+  /// through the mesh, else null. Set by the TransportManager.
+  int? meshHops;
+
   String get displayName => name.isNotEmpty ? name : callSignFor(id);
 
   Set<TransportKind> liveLinks(DateTime now, Duration timeout) => {

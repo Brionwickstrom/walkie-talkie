@@ -354,7 +354,7 @@ class _HomePageState extends State<HomePage> {
       final links = p.liveLinks(now, c.manager.timeoutFor(p)).toList()
         ..sort((a, b) => b.defaultPriority.compareTo(a.defaultPriority));
       DateTime? last;
-      for (final t in p.lastSeen.values) {
+      for (final t in [...p.lastSeen.values, ?p.meshSeen]) {
         if (last == null || t.isAfter(last)) last = t;
       }
       final mine = p.channel == c.scope;
@@ -369,6 +369,7 @@ class _HomePageState extends State<HomePage> {
           elsewhere: mine ? null : 'On ${c.labelFor(p.channel)}',
           ringStatus: c.ringStatusText(p.id),
           volume: c.volumeOf(p.id),
+          hops: p.meshHops,
           debug: peerDebugLine(p, now),
         ),
       );
@@ -802,6 +803,38 @@ class _HomePageState extends State<HomePage> {
                     ],
                   ),
                 ],
+                const Divider(height: 32),
+                _SectionTitle('Off-grid (no internet)'),
+                SwitchListTile(
+                  key: const Key('relayForOthers'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Relay for others'),
+                  subtitle: const Text(
+                    'With no internet or cell signal, pass talk on to phones '
+                    'that are out of range of each other (up to 4 hops, '
+                    'like on a hike). Phones close together still talk '
+                    'directly with no delay. Private talk stays encrypted: '
+                    'relays cannot hear it. Uses some extra battery while '
+                    'relaying.',
+                  ),
+                  value: c.settings.relayForOthers,
+                  onChanged: c.setRelayForOthers,
+                ),
+                if (c.wifiDirectSupported)
+                  SwitchListTile(
+                    key: const Key('wifiDirect'),
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Wi-Fi Direct'),
+                    subtitle: const Text(
+                      'Link straight to nearby Android phones over Wi-Fi '
+                      'when there is no shared network: about 2-3x the '
+                      'range of Bluetooth. Android may ask the other phone '
+                      'to accept the connection. iPhones use Bluetooth or '
+                      'a hotspot instead.',
+                    ),
+                    value: c.settings.wifiDirect,
+                    onChanged: c.setWifiDirect,
+                  ),
                 const Divider(height: 32),
                 _SectionTitle('Talk button'),
                 SwitchListTile(
@@ -1412,6 +1445,7 @@ Future<bool> _confirm(
 
 String _short(TransportKind k) => switch (k) {
   TransportKind.lan => 'WiFi',
+  TransportKind.wifiDirect => 'WiFiD',
   TransportKind.ble => 'BLE',
   TransportKind.internet => 'Net',
 };
@@ -1419,7 +1453,7 @@ String _short(TransportKind k) => switch (k) {
 /// e.g. "via WiFi | WiFi 0.3s 8ms | BLE 0.7s 41ms"
 String peerDebugLine(Peer p, DateTime now) {
   final parts = <String>[
-    'via ${p.activeLink == null ? 'none' : _short(p.activeLink!)}',
+    'via ${p.activeLink == null ? (p.meshHops != null ? 'mesh ${p.meshHops} hops' : 'none') : _short(p.activeLink!)}',
   ];
   for (final k in TransportKind.values) {
     final seen = p.lastSeen[k];

@@ -4,14 +4,24 @@ import 'dart:typed_data';
 
 import 'channel_crypto.dart';
 import 'frame.dart';
+import 'mesh.dart';
 import 'peer.dart';
 import 'transport.dart';
 
 /// Audio received from a peer, ready for the decoder.
 class ReceivedAudio {
-  ReceivedAudio(this.peerId, this.seq, this.opus, [this.transport]);
+  ReceivedAudio(
+    this.peerId,
+    this.seq,
+    this.opus, [
+    this.transport,
+    this.hops = 1,
+  ]);
   final int peerId;
   final TransportKind? transport;
+
+  /// Radio hops it travelled: 1 = direct, 2+ = relayed by other phones.
+  final int hops;
   final int seq;
   final Uint8List opus;
 }
@@ -66,10 +76,24 @@ class TransportManager {
     this.linkTimeout = const Duration(seconds: 4),
     this.helloInterval = const Duration(seconds: 1),
     this.staleAfter = const Duration(milliseconds: 1600),
+    this.meshTimeout = const Duration(seconds: 10),
+    this.beaconInterval = const Duration(seconds: 2),
+    MeshRouter? mesh,
     Clock? clock,
   }) : _transports = List.unmodifiable(transports),
        _clock = clock ?? DateTime.now,
-       _key = channelKey;
+       _key = channelKey,
+       mesh = mesh ?? MeshRouter(localId: localNodeId, clock: clock);
+
+  /// Off-grid multi-hop relay (see core/mesh.dart).
+  final MeshRouter mesh;
+
+  /// A peer heard only through the mesh counts as reachable this long.
+  final Duration meshTimeout;
+
+  /// How often we tell neighbours which phones we hear directly.
+  final Duration beaconInterval;
+  DateTime? _lastBeacon;
 
   final List<Transport> _transports;
   final int localNodeId;
@@ -210,6 +234,7 @@ class TransportManager {
       (_) => prune(),
     );
     await sendHello();
+    await sendBeacon();
   }
 
   void _startHelloTimer() {
@@ -217,6 +242,13 @@ class TransportManager {
     _helloTimer = Timer.periodic(currentHelloInterval, (_) async {
       await sendHello();
       if (!_saver) await sendPings();
+      final now = _clock();
+      final last = _lastBeacon;
+      if (last == null ||
+          now.difference(last) >=
+              beaconInterval - const Duration(milliseconds: 100)) {
+        await sendBeacon();
+      }
     });
   }
 
@@ -296,6 +328,20 @@ class TransportManager {
     final s = _audioSeq;
     _audioSeq = (_audioSeq + 1) & 0xFFFF;
     return s;
+  }
+
+  /// Tell neighbours (off-grid transports only) which phones we hear
+  /// directly, so they skip relaying packets we already got.
+  Future<void> sendBeacon() async {
+    _lastBeacon = _clock();
+    final bytes = mesh.beacon();
+    await Future.wait(
+      _transports
+          .where(
+            (t) => isOffGrid(t.kind) && t.status == TransportStatus.running,
+          )
+          .map((t) => _safeSend(t, bytes, null)),
+    );
   }
 
   /// Broadcast presence on every running transport.
@@ -382,13 +428,54 @@ class TransportManager {
     return [links.first];
   }
 
-  /// Best usable link to [peerId], or null if it is not reachable now.
+  /// Best usable link to [peerId], or null if it is not reachable now. A
+  /// peer reachable only through the mesh reports [TransportKind.ble] (the
+  /// slowest off-grid link) so transfers pace themselves conservatively.
   TransportKind? bestLinkTo(int peerId) {
     final r = routeTo(peerId);
-    return r.isEmpty ? null : r.first;
+    if (r.isNotEmpty) return r.first;
+    return meshReachable(peerId) ? TransportKind.ble : null;
   }
 
-  bool isReachable(int peerId) => routeTo(peerId).isNotEmpty;
+  bool isReachable(int peerId) =>
+      routeTo(peerId).isNotEmpty || meshReachable(peerId);
+
+  /// [peerId] has no direct link but was heard through other phones
+  /// recently and a mesh neighbour can carry packets towards it.
+  bool meshReachable(int peerId) {
+    final p = _peers[peerId];
+    if (p == null) return false;
+    final seen = p.meshSeen;
+    if (seen == null || _clock().difference(seen) > meshTimeout) return false;
+    return mesh.meshNeighbours().isNotEmpty;
+  }
+
+  /// "Relay for others" switch.
+  bool get relayForOthers => mesh.enabled;
+  set relayForOthers(bool on) => mesh.enabled = on;
+
+  void _sendMesh(MeshRelay r, [Set<int>? targets]) {
+    final byKind = <TransportKind, Set<int>>{};
+    for (final id in targets ?? r.targets) {
+      final kind = _bestMeshLink(id);
+      if (kind != null) byKind.putIfAbsent(kind, () => <int>{}).add(id);
+    }
+    for (final e in byKind.entries) {
+      unawaited(_safeSend(_transportOf(e.key)!, r.bytes, e.value));
+    }
+  }
+
+  /// Fastest off-grid transport neighbour [id] was heard on directly.
+  TransportKind? _bestMeshLink(int id) {
+    Transport? best;
+    for (final kind in mesh.linksTo(id)) {
+      final t = _transportOf(kind);
+      if (t == null || t.status != TransportStatus.running) continue;
+      if (!t.canReach(id)) continue;
+      if (best == null || t.priority > best.priority) best = t;
+    }
+    return best?.kind;
+  }
 
   /// Peers currently reachable and on [channel].
   Set<int> reachablePeersOn(int channel) => {
@@ -400,7 +487,13 @@ class TransportManager {
   /// is not reachable right now.
   Future<bool> sendFrameTo(int peerId, Frame frame) async {
     final route = routeTo(peerId);
-    if (route.isEmpty) return false;
+    if (route.isEmpty) {
+      if (!meshReachable(peerId)) return false;
+      final r = mesh.originate(_wire(frame), to: peerId);
+      if (r == null) return false;
+      _sendMesh(r);
+      return true;
+    }
     final bytes = _wire(frame);
     await Future.wait(
       route.map((k) => _safeSend(_transportOf(k)!, bytes, {peerId})),
@@ -483,12 +576,30 @@ class TransportManager {
   Future<void> _sendToChannel(Frame frame) async {
     final bytes = _wire(frame);
     final routes = routeForChannel();
+    // Phones on our channel heard only through the mesh: also hand the
+    // packet to mesh neighbours that are not getting the direct copy. The
+    // direct sends above are unchanged and never wait for this.
+    if (_hasMeshOnlyPeers()) {
+      final direct = <int>{for (final s in routes.values) ...s};
+      final r = mesh.originate(bytes, skip: direct);
+      if (r != null) _sendMesh(r);
+    }
     await Future.wait(
       routes.entries.map((e) {
         final t = _transports.firstWhere((t) => t.kind == e.key);
         return _safeSend(t, bytes, e.value);
       }),
     );
+  }
+
+  bool _hasMeshOnlyPeers() {
+    final now = _clock();
+    for (final p in _peers.values) {
+      if (p.channel != scope) continue;
+      if (usableLinks(p, now).isNotEmpty) continue;
+      if (meshReachable(p.id)) return true;
+    }
+    return false;
   }
 
   Future<void> _safeSend(Transport t, Uint8List bytes, Set<int>? to) async {
@@ -549,7 +660,39 @@ class TransportManager {
   void handleInbound(InboundFrame inbound) => _onInbound(inbound);
 
   void _onInbound(InboundFrame inbound) {
-    var f = inbound.frame;
+    if (inbound.frame.senderId == localNodeId) return; // own echo
+    // Mesh first: learns neighbours, unwraps relayed copies, and decides
+    // whether this packet must be passed on (blocked senders included:
+    // blocking is about what we hear, relaying is for the others).
+    final d = mesh.onFrame(inbound.frame, inbound.transport);
+    // Only phones that run the mesh read beacons.
+    if (d.newNeighbour && _running && mesh.meshNeighbours().isNotEmpty) {
+      unawaited(sendBeacon());
+    }
+    final relay = d.relay;
+    if (relay != null) {
+      if (relay.delay == Duration.zero) {
+        _sendMesh(relay);
+      } else {
+        Timer(relay.delay, () {
+          if (!_running) return;
+          final targets = relay.currentTargets();
+          if (targets.isEmpty) {
+            mesh.suppressed++;
+            return;
+          }
+          _sendMesh(relay, targets);
+        });
+      }
+    }
+    final deliver = d.deliver;
+    if (deliver == null) return;
+    _receive(deliver, inbound, d.hops);
+  }
+
+  void _receive(Frame frame, InboundFrame inbound, int hops) {
+    var f = frame;
+    final relayed = hops > 1;
     if (f.senderId == localNodeId) return; // our own broadcast echoed back
     if (blocked.contains(f.senderId)) return;
 
@@ -561,7 +704,9 @@ class TransportManager {
     if (f.type == FrameType.sealed) {
       final opened = key?.open(f);
       if (opened == null) {
-        sealedHandler?.call(inbound);
+        // Friend frames are only taken from direct links: friend presence
+        // and replies are tied to the link they arrived on.
+        if (!relayed) sealedHandler?.call(inbound);
         return;
       }
       f = opened;
@@ -572,8 +717,16 @@ class TransportManager {
 
     final now = _clock();
     final peer = _peers.putIfAbsent(f.senderId, () => Peer(f.senderId));
-    peer.lastSeen[inbound.transport] = now;
+    final wasMeshHops = peer.meshHops;
+    if (relayed) {
+      peer.meshSeen = now;
+      peer.hops = hops;
+    } else {
+      peer.lastSeen[inbound.transport] = now;
+    }
     peer.channel = frameScope;
+    _updateMeshHops(peer, now);
+    var meshChanged = wasMeshHops != peer.meshHops;
 
     final window = (f.type == FrameType.audio ? _seenAudio : _seen).putIfAbsent(
       f.senderId,
@@ -583,7 +736,7 @@ class TransportManager {
 
     final before = peer.activeLink;
     peer.activeLink = _bestLink(peer, now);
-    var changed = before != peer.activeLink;
+    var changed = before != peer.activeLink || meshChanged;
 
     if (!duplicate) {
       switch (f.type) {
@@ -616,7 +769,7 @@ class TransportManager {
                   }
                 }
               case ControlKind.ping:
-                if (msg.to == null || msg.to == localNodeId) {
+                if (!relayed && (msg.to == null || msg.to == localNodeId)) {
                   final t = _transportOf(inbound.transport);
                   if (t != null) {
                     _safeSend(
@@ -638,7 +791,7 @@ class TransportManager {
                   }
                 }
               case ControlKind.pong:
-                if (msg.to == localNodeId && msg.time != null) {
+                if (!relayed && msg.to == localNodeId && msg.time != null) {
                   final rtt = now.millisecondsSinceEpoch - msg.time!;
                   if (rtt >= 0 && rtt < 30000) {
                     peer.rtt[inbound.transport] = Duration(milliseconds: rtt);
@@ -678,7 +831,13 @@ class TransportManager {
         case FrameType.audio:
           if (frameScope == scope) {
             _audio.add(
-              ReceivedAudio(f.senderId, f.seq, f.payload, inbound.transport),
+              ReceivedAudio(
+                f.senderId,
+                f.seq,
+                f.payload,
+                inbound.transport,
+                hops,
+              ),
             );
           }
         case FrameType.data:
@@ -688,10 +847,18 @@ class TransportManager {
             );
           }
         case FrameType.sealed:
+        case FrameType.mesh:
           break; // never nested
       }
     }
     if (changed || before == null) _emitPeers();
+  }
+
+  /// Mesh-only peers show "via N hops"; direct ones show their link.
+  void _updateMeshHops(Peer p, DateTime now) {
+    final seen = p.meshSeen;
+    final meshAlive = seen != null && now.difference(seen) <= meshTimeout;
+    p.meshHops = meshAlive && usableLinks(p, now).isEmpty ? p.hops : null;
   }
 
   /// Drop dead links/peers. Runs every second; public for tests.
@@ -699,6 +866,7 @@ class TransportManager {
     final now = _clock();
     var changed = false;
     final gone = <int>[];
+    mesh.prune();
     for (final p in _peers.values) {
       final timeout = timeoutFor(p);
       p.lastSeen.removeWhere((_, t) => now.difference(t) > timeout);
@@ -708,7 +876,12 @@ class TransportManager {
         p.activeLink = best;
         changed = true;
       }
-      if (p.lastSeen.isEmpty) gone.add(p.id);
+      final ms = p.meshSeen;
+      if (ms != null && now.difference(ms) > meshTimeout) p.meshSeen = null;
+      final hopsBefore = p.meshHops;
+      _updateMeshHops(p, now);
+      if (hopsBefore != p.meshHops) changed = true;
+      if (p.lastSeen.isEmpty && p.meshSeen == null) gone.add(p.id);
     }
     for (final id in gone) {
       _peers.remove(id);

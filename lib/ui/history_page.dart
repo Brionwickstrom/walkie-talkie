@@ -14,6 +14,7 @@ TakeView takeView(WalkieController c, TalkTake t) => TakeView(
   durationMs: t.durationMs,
   mine: t.mine,
   heard: t.heard,
+  hops: t.hops,
   playing: c.playingTake?.id == t.id,
   positionMs: c.playingTake?.id == t.id ? c.playingPosMs : 0,
 );
@@ -243,6 +244,7 @@ class HistoryView extends StatelessWidget {
                                             Text(
                                               '${clockText(t.at)} · '
                                               '${clipLength(t.durationMs)}'
+                                              '${t.hops > 1 ? ' · ${hopsText(t.hops)}' : ''}'
                                               '${t.heard ? '' : ' · not heard'}',
                                               style: theme.textTheme.bodySmall
                                                   ?.copyWith(

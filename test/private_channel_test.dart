@@ -248,6 +248,18 @@ void main() {
       final wire = (managers.first.transports.single as AirTransport).wire;
       for (final w in wire) {
         final f = Frame.tryDecode(w)!;
+        if (f.type == FrameType.mesh) {
+          // v1.6.0 mesh beacons: only node ids, no channel or name.
+          expect(f.channel, 0);
+          expect(latin1.decode(w).contains('phone1'), isFalse);
+          if (f.payload.first == 1) {
+            // A relayed copy: the sealed frame, unchanged.
+            final inner = Frame.tryDecode(f.payload.sublist(7))!;
+            expect(inner.type, FrameType.sealed);
+            expect(inner.channel, k.tag);
+          }
+          continue;
+        }
         expect(f.type, FrameType.sealed);
         expect(f.channel, k.tag);
         expect(latin1.decode(w).contains('phone1'), isFalse);

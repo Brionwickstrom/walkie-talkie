@@ -19,9 +19,14 @@ class PersonView {
     this.ringStatus,
     this.debug,
     this.volume = 1.0,
+    this.hops,
   });
 
   final int id;
+
+  /// Reachable only through other phones (mesh relay): radio hops, else
+  /// null.
+  final int? hops;
 
   /// Playback volume set for this person (1 = 100 %).
   final double volume;
@@ -49,12 +54,14 @@ class PersonView {
 
 IconData transportIcon(TransportKind k) => switch (k) {
   TransportKind.lan => Icons.wifi,
+  TransportKind.wifiDirect => Icons.wifi_tethering,
   TransportKind.ble => Icons.bluetooth,
   TransportKind.internet => Icons.public,
 };
 
 String transportName(TransportKind k) => switch (k) {
   TransportKind.lan => 'Wi-Fi',
+  TransportKind.wifiDirect => 'Wi-Fi Direct',
   TransportKind.ble => 'Bluetooth',
   TransportKind.internet => 'Internet',
 };
@@ -97,8 +104,12 @@ class TakeView {
     this.heard = true,
     this.playing = false,
     this.positionMs = 0,
+    this.hops = 1,
   });
   final int id;
+
+  /// Radio hops the talk travelled (2+ = relayed by other phones).
+  final int hops;
   final int sender;
   final String name;
   final DateTime at;
@@ -110,6 +121,9 @@ class TakeView {
 
   String get who => mine ? 'You' : name;
 }
+
+/// "via 2 hops" (relayed through other phones).
+String hopsText(int hops) => 'via $hops hops';
 
 /// "0:07"
 String clipLength(int ms) {
@@ -209,7 +223,10 @@ class RecentStrip extends StatelessWidget {
                             ),
                           ),
                         ),
-                        Text(' · ${clipLength(t.durationMs)}'),
+                        Text(
+                          ' · ${clipLength(t.durationMs)}'
+                          '${t.hops > 1 ? ' · ${t.hops} hops' : ''}',
+                        ),
                       ],
                     ),
                   ),
@@ -532,7 +549,14 @@ class PersonCard extends StatelessWidget {
           ),
         );
       }
-      if (p.links.isEmpty) {
+      if (p.hops != null) {
+        status.add(
+          Tooltip(
+            message: 'Relayed by other phones',
+            child: Icon(Icons.hub, size: 16, color: cs.primary),
+          ),
+        );
+      } else if (p.links.isEmpty) {
         status.add(Text('no path', style: theme.textTheme.bodySmall));
       }
       if ((p.volume - 1).abs() > 0.01) {
@@ -557,6 +581,7 @@ class PersonCard extends StatelessWidget {
         Text(
           [
             if (p.active != null) 'via ${transportName(p.active!)}',
+            if (p.active == null && p.hops != null) hopsText(p.hops!),
             if (p.elsewhere != null) p.elsewhere!,
             if (p.lastHeard != null) agoText(p.lastHeard!),
           ].join(' · '),

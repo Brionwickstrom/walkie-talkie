@@ -45,6 +45,8 @@ class AppSettings {
     this.headsetPtt = false,
     this.toggleTalk = false,
     this.autoPlay = true,
+    this.relayForOthers = true,
+    this.wifiDirect = true,
     this.notificationTalk = false,
     this.urgentLoud = true,
     Map<int, String>? privateChannels,
@@ -133,6 +135,14 @@ class AppSettings {
   /// Incoming live talk plays by itself. Off: nothing plays unless tapped
   /// (talk is kept in Missed; voice messages never auto-play anyway).
   bool autoPlay;
+
+  /// Pass other phones' packets on when there is no internet (mesh relay,
+  /// v1.6.0). Uses some extra battery while relaying.
+  bool relayForOthers;
+
+  /// Android: form a Wi-Fi Direct group with nearby app phones when there
+  /// is no shared network.
+  bool wifiDirect;
 
   /// "Talk" button on the listening notification (lock screen).
   bool notificationTalk;
@@ -288,6 +298,8 @@ class SharedPrefsSettingsStore implements SettingsStore {
   static const _kHeadset = 'headset_ptt';
   static const _kToggle = 'toggle_talk';
   static const _kAutoPlay = 'auto_play';
+  static const _kRelayOthers = 'relay_for_others';
+  static const _kWifiDirect = 'wifi_direct';
   static const _kNotifTalk = 'notif_talk';
   static const _kUrgent = 'urgent_loud';
   static const _kFriends = 'friends';
@@ -342,6 +354,8 @@ class SharedPrefsSettingsStore implements SettingsStore {
       headsetPtt: prefs?.getBool(_kHeadset) ?? false,
       toggleTalk: prefs?.getBool(_kToggle) ?? false,
       autoPlay: prefs?.getBool(_kAutoPlay) ?? true,
+      relayForOthers: prefs?.getBool(_kRelayOthers) ?? true,
+      wifiDirect: prefs?.getBool(_kWifiDirect) ?? true,
       notificationTalk: prefs?.getBool(_kNotifTalk) ?? false,
       urgentLoud: prefs?.getBool(_kUrgent) ?? true,
     );
@@ -375,6 +389,8 @@ class SharedPrefsSettingsStore implements SettingsStore {
       await prefs.setBool(_kHeadset, s.headsetPtt);
       await prefs.setBool(_kToggle, s.toggleTalk);
       await prefs.setBool(_kAutoPlay, s.autoPlay);
+      await prefs.setBool(_kRelayOthers, s.relayForOthers);
+      await prefs.setBool(_kWifiDirect, s.wifiDirect);
       await prefs.setBool(_kNotifTalk, s.notificationTalk);
       await prefs.setBool(_kUrgent, s.urgentLoud);
       await prefs.setString(

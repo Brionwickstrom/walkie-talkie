@@ -331,6 +331,59 @@ decrypt).
 * Private talk to a friend is not saved in the replay history.
 * 1.4 and older phones do not see chats, names, friends or moderation.
 
+## v1.6.0: off-grid range (mesh relay + Wi-Fi Direct)
+
+For hikes with no internet or cell signal.
+
+**Mesh relay ("Relay for others", Settings, on by default).** Phones pass
+talk on for each other so a group strung out along a trail can still talk
+(up to 4 radio hops). See `lib/core/mesh.dart`.
+
+- The original sender is unchanged: plain frames on the best direct link,
+  no extra header, no delay. Phones close together never relay anything.
+- Packet id = 64-bit hash of the origin's encoded frame (sender + seq +
+  payload, plus the random nonce on private channels), so the direct copy
+  and all relayed copies share one id. A seen-id cache (30 s, 4096 ids)
+  drops duplicates; each phone relays a packet at most once, and the
+  receiver keeps playing the first copy (existing per-sender dedupe).
+- Relayed copies travel in a new frame type 5 envelope: hops, max hops
+  (TTL, default 4), destination (0 = all) and the origin's bytes unchanged.
+  Private-channel and friend frames stay sealed end to end; relays cannot
+  read them.
+- Phones beacon (type 5, every 2 s and right away when a new phone shows
+  up) the ids they hear directly. A packet is relayed only to mesh
+  neighbours that did not hear the source directly and are not already
+  covered by the previous hop; targets are re-checked after a 2-12 ms
+  random jitter (relayed hops only). Pings are never relayed, presence
+  (hello) at most every 3 s per phone, everything capped at 100 packets/s
+  and 12 KB/s to protect Bluetooth. Nothing heard over the internet relay
+  goes into the mesh, and mesh frames never go to the internet relay.
+- People cards show "via 2 hops" for phones reached only through others;
+  Missed / History show the hop count. Rings, voice messages and chat to
+  those phones also travel over the mesh (paced like Bluetooth).
+- v1.5.x phones drop type 5: they are never relay targets, but their own
+  talk is still relayed by v1.6 phones.
+
+**Wi-Fi Direct (Android, Settings switch, on by default).** Wi-Fi P2P
+service discovery (`_walkietalkie._udp`, node id in TXT) finds nearby app
+phones; when there is no shared network with one, the phone with the larger
+id asks to join / form a group (`WifiDirectBridge.kt`, policy in
+`lib/transports/wifi_direct_transport.dart`). Frames then travel as UDP on
+port 47475 inside the group (owner 192.168.49.1 + group broadcast). Needs
+"Nearby devices" (Android 13+) or location (older). iPhones have no public
+Wi-Fi Direct API: the transport is not created there; they use Bluetooth or
+a hotspot.
+
+**Priority:** Wi-Fi/LAN > Wi-Fi Direct > Bluetooth > internet; frames to a
+peer go on the best live link (plus the runner-up while it looks stale), so
+the fastest path wins and duplicates are dropped.
+
+Limits: Android may show "accept connection" on the other phone for Wi-Fi
+Direct; a phone only relays while the app runs (Android background service
+is fine, iPhones may stop relaying when the screen is off for a while); each
+hop adds a few ms plus radio latency, and Bluetooth carries about one voice
+at a time across a hop.
+
 ## v1.5.4: private talk heard by everyone (the real cause)
 
 Report: "If I create a private chat it plays on just the person's phone. But
