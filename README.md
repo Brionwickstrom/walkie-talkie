@@ -331,6 +331,49 @@ decrypt).
 * Private talk to a friend is not saved in the replay history.
 * 1.4 and older phones do not see chats, names, friends or moderation.
 
+## v1.7.0: long-range radio (Meshtastic LoRa)
+
+Pair a Meshtastic radio (RAK WisMesh Pocket V2, SenseCAP T1000-E, or any
+Meshtastic node with Bluetooth) in **Settings > Long-range radio
+(Meshtastic)**. The phone talks to it over the official Meshtastic BLE API
+(service `6ba1b218-15a8-461f-9fa8-5dcae273eafd`, ToRadio / FromRadio /
+FromNum, `want_config` handshake) and sends app frames on port
+`PRIVATE_APP` (256), so stock Meshtastic nodes on the same channel relay
+them without showing them as chat.
+
+**Pairing PIN:** screenless radios (T1000-E) use the fixed PIN `123456`.
+Radios with a screen (WisMesh Pocket) show a 6-digit PIN on their screen
+during pairing. Only one phone app can use a radio at a time: close or
+disconnect the official Meshtastic app first.
+
+**What goes over LoRa:** text chat, location (live location at most every
+5 min), urgent rings (once per 20 s while ringing), a small presence hello
+about every 5 min, and voice messages up to 8 s as Codec 2 700C clips
+(28 bits per 40 ms: an 8 s clip is about 700 bytes, sent as 5-6 chunks of
+140 bytes and reassembled). Live push-to-talk audio, photos, long voice
+messages and friend (1:1 private) chats wait for a faster link.
+
+**Routing:** the fastest path wins and LoRa is only used when nothing else
+(Wi-Fi, Wi-Fi Direct, Bluetooth, the phone mesh, internet) reaches the
+person; local paths are never delayed by it. LoRa frames carry the same
+mesh ids, so a copy arriving over both LoRa and Bluetooth is delivered once,
+and frames heard over LoRa are never relayed again by the phone mesh (no
+double relay). Private channels stay end-to-end encrypted: the radio only
+carries sealed frames. A token bucket (4 packets, then one per 8 s) and a
+priority queue (urgent > chat > voice > presence, expiring after 3 min)
+keep the channel usable.
+
+**Set the radios up first (official Meshtastic app):**
+- Region: `US` (915 MHz) on every radio, same modem preset (`LongFast`).
+- A shared **private** primary channel with a random key; share it to the
+  other radios by QR code. The default public channel works but everyone
+  nearby can see packet metadata.
+- Hop limit 3 (or more for big groups), transmit enabled.
+- Bluetooth on (PIN mode: fixed `123456` on the T1000-E).
+
+Codec 2 is vendored from `drowe67/codec2` (LGPL-2.1, see
+`android/app/src/main/cpp/codec2/COPYING`) and built as `libcodec2.so`.
+
 ## v1.6.0: off-grid range (mesh relay + Wi-Fi Direct)
 
 For hikes with no internet or cell signal.

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io' show Directory, File, Platform, exit;
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
@@ -9,6 +10,9 @@ import 'package:cryptography/cryptography.dart' show SimpleKeyPair;
 import 'package:permission_handler/permission_handler.dart';
 
 import '../audio/audio_engine.dart';
+import '../audio/codec.dart';
+import '../audio/codec2_ffi.dart';
+import '../audio/opus_voice_codec.dart';
 import '../audio/live_gate.dart';
 import '../chat/chat_body.dart';
 import '../chat/chat_store.dart';
@@ -22,6 +26,9 @@ import '../core/transport_manager.dart';
 import '../friends/friend_links.dart';
 import '../friends/friend_messenger_link.dart';
 import '../history/talk_history.dart';
+import '../lora/lora_transport.dart';
+import '../lora/meshtastic_ble.dart';
+import '../lora/radio_clip.dart';
 import '../messaging/inbox.dart';
 import '../messaging/messenger.dart';
 import '../messaging/outbox.dart';
@@ -94,6 +101,14 @@ class WalkieController extends ChangeNotifier {
         ? (WifiDirectTransport()..enabled = settings.wifiDirect)
         : null;
     _wifiDirect = wd;
+    final ble = BleTransport();
+    radioDevice.deviceId = settings.radioId;
+    radioDevice.deviceName = settings.radioName;
+    if (settings.radioId != null) ble.ignoreDevices.add(settings.radioId!);
+    radioDevice.onDevice = (id) {
+      ble.ignoreDevices.clear();
+      if (id != null) ble.ignoreDevices.add(id);
+    };
     manager = TransportManager(
       transports: [
         LanTransport(
@@ -104,8 +119,9 @@ class WalkieController extends ChangeNotifier {
           store: const SharedPrefsLanPeerStore(),
         ),
         ?wd,
-        BleTransport(),
+        ble,
         _relay,
+        loraTransport,
       ],
       localNodeId: nodeId,
       localName: name,
@@ -184,6 +200,19 @@ class WalkieController extends ChangeNotifier {
   Messenger? messenger;
   final MultiRelayTransport _relay;
   WifiDirectTransport? _wifiDirect;
+
+  /// Paired Meshtastic LoRa radio (v1.7.0) and the transport using it.
+  final MeshtasticRadio radioDevice = MeshtasticRadio();
+  late final LoraTransport loraTransport = LoraTransport(radio: radioDevice);
+
+  /// Codec 2 (native), null when the library is missing: then voice
+  /// messages do not go over the radio (texts, locations and rings do).
+  final Codec2Lib? _codec2 = Codec2Lib.load();
+  bool get radioVoiceSupported => _codec2 != null;
+  RadioClipCodec? get _radioCodec {
+    final lib = _codec2;
+    return lib == null ? null : RadioClipCodec(() => Codec2FrameCodec(lib));
+  }
 
   /// Android only; null on iPhone.
   bool get wifiDirectSupported => _wifiDirect != null;
@@ -493,6 +522,8 @@ class WalkieController extends ChangeNotifier {
     );
     await manager.setPowerSaver(settings.powerSaver);
     await manager.start();
+    _subs.add(radioDevice.changes.listen((_) => notifyListeners()));
+    radioDevice.start();
     _subs.add(
       manager.controls.listen((c) {
         switch (c.message.kind) {
@@ -546,6 +577,7 @@ class WalkieController extends ChangeNotifier {
         link: ManagerMessengerLink(manager),
         storage: FileMessageStorage(await _messageDir()),
       );
+      m.radioClipToVoice = _radioClipToVoice;
       await m.start();
       messenger = m;
       _wireMessenger(m, friend: false);
@@ -1372,10 +1404,24 @@ class WalkieController extends ChangeNotifier {
     }
     final m = rec.toFriend ? friendMessenger : messenger;
     if (m == null) return;
+    // With a radio paired, also keep a Codec 2 copy for phones that only
+    // the radio reaches (not for friends: friend chats stay off LoRa).
+    final radioClip = rec.toFriend ? null : _makeRadioClip(clip);
+    if (radioPaired &&
+        !rec.toFriend &&
+        radioClip == null &&
+        radioVoiceSupported) {
+      _notice(
+        'Over the radio voice messages can be up to '
+        '${RadioClip.maxDurationMs ~/ 1000} s: this one goes by Wi-Fi, '
+        'Bluetooth or internet only.',
+      );
+    }
     final e = await m.send(
       clip,
       toPeer: rec.toPeer,
       channel: rec.toFriend ? friendScope : scope,
+      radioClip: radioClip,
     );
     final who = rec.toPeer == null
         ? channelLabel
@@ -1391,6 +1437,87 @@ class WalkieController extends ChangeNotifier {
           : 'Saved. It will be delivered to $who when they are in range (up to 24 h).',
     );
   }
+
+  // ------------------------------------------------------- LoRa radio
+
+  bool get radioPaired => radioDevice.deviceId != null;
+
+  /// Codec 2 copy of [clip] for the radio, or null (no radio, no codec,
+  /// longer than [RadioClip.maxDurationMs] of speech).
+  RadioClip? _makeRadioClip(VoiceClip clip) {
+    final codec = _radioCodec;
+    if (codec == null || !radioPaired) return null;
+    try {
+      final dec = OpusVoiceDecoder();
+      final pcm = BytesBuilder(copy: false);
+      try {
+        for (final p in clip.packets) {
+          final f = dec.decode(p);
+          pcm.add(f.buffer.asUint8List(f.offsetInBytes, f.lengthInBytes));
+        }
+      } finally {
+        dec.dispose();
+      }
+      final raw = pcm.takeBytes();
+      final samples = Int16List.view(raw.buffer, 0, raw.length ~/ 2);
+      return codec.encode(samples, sentAt: DateTime.now());
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// A Codec 2 clip from the radio -> a normal (Opus) voice message body.
+  Future<Uint8List?> _radioClipToVoice(Uint8List body) async {
+    final codec = _radioCodec;
+    final clip = RadioClip.tryDecode(body);
+    if (codec == null || clip == null) return null;
+    try {
+      final pcm = codec.decode(clip);
+      final enc = OpusVoiceEncoder();
+      final packets = <Uint8List>[];
+      try {
+        const n = VoiceFormat.samplesPerFrame;
+        for (var o = 0; o + n <= pcm.length; o += n) {
+          packets.add(enc.encode(Int16List.fromList(pcm.sublist(o, o + n))));
+        }
+      } finally {
+        enc.dispose();
+      }
+      return VoiceClip(packets, sentAt: clip.sentAt).encode();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Look for Meshtastic radios nearby (Settings > Long-range radio).
+  Future<List<FoundRadio>> scanRadios() async {
+    try {
+      return await radioDevice.scan();
+    } catch (e) {
+      _notice(e is StateError ? e.message : 'Scan failed: $e');
+      return const [];
+    }
+  }
+
+  Future<void> pairRadio(FoundRadio r) async {
+    settings.radioId = r.id;
+    settings.radioName = r.name;
+    await settingsStore.save(settings);
+    await radioDevice.use(r.id, r.name);
+    notifyListeners();
+  }
+
+  Future<void> forgetRadio() async {
+    await radioDevice.forget();
+    settings.radioId = null;
+    settings.radioName = null;
+    await settingsStore.save(settings);
+    notifyListeners();
+  }
+
+  /// App phones heard over the radio recently (for Settings).
+  int get radioPeers =>
+      loraTransport.peerSignals.keys.where(loraTransport.canReach).length;
 
   /// Voice messages recorded longer ago than this arrive quietly.
   static const staleMessage = Duration(minutes: 10);
@@ -1831,6 +1958,7 @@ class WalkieController extends ChangeNotifier {
     TransportKind.wifiDirect => 'Wi-Fi Direct',
     TransportKind.ble => 'Bluetooth',
     TransportKind.internet => 'Internet',
+    TransportKind.lora => 'Radio',
     _ => null,
   };
 
@@ -2397,6 +2525,7 @@ class WalkieController extends ChangeNotifier {
       at: a.body.sentAt != null && a.body.liveId != null
           ? a.body.sentAt!
           : a.receivedAt,
+      viaRadio: a.viaRadio,
     );
     final lid = a.body.liveId;
     final update = lid != null && store.hasLive(a.sender, lid);
@@ -2545,6 +2674,7 @@ class WalkieController extends ChangeNotifier {
     messenger?.dispose();
     ringer.dispose();
     manager.dispose();
+    radioDevice.dispose();
     _audio.dispose();
     _notices.close();
     _uiRequests.close();

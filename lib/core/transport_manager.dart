@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:math';
 import 'dart:typed_data';
+
+import '../lora/lora_transport.dart';
 
 import 'channel_crypto.dart';
 import 'frame.dart';
@@ -78,15 +81,31 @@ class TransportManager {
     this.staleAfter = const Duration(milliseconds: 1600),
     this.meshTimeout = const Duration(seconds: 10),
     this.beaconInterval = const Duration(seconds: 2),
+    this.radioHelloInterval = const Duration(minutes: 5),
+    this.radioRingRepeat = const Duration(seconds: 20),
     MeshRouter? mesh,
     Clock? clock,
+    Random? random,
   }) : _transports = List.unmodifiable(transports),
        _clock = clock ?? DateTime.now,
+       _rng = random ?? Random(),
        _key = channelKey,
        mesh = mesh ?? MeshRouter(localId: localNodeId, clock: clock);
 
   /// Off-grid multi-hop relay (see core/mesh.dart).
   final MeshRouter mesh;
+
+  /// Presence over a LoRa radio: one small hello this often (v1.7.0).
+  final Duration radioHelloInterval;
+
+  /// A ring / beep / ring answer with the same id goes over LoRa at most
+  /// once per this (the ringer repeats every second on fast links).
+  final Duration radioRingRepeat;
+  final Random _rng;
+  DateTime? _lastRadioHello;
+  bool _radioWasRunning = false;
+  Timer? _radioHelloSoon;
+  final Map<String, (DateTime, int)> _radioRingSent = {};
 
   /// A peer heard only through the mesh counts as reachable this long.
   final Duration meshTimeout;
@@ -241,6 +260,7 @@ class TransportManager {
     _helloTimer?.cancel();
     _helloTimer = Timer.periodic(currentHelloInterval, (_) async {
       await sendHello();
+      _maybeRadioHello();
       if (!_saver) await sendPings();
       final now = _clock();
       final last = _lastBeacon;
@@ -271,6 +291,7 @@ class TransportManager {
     if (!_running) return;
     _running = false;
     _helloTimer?.cancel();
+    _radioHelloSoon?.cancel();
     _pruneTimer?.cancel();
     for (final s in _subs) {
       await s.cancel();
@@ -364,7 +385,7 @@ class TransportManager {
     final now = _clock();
     final futures = <Future<void>>[];
     for (final p in _peers.values) {
-      for (final kind in usableLinks(p, now)) {
+      for (final kind in fastLinks(p, now)) {
         final bytes = _wire(
           Frame.control(
             senderId: localNodeId,
@@ -417,7 +438,7 @@ class TransportManager {
     final p = _peers[peerId];
     if (p == null) return const [];
     final now = _clock();
-    final links = usableLinks(p, now);
+    final links = fastLinks(p, now);
     if (links.isEmpty) return const [];
     final bestSeen = p.lastSeen[links.first];
     if (links.length > 1 &&
@@ -431,14 +452,177 @@ class TransportManager {
   /// Best usable link to [peerId], or null if it is not reachable now. A
   /// peer reachable only through the mesh reports [TransportKind.ble] (the
   /// slowest off-grid link) so transfers pace themselves conservatively.
+  /// [TransportKind.lora] only when nothing else reaches it.
   TransportKind? bestLinkTo(int peerId) {
     final r = routeTo(peerId);
     if (r.isNotEmpty) return r.first;
-    return meshReachable(peerId) ? TransportKind.ble : null;
+    if (meshReachable(peerId)) return TransportKind.ble;
+    return radioReachable(peerId) ? TransportKind.lora : null;
   }
 
   bool isReachable(int peerId) =>
-      routeTo(peerId).isNotEmpty || meshReachable(peerId);
+      routeTo(peerId).isNotEmpty ||
+      meshReachable(peerId) ||
+      radioReachable(peerId);
+
+  /// The paired LoRa radio transport, if any.
+  LoraTransport? get radio {
+    for (final t in _transports) {
+      if (t is LoraTransport) return t;
+    }
+    return null;
+  }
+
+  /// [peerId] was heard over the LoRa radio recently.
+  bool radioReachable(int peerId) {
+    final p = _peers[peerId];
+    if (p == null) return false;
+    return usableLinks(p, _clock()).contains(TransportKind.lora);
+  }
+
+  /// The only way to [peerId] is the LoRa radio: no direct fast link and
+  /// no phone mesh path.
+  bool onlyRadio(int peerId) {
+    final p = _peers[peerId];
+    if (p == null) return false;
+    final now = _clock();
+    if (fastLinks(p, now).isNotEmpty) return false;
+    if (meshReachable(peerId)) return false;
+    return usableLinks(p, now).contains(TransportKind.lora);
+  }
+
+  /// What may go over LoRa (decided on the plain frame, before sealing):
+  /// rings, beeps and their answers (each id at most once per
+  /// [radioRingRepeat], three times in all), messenger data (chat, voice
+  /// clips, acks; the messenger keeps them small and slow), rekeys and the
+  /// radio presence hello. Never live audio, talk start/end, pings, mesh
+  /// frames or per-second hellos.
+  bool radioAllowed(Frame f, {bool presence = false}) {
+    switch (f.type) {
+      case FrameType.data:
+        return true;
+      case FrameType.control:
+        final m = f.control;
+        if (m == null) return false;
+        switch (m.kind) {
+          case ControlKind.hello:
+            return presence;
+          case ControlKind.ring:
+          case ControlKind.beep:
+          case ControlKind.ringAck:
+            final key = '${m.kind.name}:${m.id}:${m.status}:${m.to}';
+            final now = _clock();
+            final prev = _radioRingSent[key];
+            if (prev != null) {
+              if (prev.$2 >= 3) return false;
+              if (now.difference(prev.$1) < radioRingRepeat) return false;
+            }
+            _radioRingSent[key] = (now, (prev?.$2 ?? 0) + 1);
+            if (_radioRingSent.length > 200) {
+              _radioRingSent.remove(_radioRingSent.keys.first);
+            }
+            return true;
+          case ControlKind.rekey:
+          case ControlKind.rekeyAck:
+            return true;
+          case ControlKind.talkStart:
+          case ControlKind.talkEnd:
+          case ControlKind.ping:
+          case ControlKind.pong:
+          case ControlKind.friendReq:
+          case ControlKind.friendAcc:
+          case ControlKind.friendDec:
+          case ControlKind.fhello:
+            return false;
+        }
+      case FrameType.audio:
+      case FrameType.sealed:
+      case FrameType.mesh:
+        return false;
+    }
+  }
+
+  LoraPriority _radioPriority(Frame f) {
+    if (f.type == FrameType.control) {
+      final k = f.control?.kind;
+      if (k == ControlKind.hello) return LoraPriority.presence;
+      if (k == ControlKind.ring ||
+          k == ControlKind.ringAck ||
+          k == ControlKind.beep) {
+        return LoraPriority.urgent;
+      }
+      return LoraPriority.normal;
+    }
+    // Voice clip chunks are bulk; acks and small chat chunks normal.
+    final p = f.payload;
+    if (p.isNotEmpty && p[0] == 1 && p.length > 120) return LoraPriority.bulk;
+    return LoraPriority.normal;
+  }
+
+  /// Hand [f] (already encoded as [bytes]) to the radio for [peers].
+  bool _sendRadio(
+    Frame f,
+    Uint8List bytes,
+    Set<int>? peers, {
+    bool presence = false,
+  }) {
+    final r = radio;
+    if (r == null || r.status != TransportStatus.running) return false;
+    if (!radioAllowed(f, presence: presence)) return false;
+    return r.sendRadio(bytes, peerIds: peers, priority: _radioPriority(f));
+  }
+
+  /// One small hello over the radio so far-away phones know we are there
+  /// (every [radioHelloInterval], when the radio connects, and soon after
+  /// a new phone is heard over LoRa).
+  Future<void> sendRadioHello() async {
+    final r = radio;
+    if (r == null || r.status != TransportStatus.running) return;
+    _lastRadioHello = _clock();
+    final v = helloExtras?.call()['v'];
+    final f = Frame.control(
+      senderId: localNodeId,
+      channel: _wireChannel,
+      seq: _nextSeq(),
+      message: ControlMessage(
+        ControlKind.hello,
+        name: localName,
+        x: {'v': ?v, 'lr': 1},
+      ),
+    );
+    _sendRadio(f, _wire(f), null, presence: true);
+  }
+
+  void _maybeRadioHello() {
+    final r = radio;
+    final running = r != null && r.status == TransportStatus.running;
+    final became = running && !_radioWasRunning;
+    _radioWasRunning = running;
+    if (!running) return;
+    final last = _lastRadioHello;
+    if (became ||
+        last == null ||
+        _clock().difference(last) >= radioHelloInterval) {
+      unawaited(sendRadioHello());
+    }
+  }
+
+  /// Answer a phone we just heard over LoRa for the first time, after a
+  /// short random wait (so several phones do not all answer at once).
+  void _radioHelloSoonAfterNewPeer() {
+    final last = _lastRadioHello;
+    if (last != null &&
+        _clock().difference(last) < const Duration(seconds: 60)) {
+      return;
+    }
+    if (_radioHelloSoon?.isActive ?? false) return;
+    _radioHelloSoon = Timer(
+      Duration(milliseconds: 2000 + _rng.nextInt(4000)),
+      () {
+        if (_running) unawaited(sendRadioHello());
+      },
+    );
+  }
 
   /// [peerId] has no direct link but was heard through other phones
   /// recently and a mesh neighbour can carry packets towards it.
@@ -488,11 +672,18 @@ class TransportManager {
   Future<bool> sendFrameTo(int peerId, Frame frame) async {
     final route = routeTo(peerId);
     if (route.isEmpty) {
-      if (!meshReachable(peerId)) return false;
-      final r = mesh.originate(_wire(frame), to: peerId);
-      if (r == null) return false;
-      _sendMesh(r);
-      return true;
+      if (meshReachable(peerId)) {
+        final r = mesh.originate(_wire(frame), to: peerId);
+        if (r != null) {
+          _sendMesh(r);
+          return true;
+        }
+      }
+      // Last resort: the LoRa radio (only what it may carry).
+      if (radioReachable(peerId)) {
+        return _sendRadio(frame, _wire(frame), {peerId});
+      }
+      return false;
     }
     final bytes = _wire(frame);
     await Future.wait(
@@ -548,7 +739,7 @@ class TransportManager {
     );
     await Future.wait(
       _transports
-          .where((t) => t.status == TransportStatus.running)
+          .where((t) => t.status == TransportStatus.running && !t.lowBandwidth)
           .map((t) => _safeSend(t, bytes, null)),
     );
   }
@@ -560,7 +751,7 @@ class TransportManager {
     final routes = <TransportKind, Set<int>>{};
     for (final p in _peers.values) {
       if (p.channel != scope) continue;
-      final links = usableLinks(p, now);
+      final links = fastLinks(p, now);
       if (links.isEmpty) continue;
       routes.putIfAbsent(links.first, () => <int>{}).add(p.id);
       final bestSeen = p.lastSeen[links.first];
@@ -584,6 +775,15 @@ class TransportManager {
       final r = mesh.originate(bytes, skip: direct);
       if (r != null) _sendMesh(r);
     }
+    // Phones on our channel that only the LoRa radio reaches: one radio
+    // packet for all of them (never for live audio).
+    if (frame.type != FrameType.audio) {
+      final far = <int>{
+        for (final p in _peers.values)
+          if (p.channel == scope && onlyRadio(p.id)) p.id,
+      };
+      if (far.isNotEmpty) _sendRadio(frame, bytes, far);
+    }
     await Future.wait(
       routes.entries.map((e) {
         final t = _transports.firstWhere((t) => t.kind == e.key);
@@ -596,7 +796,7 @@ class TransportManager {
     final now = _clock();
     for (final p in _peers.values) {
       if (p.channel != scope) continue;
-      if (usableLinks(p, now).isNotEmpty) continue;
+      if (fastLinks(p, now).isNotEmpty) continue;
       if (meshReachable(p.id)) return true;
     }
     return false;
@@ -615,9 +815,10 @@ class TransportManager {
   /// addressable, best first.
   List<TransportKind> usableLinks(Peer p, DateTime now) {
     final ts = <Transport>[];
-    for (final kind in p.liveLinks(now, timeoutFor(p))) {
-      final t = _transportOf(kind);
+    for (final e in p.lastSeen.entries) {
+      final t = _transportOf(e.key);
       if (t == null || t.status != TransportStatus.running) continue;
+      if (now.difference(e.value) > _linkTimeout(t, p)) continue;
       if (!t.canReach(p.id)) continue;
       ts.add(t);
     }
@@ -625,9 +826,38 @@ class TransportManager {
     return [for (final t in ts) t.kind];
   }
 
+  /// Links heard recently (each with its own timeout), any state: for the
+  /// people list.
+  List<TransportKind> liveLinksOf(Peer p, DateTime now) => [
+    for (final e in p.lastSeen.entries)
+      if (now.difference(e.value) <=
+          (_transportOf(e.key)?.linkTimeout ?? timeoutFor(p)))
+        e.key,
+  ];
+
+  /// [usableLinks] without the slow ones (LoRa): what routing, pings and
+  /// make-before-break use.
+  List<TransportKind> fastLinks(Peer p, DateTime now) => [
+    for (final k in usableLinks(p, now))
+      if (!(_transportOf(k)?.lowBandwidth ?? false)) k,
+  ];
+
+  Duration _linkTimeout(Transport t, Peer p) => t.linkTimeout ?? timeoutFor(p);
+
+  /// The link the peer card shows: the best fast link, else nothing while
+  /// the phone mesh carries it ("via N hops"), else the radio.
   TransportKind? _bestLink(Peer p, DateTime now) {
     final l = usableLinks(p, now);
-    return l.isEmpty ? null : l.first;
+    if (l.isEmpty) return null;
+    final fast = fastLinks(p, now);
+    if (fast.isNotEmpty) return fast.first;
+    final seen = p.meshSeen;
+    if (seen != null &&
+        now.difference(seen) <= meshTimeout &&
+        mesh.meshNeighbours().isNotEmpty) {
+      return null;
+    }
+    return l.first;
   }
 
   Transport? _transportOf(TransportKind kind) {
@@ -718,6 +948,14 @@ class TransportManager {
     final now = _clock();
     final peer = _peers.putIfAbsent(f.senderId, () => Peer(f.senderId));
     final wasMeshHops = peer.meshHops;
+    final viaSlow = _transportOf(inbound.transport)?.lowBandwidth ?? false;
+    if (viaSlow && !relayed) {
+      final prev = peer.lastSeen[inbound.transport];
+      final t = _transportOf(inbound.transport)!;
+      if (prev == null || now.difference(prev) > _linkTimeout(t, peer)) {
+        _radioHelloSoonAfterNewPeer();
+      }
+    }
     if (relayed) {
       peer.meshSeen = now;
       peer.hops = hops;
@@ -744,6 +982,20 @@ class TransportManager {
           final msg = f.control;
           if (msg != null) {
             switch (msg.kind) {
+              case ControlKind.hello when viaSlow:
+                // Radio presence: just enough to show the phone; do not
+                // overwrite what its fast-link hellos told us.
+                if (peer.info.isEmpty) {
+                  final v = (msg.x['v'] as num?)?.toInt() ?? 0;
+                  if (v != peer.feature) {
+                    peer.feature = v;
+                    changed = true;
+                  }
+                }
+                if (msg.name != null && msg.name != peer.name) {
+                  peer.name = msg.name!;
+                  changed = true;
+                }
               case ControlKind.hello:
                 final iv = msg.interval;
                 peer.helloInterval = iv != null && iv > 0 && iv <= 30000
@@ -769,7 +1021,9 @@ class TransportManager {
                   }
                 }
               case ControlKind.ping:
-                if (!relayed && (msg.to == null || msg.to == localNodeId)) {
+                if (!relayed &&
+                    !viaSlow &&
+                    (msg.to == null || msg.to == localNodeId)) {
                   final t = _transportOf(inbound.transport);
                   if (t != null) {
                     _safeSend(
@@ -858,7 +1112,7 @@ class TransportManager {
   void _updateMeshHops(Peer p, DateTime now) {
     final seen = p.meshSeen;
     final meshAlive = seen != null && now.difference(seen) <= meshTimeout;
-    p.meshHops = meshAlive && usableLinks(p, now).isEmpty ? p.hops : null;
+    p.meshHops = meshAlive && fastLinks(p, now).isEmpty ? p.hops : null;
   }
 
   /// Drop dead links/peers. Runs every second; public for tests.
@@ -869,7 +1123,10 @@ class TransportManager {
     mesh.prune();
     for (final p in _peers.values) {
       final timeout = timeoutFor(p);
-      p.lastSeen.removeWhere((_, t) => now.difference(t) > timeout);
+      p.lastSeen.removeWhere((k, t) {
+        final lt = _transportOf(k)?.linkTimeout ?? timeout;
+        return now.difference(t) > lt;
+      });
       p.rtt.removeWhere((k, _) => !p.lastSeen.containsKey(k));
       final best = _bestLink(p, now);
       if (best != p.activeLink) {

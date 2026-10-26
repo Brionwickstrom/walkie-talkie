@@ -8,6 +8,7 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart' as fbp;
 import '../core/fragmenter.dart';
 import '../core/frame.dart';
 import '../core/transport.dart';
+import 'ble_scan_lock.dart';
 
 /// Bluetooth Low Energy transport: the only phone-to-phone radio link that
 /// works between Android and iPhone with no network at all.
@@ -58,6 +59,12 @@ class BleTransport extends Transport {
   static const String rxUuid = 'a7e1c0de-5741-4c4b-9e1e-000000000002';
 
   final int maxCentralLinks;
+
+  /// Bluetooth ids that are not phones (the paired LoRa radio).
+  final Set<String> ignoreDevices = {};
+  static final _meshtasticGuid = fbp.Guid(
+    '6ba1b218-15a8-461f-9fa8-5dcae273eafd',
+  );
 
   /// flutter_blue_plus 2.x requires declaring a license on connect. It is
   /// free for personal/non-profit use; for-profit use needs a commercial
@@ -168,6 +175,9 @@ class BleTransport extends Transport {
   /// right mode so peers that come back in range reconnect on their own.
   Future<void> _checkLinks() async {
     final now = DateTime.now();
+    // A LoRa radio pairing scan is running: leave the scanner alone (it
+    // also looks for our service, so phones are still found).
+    final scanLocked = BleScanLock.held;
     for (final e in _links.entries.toList()) {
       if (now.difference(e.value.lastRx) > silentLinkDrop) {
         final device = e.value.device;
@@ -179,6 +189,7 @@ class BleTransport extends Transport {
       }
     }
     _peripheralPeers.removeWhere((_, t) => now.difference(t) > silentLinkDrop);
+    if (scanLocked) return;
     if (_saver) {
       // Battery saver: scan in short bursts (duty cycle) instead of
       // continuously. Existing links stay up; new phones take longer to
@@ -234,6 +245,11 @@ class BleTransport extends Transport {
     _subs.add(
       fbp.FlutterBluePlus.onScanResults.listen((results) {
         for (final r in results) {
+          // Meshtastic radios (seen while pairing one) are not phones.
+          if (r.advertisementData.serviceUuids.contains(_meshtasticGuid)) {
+            continue;
+          }
+          if (ignoreDevices.contains(r.device.remoteId.str)) continue;
           _maybeConnect(r.device);
         }
       }),

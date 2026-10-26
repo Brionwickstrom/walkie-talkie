@@ -23,6 +23,7 @@ class ChatMessage {
     this.accuracy,
     this.liveUntil,
     this.liveId,
+    this.viaRadio = false,
     Set<int>? deliveredTo,
   }) : deliveredTo = deliveredTo ?? <int>{};
 
@@ -33,7 +34,9 @@ class ChatMessage {
     required String senderName,
     required bool mine,
     required DateTime at,
+    bool viaRadio = false,
   }) => ChatMessage(
+    viaRadio: viaRadio,
     id: id,
     sender: sender,
     senderName: senderName,
@@ -68,6 +71,9 @@ class ChatMessage {
   double? accuracy;
   DateTime? liveUntil;
   final int? liveId;
+
+  /// Arrived over a LoRa radio (v1.7.0).
+  final bool viaRadio;
 
   /// Phones that confirmed receiving it (sent messages).
   final Set<int> deliveredTo;
@@ -104,6 +110,7 @@ class ChatMessage {
     if (liveUntil != null) 'lu': liveUntil!.millisecondsSinceEpoch,
     'lid': ?liveId,
     if (deliveredTo.isNotEmpty) 'd': deliveredTo.toList(),
+    if (viaRadio) 'vr': 1,
   };
 
   static ChatMessage? fromJson(Object? j) {
@@ -128,6 +135,7 @@ class ChatMessage {
         accuracy: (j['acc'] as num?)?.toDouble(),
         liveUntil: lu == null ? null : DateTime.fromMillisecondsSinceEpoch(lu),
         liveId: (j['lid'] as num?)?.toInt(),
+        viaRadio: j['vr'] == 1,
         deliveredTo: {
           for (final x in (j['d'] as List?) ?? const []) (x as num).toInt(),
         },

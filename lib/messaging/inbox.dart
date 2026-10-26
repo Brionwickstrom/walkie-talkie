@@ -14,6 +14,7 @@ class InboxEntry {
     required this.durationMs,
     this.played = false,
     this.sentAt,
+    this.viaRadio = false,
   });
 
   final int sender;
@@ -28,6 +29,9 @@ class InboxEntry {
   /// When the sender recorded it (1.5.2+ senders); null from older apps,
   /// whose messages carry no time.
   final DateTime? sentAt;
+
+  /// Came over a LoRa radio (Codec 2 clip, v1.7.0).
+  final bool viaRadio;
 
   String get key => '${sender}_$msgId';
   String get blobName => 'in_$key.wtv';
@@ -45,6 +49,7 @@ class InboxEntry {
     'dur': durationMs,
     'p': played,
     if (sentAt != null) 'sa': sentAt!.millisecondsSinceEpoch,
+    if (viaRadio) 'r': 1,
   };
 
   static InboxEntry? fromJson(Object? j) {
@@ -64,6 +69,7 @@ class InboxEntry {
         sentAt: j['sa'] is num
             ? DateTime.fromMillisecondsSinceEpoch((j['sa'] as num).toInt())
             : null,
+        viaRadio: j['r'] == 1,
       );
     } catch (_) {
       return null;

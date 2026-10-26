@@ -152,6 +152,19 @@ const int bleChunkSize = 150;
 /// Chunk size for Wi-Fi / internet (well under a UDP packet).
 const int fastChunkSize = 1000;
 
+/// Chunk size over a LoRa radio: 12 byte frame header + 18 byte chunk
+/// header + 140 = 170 bytes, plus 29 when sealed = 199, inside the 200 byte
+/// LoRa payload budget (Meshtastic allows 233).
+const int loraChunkSize = 140;
+
+/// Transfers over a LoRa radio use this bit in the message id (ids are
+/// random 31 bit numbers): the radio body (Codec 2 clip, small chunks) is
+/// a different byte stream than the Wi-Fi / Bluetooth one, so its chunks
+/// and acks must never be mixed with a transfer of the same message that
+/// started on a fast link.
+const int radioTransferBit = 0x80000000;
+int realMsgId(int transferId) => transferId & 0x7FFFFFFF;
+
 const int defaultChunkSize = bleChunkSize;
 
 List<Uint8List> splitBody(Uint8List body, {int chunkSize = defaultChunkSize}) {
@@ -192,6 +205,15 @@ class TransferPacing {
     window: 12,
     burst: 3,
     rto: Duration(milliseconds: 1500),
+  );
+
+  /// LoRa: one chunk at a time, two in flight. The radio's own rate limit
+  /// spaces them out; Meshtastic retries directed packets itself, so the
+  /// app only resends after a long silence.
+  static const lora = TransferPacing(
+    window: 2,
+    burst: 1,
+    rto: Duration(seconds: 45),
   );
 }
 

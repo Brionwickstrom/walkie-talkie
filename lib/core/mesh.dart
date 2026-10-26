@@ -55,8 +55,11 @@ enum MeshKind {
   final int code;
 }
 
-/// Transports the mesh runs on (everything that works without internet).
-bool isOffGrid(TransportKind k) => k != TransportKind.internet;
+/// Transports the mesh runs on (everything that works without internet,
+/// except LoRa radios: Meshtastic repeats LoRa packets itself, so the app
+/// mesh never relays them again).
+bool isOffGrid(TransportKind k) =>
+    k != TransportKind.internet && k != TransportKind.lora;
 
 /// 64 bit FNV-1a hash of [bytes]: the mesh packet id.
 int meshPacketId(List<int> bytes) {
@@ -392,7 +395,12 @@ class MeshRouter {
       n.heard[via] = now;
     }
     if (f.type != FrameType.mesh) {
-      if (!offGrid) return MeshDecision(deliver: f);
+      if (!offGrid) {
+        // A LoRa copy shares the packet id of the direct and relayed
+        // copies, so a later relayed copy is dropped and never relayed.
+        if (via == TransportKind.lora) markSeen(meshPacketId(f.encode()));
+        return MeshDecision(deliver: f);
+      }
       final bytes = f.encode();
       final id = meshPacketId(bytes);
       if (!markSeen(id)) {

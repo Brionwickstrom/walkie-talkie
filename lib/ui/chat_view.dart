@@ -202,7 +202,7 @@ class _Bubble extends StatelessWidget {
               : m.deliveredTo.length == 1
               ? ' · delivered'
               : ' · delivered to ${m.deliveredTo.length}')
-        : '';
+        : (m.viaRadio ? ' · via radio' : '');
     Widget content;
     switch (m.type) {
       case ChatType.text:

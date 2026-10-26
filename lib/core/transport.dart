@@ -18,7 +18,12 @@ enum TransportKind {
   /// shared network (v1.6.0).
   wifiDirect('Wi-Fi Direct', 25),
   ble('Bluetooth LE', 20),
-  internet('Internet', 10);
+  internet('Internet', 10),
+
+  /// Meshtastic LoRa radio paired over Bluetooth (v1.7.0): miles of range
+  /// but a few small packets per minute. Only used for phones no other
+  /// link (or the phone mesh) reaches, and never for live audio.
+  lora('LoRa radio', 5);
 
   const TransportKind(this.label, this.defaultPriority);
   final String label;
@@ -53,6 +58,14 @@ abstract class Transport {
   int get priority => kind.defaultPriority;
 
   TransportStatus get status;
+
+  /// Very slow link (LoRa): no per-second hellos, pings, mesh beacons or
+  /// live audio; the manager decides what may go out on it.
+  bool get lowBandwidth => false;
+
+  /// How long a peer heard on this link stays reachable, if different
+  /// from the manager's normal link timeout.
+  Duration? get linkTimeout => null;
 
   /// Human readable reason when [status] is unavailable/error.
   String? get statusDetail => null;

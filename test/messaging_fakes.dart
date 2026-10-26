@@ -97,7 +97,9 @@ class FakeNode implements MessengerLink, RingLink {
     final copy = Uint8List.fromList(payload);
     final to = net.nodes[peerId]!;
     for (var i = 0; i < net.copies; i++) {
-      final kind = TransportKind.values[i % TransportKind.values.length];
+      final kind = net.copies == 1
+          ? net.linkKind
+          : TransportKind.values[i % TransportKind.values.length];
       scheduleMicrotask(
         () => to._data.add(InboundData(id, channel, copy, kind)),
       );

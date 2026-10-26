@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import '../chat/chat_body.dart';
 import '../core/transport.dart';
 import '../core/transport_manager.dart';
+import '../lora/radio_clip.dart';
 import 'inbox.dart';
 import 'outbox.dart';
 import 'storage.dart';
@@ -70,7 +71,11 @@ class ChatArrival {
     required this.channelMessage,
     required this.receivedAt,
     required this.body,
+    this.viaRadio = false,
   });
+
+  /// Came over a LoRa radio.
+  final bool viaRadio;
   final int sender;
   final int msgId;
   final String senderName;
@@ -82,11 +87,24 @@ class ChatArrival {
 
 /// Delivery state of one outgoing message to one phone (for the UI).
 class OutgoingStatus {
-  OutgoingStatus(this.entry, this.peer, this.progress, this.sending);
+  OutgoingStatus(
+    this.entry,
+    this.peer,
+    this.progress,
+    this.sending, {
+    this.viaRadio = false,
+    this.chunksDone = 0,
+    this.chunksTotal = 0,
+  });
   final OutboxEntry entry;
   final int peer;
   final double progress;
   final bool sending;
+
+  /// Going out over the LoRa radio (slow: one packet every few seconds).
+  final bool viaRadio;
+  final int chunksDone;
+  final int chunksTotal;
 }
 
 /// Voice messages: reliable chunked delivery with acks, store-and-forward
@@ -104,6 +122,9 @@ class Messenger {
     this.retryDelay = const Duration(seconds: 3),
     this.ackDelay = const Duration(milliseconds: 120),
     this.maxAttempts = 30,
+    this.radioStallTimeout = const Duration(minutes: 4),
+    this.radioAckDelay = const Duration(seconds: 3),
+    this.radioLiveInterval = const Duration(minutes: 5),
     Duration ttl = const Duration(hours: 24),
   }) : outbox = Outbox(storage, ttl: ttl),
        inbox = Inbox(storage),
@@ -120,6 +141,25 @@ class Messenger {
   final int chunkSize;
   final Duration tickInterval;
   final Duration stallTimeout;
+
+  /// LoRa radio transfers (v1.7.0): give up a session after this long
+  /// without progress, ack after this pause (one ack for several chunks),
+  /// and send live-location updates at most this often.
+  final Duration radioStallTimeout;
+  final Duration radioAckDelay;
+  final Duration radioLiveInterval;
+
+  /// Largest chat body sent over the radio (text, a location): ~5 packets.
+  static const radioMaxChatBody = 700;
+
+  /// Turns a received radio clip (Codec 2) into a playable [VoiceClip]
+  /// body (Opus). Null result or no hook: the clip is dropped.
+  Future<Uint8List?> Function(Uint8List radioClip)? radioClipToVoice;
+
+  final Set<(int, int)> _radioSessions = {};
+  final Set<(int, int)> _radioRx = {};
+  final Map<(int, int), Uint8List> _radioBodies = {};
+  final Map<(int, int), DateTime> _radioLiveAt = {};
   final Duration retryDelay;
   final Duration ackDelay;
 
@@ -221,8 +261,10 @@ class Messenger {
     VoiceClip clip, {
     int? toPeer,
     required int channel,
+    RadioClip? radioClip,
   }) async {
     final entry = OutboxEntry(
+      hasRadioBody: radioClip != null,
       msgId: _random.nextInt(0x7FFFFFFF) + 1,
       toPeer: toPeer,
       channel: channel,
@@ -234,7 +276,18 @@ class Messenger {
     // tell a fresh message from a stale one.
     final body = clip.encode(sentAt: entry.createdAt);
     _bodies[(entry.msgId, false)] = body;
-    await outbox.add(entry, body);
+    Uint8List? radio;
+    if (radioClip != null) {
+      radio = RadioClip(
+        mode: radioClip.mode,
+        bitsPerFrame: radioClip.bitsPerFrame,
+        frameMs: radioClip.frameMs,
+        frames: radioClip.frames,
+        bits: radioClip.bits,
+        sentAt: entry.createdAt,
+      ).encode();
+    }
+    await outbox.add(entry, body, radioBody: radio);
     _changed();
     await tick();
     return entry;
@@ -273,7 +326,9 @@ class Messenger {
 
   Future<void> cancel(int msgId) async {
     _sessions.removeWhere((k, _) => k.$1 == msgId);
+    _radioSessions.removeWhere((k) => k.$1 == msgId);
     _bodies.removeWhere((k, _) => k.$1 == msgId);
+    _radioBodies.removeWhere((k, _) => k.$1 == msgId);
     await outbox.cancel(msgId);
     _changed();
   }
@@ -288,6 +343,12 @@ class Messenger {
             p,
             _sessions[(e.msgId, p)]?.progress ?? 0,
             _sessions.containsKey((e.msgId, p)),
+            viaRadio:
+                _radioSessions.contains((e.msgId, p)) ||
+                (!_sessions.containsKey((e.msgId, p)) &&
+                    link.bestLinkTo(p) == TransportKind.lora),
+            chunksDone: _sessions[(e.msgId, p)]?.acked.length ?? 0,
+            chunksTotal: _sessions[(e.msgId, p)]?.total ?? 0,
           ),
   ];
 
@@ -349,22 +410,42 @@ class Messenger {
           changed = true;
           continue;
         }
-        _attempts[key] = n;
-        final ble = e.hasBleBody && link.bestLinkTo(p) == TransportKind.ble;
-        var body = _bodies[(e.msgId, ble)];
-        if (body == null) {
-          body = await outbox.storage.getBlob(ble ? e.bleBlobName : e.blobName);
+        final best = link.bestLinkTo(p);
+        final radio = best == TransportKind.lora;
+        Uint8List? body;
+        if (radio) {
+          // Only what fits the radio: a Codec 2 clip, a short text or a
+          // location. Anything else waits for a faster link.
+          body = await _radioBody(e, p, now);
           if (body == null) continue;
-          _bodies[(e.msgId, ble)] = body;
+        }
+        _attempts[key] = n;
+        final ble = e.hasBleBody && best == TransportKind.ble;
+        if (body == null) {
+          body = _bodies[(e.msgId, ble)];
+          if (body == null) {
+            body = await outbox.storage.getBlob(
+              ble ? e.bleBlobName : e.blobName,
+            );
+            if (body == null) continue;
+            _bodies[(e.msgId, ble)] = body;
+          }
+        }
+        if (radio) {
+          _radioSessions.add(key);
+        } else {
+          _radioSessions.remove(key);
         }
         _sessions[key] = TransferSender(
-          msgId: e.msgId,
+          msgId: radio ? (e.msgId | radioTransferBit) : e.msgId,
           to: p,
           body: body,
           durationMs: e.durationMs,
           channelMessage: e.isChannel,
           now: now,
-          chunkSize: link.bestLinkTo(p) == TransportKind.ble
+          chunkSize: radio
+              ? loraChunkSize - link.frameOverhead
+              : best == TransportKind.ble
               ? bleChunkSize - link.frameOverhead
               : chunkSize,
         );
@@ -375,15 +456,25 @@ class Messenger {
     // Pump sessions.
     for (final entry in _sessions.entries.toList()) {
       final s = entry.value;
+      final radio = _radioSessions.contains(entry.key);
+      final best = link.bestLinkTo(s.to);
+      // A radio transfer stops as soon as a fast link appears (it restarts
+      // with the full message there), and vice versa.
+      final switched = radio != (best == TransportKind.lora);
       if (!link.isReachable(s.to) ||
-          now.difference(s.lastProgress) > stallTimeout) {
+          switched ||
+          now.difference(s.lastProgress) >
+              (radio ? radioStallTimeout : stallTimeout)) {
         // Out of reach / stuck: park it, the message stays queued.
         _sessions.remove(entry.key);
-        _retryAt[entry.key] = now.add(retryDelay);
+        _radioSessions.remove(entry.key);
+        _retryAt[entry.key] = now.add(switched ? Duration.zero : retryDelay);
         changed = true;
         continue;
       }
-      final pacing = link.bestLinkTo(s.to) == TransportKind.ble
+      final pacing = radio
+          ? TransferPacing.lora
+          : best == TransportKind.ble
           ? TransferPacing.ble
           : TransferPacing.fast;
       for (final pkt in s.due(now, pacing)) {
@@ -393,14 +484,20 @@ class Messenger {
 
     // Delayed acks on the receiving side, and forget stale partials.
     for (final key in _ackDue.keys.toList()) {
-      if (now.difference(_ackDue[key]!) < ackDelay) continue;
+      final wait = _radioRx.contains(key) ? radioAckDelay : ackDelay;
+      if (now.difference(_ackDue[key]!) < wait) continue;
       _ackDue.remove(key);
       final r = _rx[key];
       if (r != null) await link.sendData(r.sender, r.ack().encode());
     }
-    _rx.removeWhere(
-      (_, r) => now.difference(r.lastActivity) > const Duration(minutes: 2),
-    );
+    _rx.removeWhere((k, r) {
+      final keep = _radioRx.contains(k)
+          ? const Duration(minutes: 10)
+          : const Duration(minutes: 2);
+      final stale = now.difference(r.lastActivity) > keep;
+      if (stale) _radioRx.remove(k);
+      return stale;
+    });
 
     if (changed) _changed();
   }
@@ -411,26 +508,30 @@ class Messenger {
     if (pkt == null || pkt.to != link.localNodeId) return;
     final now = _clock();
     if (pkt is AckPacket) {
-      final key = (pkt.msgId, d.peerId);
+      final id = realMsgId(pkt.msgId);
+      final key = (id, d.peerId);
       final s = _sessions[key];
       if (s != null) {
         if (s.onAck(pkt, now)) _changed();
         if (s.complete) {
           _sessions.remove(key);
-          await _deliveredTo(pkt.msgId, d.peerId);
+          _radioSessions.remove(key);
+          await _deliveredTo(id, d.peerId);
         }
       } else if (pkt.complete) {
         // Completed after the session was parked.
-        await _deliveredTo(pkt.msgId, d.peerId);
+        await _deliveredTo(id, d.peerId);
       }
       return;
     }
     if (pkt is ChunkPacket) {
       final key = (d.peerId, pkt.msgId);
-      if (hasSeen(d.peerId, pkt.msgId) ||
-          inbox.contains(d.peerId, pkt.msgId) ||
-          _chatSeen.contains((d.peerId, pkt.msgId)) ||
-          (alreadyHaveChat?.call(d.peerId, pkt.msgId) ?? false)) {
+      final id = realMsgId(pkt.msgId);
+      final viaRadio = d.transport == TransportKind.lora;
+      if (hasSeen(d.peerId, id) ||
+          inbox.contains(d.peerId, id) ||
+          _chatSeen.contains((d.peerId, id)) ||
+          (alreadyHaveChat?.call(d.peerId, id) ?? false)) {
         // Already have it; our final ack was probably lost.
         await link.sendData(
           d.peerId,
@@ -455,32 +556,45 @@ class Messenger {
           now: now,
         ),
       );
+      if (viaRadio) _radioRx.add(key);
       final isNew = r.add(pkt, now);
       if (r.complete) {
         _rx.remove(key);
         _ackDue.remove(key);
-        final body = r.assemble();
+        _radioRx.remove(key);
+        var body = r.assemble();
         await link.sendData(d.peerId, r.ack().encode());
         // Another copy (other transport / re-send) may have completed it
         // while we awaited: only the first one counts.
-        if (hasSeen(d.peerId, pkt.msgId)) return;
-        await _markSeen(d.peerId, pkt.msgId);
+        if (hasSeen(d.peerId, id)) return;
+        await _markSeen(d.peerId, id);
         final name = link.nameOf(d.peerId);
-        final clip = VoiceClip.tryDecode(body);
+        var clip = VoiceClip.tryDecode(body);
+        var radioClip = false;
+        if (clip == null && RadioClip.looksLike(body)) {
+          final hook = radioClipToVoice;
+          final voice = hook == null ? null : await hook(body);
+          if (voice == null) return;
+          body = voice;
+          clip = VoiceClip.tryDecode(body);
+          if (clip == null) return;
+          radioClip = true;
+        }
         if (clip == null) {
           final chat = ChatBody.tryDecode(body);
           if (chat == null) return;
-          _chatSeen.add((d.peerId, pkt.msgId));
+          _chatSeen.add((d.peerId, id));
           if (!_chats.isClosed) {
             _chats.add(
               ChatArrival(
                 sender: d.peerId,
-                msgId: pkt.msgId,
+                msgId: id,
                 senderName: name,
                 channel: d.channel,
                 channelMessage: pkt.channelMessage,
                 receivedAt: now,
                 body: chat,
+                viaRadio: viaRadio,
               ),
             );
           }
@@ -493,12 +607,13 @@ class Messenger {
         final e = InboxEntry(
           sentAt: sentAt,
           sender: d.peerId,
-          msgId: pkt.msgId,
+          msgId: id,
           senderName: name,
           channel: d.channel,
           channelMessage: pkt.channelMessage,
           receivedAt: now,
-          durationMs: pkt.durationMs,
+          durationMs: radioClip ? clip.durationMs : pkt.durationMs,
+          viaRadio: viaRadio || radioClip,
         );
         await inbox.add(e, body);
         if (!_received.isClosed) _received.add(e);
@@ -527,6 +642,9 @@ class Messenger {
     _attempts.clear();
     _rx.clear();
     _ackDue.clear();
+    _radioSessions.clear();
+    _radioRx.clear();
+    _radioBodies.clear();
     for (final e in List.of(inbox.entries)) {
       await _markSeen(e.sender, e.msgId);
     }
@@ -538,6 +656,51 @@ class Messenger {
     _changed();
   }
 
+  /// The body to send [e] to [peer] over the LoRa radio, or null when it
+  /// should wait for a faster link: voice messages need their Codec 2
+  /// clip; chats must be small and not photos; a live location goes at
+  /// most every [radioLiveInterval].
+  Future<Uint8List?> _radioBody(OutboxEntry e, int peer, DateTime now) async {
+    if (!e.isChat) {
+      if (!e.hasRadioBody) return null;
+      final k = (e.msgId, 0);
+      var b = _radioBodies[k];
+      if (b == null) {
+        b = await outbox.storage.getBlob(e.radioBlobName);
+        if (b == null) return null;
+        _radioBodies[k] = b;
+      }
+      return b;
+    }
+    var body = _bodies[(e.msgId, false)];
+    if (body == null) {
+      body = await outbox.storage.getBlob(e.blobName);
+      if (body == null) return null;
+      _bodies[(e.msgId, false)] = body;
+    }
+    if (body.length > radioMaxChatBody) return null;
+    final chat = ChatBody.tryDecode(body);
+    if (chat == null || chat.type == ChatType.photo) return null;
+    final live = chat.liveId;
+    if (live != null) {
+      final last = _radioLiveAt[(peer, live)];
+      if (last != null && now.difference(last) < radioLiveInterval) {
+        return null;
+      }
+      _radioLiveAt[(peer, live)] = now;
+    }
+    return body;
+  }
+
+  /// Whether [e] can go over the LoRa radio at all.
+  bool radioCapable(OutboxEntry e) {
+    if (!e.isChat) return e.hasRadioBody;
+    final b = _bodies[(e.msgId, false)];
+    if (b == null) return true;
+    if (b.length > radioMaxChatBody) return false;
+    return ChatBody.tryDecode(b)?.type != ChatType.photo;
+  }
+
   Future<void> _deliveredTo(int msgId, int peer) async {
     final e = outbox.byId(msgId);
     if (e == null) return;
@@ -546,6 +709,7 @@ class Messenger {
     if (await outbox.markDelivered(msgId, peer)) {
       if (outbox.byId(msgId) == null) {
         _bodies.removeWhere((k, _) => k.$1 == msgId);
+        _radioBodies.removeWhere((k, _) => k.$1 == msgId);
       }
       if (!_delivered.isClosed) _delivered.add((e, peer));
       _changed();

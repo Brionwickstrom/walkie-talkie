@@ -28,18 +28,40 @@ class InboxPage extends StatelessWidget {
                   const _Header('Waiting to be delivered'),
                   for (final o in out)
                     ListTile(
-                      leading: Icon(o.sending ? Icons.upload : Icons.schedule),
+                      leading: Icon(
+                        o.viaRadio
+                            ? Icons.settings_input_antenna
+                            : o.sending
+                            ? Icons.upload
+                            : Icons.schedule,
+                      ),
                       title: Text(
                         'To ${c.nameOf(o.peer)}'
                         '${o.entry.isChannel ? ' (${c.labelFor(o.entry.channel)})' : ''}'
                         ' - ${formatDuration(o.entry.durationMs)}',
                       ),
-                      subtitle: Text(
-                        o.sending
-                            ? 'Sending ${(o.progress * 100).round()}%'
-                            : 'Will send when they are in range '
-                                  '(${_expires(o.entry.createdAt)})',
-                      ),
+                      subtitle: o.sending && o.viaRadio
+                          ? Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Sending over the radio: '
+                                  '${o.chunksDone}/${o.chunksTotal} packets',
+                                ),
+                                const SizedBox(height: 4),
+                                LinearProgressIndicator(value: o.progress),
+                              ],
+                            )
+                          : Text(
+                              o.sending
+                                  ? 'Sending ${(o.progress * 100).round()}%'
+                                  : o.viaRadio && !o.entry.hasRadioBody
+                                  ? 'Too long for the radio: waits for '
+                                        'Wi-Fi, Bluetooth or internet '
+                                        '(${_expires(o.entry.createdAt)})'
+                                  : 'Will send when they are in range '
+                                        '(${_expires(o.entry.createdAt)})',
+                            ),
                       trailing: IconButton(
                         tooltip: 'Cancel',
                         icon: const Icon(Icons.close),
@@ -93,7 +115,8 @@ class InboxPage extends StatelessWidget {
                     ),
                     subtitle: Text(
                       '${_when(e.receivedAt)}'
-                      '${e.channelMessage ? ' - to ${c.labelFor(e.channel)}' : ''}',
+                      '${e.channelMessage ? ' - to ${c.labelFor(e.channel)}' : ''}'
+                      '${e.viaRadio ? ' - via radio' : ''}',
                     ),
                     trailing: IconButton(
                       tooltip: 'Delete',

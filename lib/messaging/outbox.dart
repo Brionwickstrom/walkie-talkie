@@ -14,6 +14,7 @@ class OutboxEntry {
     required this.durationMs,
     this.kind = OutboxKind.voice,
     this.hasBleBody = false,
+    this.hasRadioBody = false,
     Set<int>? recipients,
     Set<int>? delivered,
     Set<int>? failed,
@@ -35,6 +36,9 @@ class OutboxEntry {
   /// A smaller body (photo thumbnail) is stored for Bluetooth.
   final bool hasBleBody;
 
+  /// A Codec 2 clip is stored for LoRa radios (voice messages, v1.7.0).
+  final bool hasRadioBody;
+
   bool get isChat => kind == OutboxKind.chat;
 
   /// Who should get it. For channel messages: everyone on the channel when
@@ -48,6 +52,7 @@ class OutboxEntry {
   bool get isChannel => toPeer == null;
   String get blobName => 'out_$msgId.wtv';
   String get bleBlobName => 'out_${msgId}_ble.wtv';
+  String get radioBlobName => 'out_${msgId}_radio.wtv';
 
   bool get done =>
       recipients.isNotEmpty &&
@@ -69,6 +74,7 @@ class OutboxEntry {
     'dur': durationMs,
     if (isChat) 'k': 'chat',
     if (hasBleBody) 'ble': 1,
+    if (hasRadioBody) 'rad': 1,
     'r': recipients.toList(),
     'd': delivered.toList(),
     if (failed.isNotEmpty) 'f': failed.toList(),
@@ -87,6 +93,7 @@ class OutboxEntry {
         durationMs: (j['dur'] as num).toInt(),
         kind: j['k'] == 'chat' ? OutboxKind.chat : OutboxKind.voice,
         hasBleBody: j['ble'] == 1,
+        hasRadioBody: j['rad'] == 1,
         recipients: {for (final x in j['r'] as List) (x as num).toInt()},
         delivered: {for (final x in j['d'] as List) (x as num).toInt()},
         failed: {
@@ -129,9 +136,15 @@ class Outbox {
     return null;
   }
 
-  Future<void> add(OutboxEntry e, Uint8List body, {Uint8List? bleBody}) async {
+  Future<void> add(
+    OutboxEntry e,
+    Uint8List body, {
+    Uint8List? bleBody,
+    Uint8List? radioBody,
+  }) async {
     await storage.putBlob(e.blobName, body);
     if (bleBody != null) await storage.putBlob(e.bleBlobName, bleBody);
+    if (radioBody != null) await storage.putBlob(e.radioBlobName, radioBody);
     entries.add(e);
     await save();
   }
@@ -202,5 +215,6 @@ class Outbox {
     entries.remove(e);
     await storage.deleteBlob(e.blobName);
     if (e.hasBleBody) await storage.deleteBlob(e.bleBlobName);
+    if (e.hasRadioBody) await storage.deleteBlob(e.radioBlobName);
   }
 }

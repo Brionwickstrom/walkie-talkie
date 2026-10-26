@@ -15,6 +15,7 @@ import 'friends_page.dart';
 import 'history_page.dart';
 import 'home_view.dart';
 import 'inbox_page.dart';
+import 'radio_settings.dart';
 import 'sheets.dart';
 
 class HomePage extends StatefulWidget {
@@ -252,7 +253,11 @@ class _HomePageState extends State<HomePage> {
                     onDismiss: () => c.dismissRing(r),
                   ),
               ],
-              links: [for (final t in c.transports) (t.kind, t.status)],
+              links: [
+                for (final t in c.transports)
+                  if (t.kind != TransportKind.lora || c.radioPaired)
+                    (t.kind, t.status),
+              ],
               internet: c.internetStatus,
               showDetails: c.settings.showDiagnostics,
               onToggleDetails: c.setShowDiagnostics,
@@ -351,7 +356,7 @@ class _HomePageState extends State<HomePage> {
     final now = DateTime.now();
     final out = <PersonView>[];
     for (final p in c.peers) {
-      final links = p.liveLinks(now, c.manager.timeoutFor(p)).toList()
+      final links = c.manager.liveLinksOf(p, now)
         ..sort((a, b) => b.defaultPriority.compareTo(a.defaultPriority));
       DateTime? last;
       for (final t in [...p.lastSeen.values, ?p.meshSeen]) {
@@ -592,10 +597,12 @@ class _HomePageState extends State<HomePage> {
 
   String _queuedLabel() {
     final sending = c.outgoing.where((o) => o.sending).length;
+    final radio = c.outgoing.where((o) => o.sending && o.viaRadio).length;
     final waiting =
         c.outgoing.where((o) => !o.sending).length + c.waitingForAnyone.length;
     final parts = [
-      if (sending > 0) 'sending $sending',
+      if (sending > 0)
+        'sending $sending${radio > 0 ? ' ($radio over the radio)' : ''}',
       if (waiting > 0) '$waiting waiting for someone to come in range',
     ];
     return 'Voice messages: ${parts.join(', ')}';
@@ -835,6 +842,9 @@ class _HomePageState extends State<HomePage> {
                     value: c.settings.wifiDirect,
                     onChanged: c.setWifiDirect,
                   ),
+                const Divider(height: 32),
+                _SectionTitle('Long-range radio (Meshtastic)'),
+                RadioSettings(controller: c),
                 const Divider(height: 32),
                 _SectionTitle('Talk button'),
                 SwitchListTile(
@@ -1448,6 +1458,7 @@ String _short(TransportKind k) => switch (k) {
   TransportKind.wifiDirect => 'WiFiD',
   TransportKind.ble => 'BLE',
   TransportKind.internet => 'Net',
+  TransportKind.lora => 'LoRa',
 };
 
 /// e.g. "via WiFi | WiFi 0.3s 8ms | BLE 0.7s 41ms"

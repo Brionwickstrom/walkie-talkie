@@ -57,6 +57,7 @@ IconData transportIcon(TransportKind k) => switch (k) {
   TransportKind.wifiDirect => Icons.wifi_tethering,
   TransportKind.ble => Icons.bluetooth,
   TransportKind.internet => Icons.public,
+  TransportKind.lora => Icons.settings_input_antenna,
 };
 
 String transportName(TransportKind k) => switch (k) {
@@ -64,6 +65,7 @@ String transportName(TransportKind k) => switch (k) {
   TransportKind.wifiDirect => 'Wi-Fi Direct',
   TransportKind.ble => 'Bluetooth',
   TransportKind.internet => 'Internet',
+  TransportKind.lora => 'LoRa radio',
 };
 
 /// Stable, pleasant color per phone id.
@@ -580,7 +582,10 @@ class PersonCard extends StatelessWidget {
       status.add(
         Text(
           [
-            if (p.active != null) 'via ${transportName(p.active!)}',
+            if (p.active == TransportKind.lora)
+              'via radio'
+            else if (p.active != null)
+              'via ${transportName(p.active!)}',
             if (p.active == null && p.hops != null) hopsText(p.hops!),
             if (p.elsewhere != null) p.elsewhere!,
             if (p.lastHeard != null) agoText(p.lastHeard!),

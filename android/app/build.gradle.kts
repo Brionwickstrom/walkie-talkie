@@ -36,6 +36,14 @@ android {
         versionName = flutter.versionName
     }
 
+    // Codec 2 for voice clips over LoRa radios (src/main/cpp, v1.7.0).
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+
     buildTypes {
         release {
             // TODO: Add your own signing config for the release build.

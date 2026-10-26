@@ -49,6 +49,8 @@ class AppSettings {
     this.wifiDirect = true,
     this.notificationTalk = false,
     this.urgentLoud = true,
+    this.radioId,
+    this.radioName,
     Map<int, String>? privateChannels,
     Map<int, double>? peerVolumes,
     List<Friend>? friends,
@@ -149,6 +151,10 @@ class AppSettings {
 
   /// Urgent rings play at alarm volume, even in silent mode.
   bool urgentLoud;
+
+  /// Paired Meshtastic LoRa radio (Bluetooth id / name), v1.7.0.
+  String? radioId;
+  String? radioName;
 
   /// Passcodes of the channels marked private (channel -> passcode).
   /// Channels not in the map are public.
@@ -304,6 +310,8 @@ class SharedPrefsSettingsStore implements SettingsStore {
   static const _kUrgent = 'urgent_loud';
   static const _kFriends = 'friends';
   static const _kSocial = 'social';
+  static const _kRadioId = 'lora_radio_id';
+  static const _kRadioName = 'lora_radio_name';
 
   @override
   Future<AppSettings> load({required int defaultChannel}) async {
@@ -358,6 +366,8 @@ class SharedPrefsSettingsStore implements SettingsStore {
       wifiDirect: prefs?.getBool(_kWifiDirect) ?? true,
       notificationTalk: prefs?.getBool(_kNotifTalk) ?? false,
       urgentLoud: prefs?.getBool(_kUrgent) ?? true,
+      radioId: prefs?.getString(_kRadioId),
+      radioName: prefs?.getString(_kRadioName),
     );
   }
 
@@ -393,6 +403,13 @@ class SharedPrefsSettingsStore implements SettingsStore {
       await prefs.setBool(_kWifiDirect, s.wifiDirect);
       await prefs.setBool(_kNotifTalk, s.notificationTalk);
       await prefs.setBool(_kUrgent, s.urgentLoud);
+      if (s.radioId == null) {
+        await prefs.remove(_kRadioId);
+        await prefs.remove(_kRadioName);
+      } else {
+        await prefs.setString(_kRadioId, s.radioId!);
+        await prefs.setString(_kRadioName, s.radioName ?? '');
+      }
       await prefs.setString(
         _kVolumes,
         AppSettings.encodeVolumes(s.peerVolumes),
