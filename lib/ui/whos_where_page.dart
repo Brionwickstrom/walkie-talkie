@@ -351,6 +351,10 @@ class _PersonRow extends StatelessWidget {
                 ],
               ),
             ),
+            if (p.battery != null && !p.me) ...[
+              BatteryBadge(p.battery!),
+              const SizedBox(width: 4),
+            ],
             WhoPaths(person: p),
           ],
         ),

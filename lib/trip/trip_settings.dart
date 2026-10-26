@@ -15,6 +15,7 @@ class TripSettings {
     List<String>? canned,
     this.baseCamp = false,
     this.radioCheckIns = true,
+    this.radioTrailMinutes = 15,
   }) : canned = canned ?? List.of(defaultCustomCanned);
 
   /// Share my location with the channel and watch for lost contact.
@@ -40,6 +41,11 @@ class TripSettings {
   /// Check-ins also go over the LoRa radio to far phones.
   bool radioCheckIns;
 
+  /// While a trail is recorded in trip mode, send a thinned summary of it
+  /// over the LoRa radio to far phones every N minutes (0 = off), v1.8.3.
+  int radioTrailMinutes;
+  static const radioTrailChoices = [0, 5, 10, 15];
+
   static const defaultCustomCanned = ['Lunch spot', 'Going ahead', 'Found it'];
   static const checkInChoices = [0, 2, 5, 10, 15, 30];
   static const lostChoices = [0, 10, 20, 30, 45, 60];
@@ -54,6 +60,7 @@ class TripSettings {
     'cn': canned,
     'bc': baseCamp,
     'rci': radioCheckIns,
+    'rtm': radioTrailMinutes,
   });
 
   static TripSettings decode(String? s) {
@@ -73,6 +80,10 @@ class TripSettings {
         ],
         baseCamp: j['bc'] == true,
         radioCheckIns: j['rci'] != false,
+        radioTrailMinutes: switch ((j['rtm'] as num?)?.toInt()) {
+          final v? when radioTrailChoices.contains(v) => v,
+          _ => 15,
+        },
       );
     } catch (_) {
       return TripSettings();

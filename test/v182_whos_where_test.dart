@@ -425,12 +425,17 @@ void main() {
           via: TransportKind.lora,
         ),
       );
-      expect(w.entries.map((e) => e.id).toSet(), {2, 3, 4});
+      // v1.8.3: the rare LoRa copy counts too (5).
+      expect(w.entries.map((e) => e.id).toSet(), {2, 3, 4, 5});
       expect(w.entries.firstWhere((e) => e.id == 4).liveHops(now), 3);
-      expect(notes, 3);
+      expect(notes, 4);
       now = now.add(const Duration(seconds: 31));
       w.prune();
-      expect(w.entries, isEmpty, reason: '3 x 10 s');
+      // The radio copy lives 3 x 15 min (v1.8.3).
+      expect(w.entries.map((e) => e.id), [5], reason: '3 x 10 s');
+      now = now.add(const Duration(minutes: 46));
+      w.prune();
+      expect(w.entries, isEmpty);
       for (var i = 0; i < WhosWhere.maxEntries + 20; i++) {
         now = now.add(const Duration(milliseconds: 1));
         w.onLobby(lobbyMsg(100 + i, LobbyBeacon.public(name: 'x', channel: 1)));
@@ -568,7 +573,8 @@ void main() {
         ),
         isFalse,
       );
-      // Inbound over LoRa is ignored.
+      // v1.8.3: inbound over LoRa is accepted (the rare radio copy; it
+      // only goes out through sendLobbyRadio, never the generic path).
       final got = <InboundLobby>[];
       m.lobby.listen(got.add);
       lora.deliver(
@@ -577,7 +583,7 @@ void main() {
         )!,
       );
       await Future<void>.delayed(Duration.zero);
-      expect(got, isEmpty);
+      expect(got.single.transport, TransportKind.lora);
       await m.dispose();
 
       // Mesh: a relay passes one lobby beacon per origin per 8 s.

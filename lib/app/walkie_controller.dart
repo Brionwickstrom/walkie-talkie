@@ -28,6 +28,7 @@ import '../core/transport.dart';
 import '../core/transport_manager.dart';
 import '../friends/friend_links.dart';
 import '../friends/friend_messenger_link.dart';
+import '../friends/friend_ring_link.dart';
 import '../history/talk_history.dart';
 import '../lora/lora_transport.dart';
 import '../lora/meshtastic_ble.dart';
@@ -148,13 +149,20 @@ class WalkieController extends ChangeNotifier {
       _keys['${channelKey.channel}\u0000${settings.passcodeFor(channelKey.channel)}'] =
           channelKey;
     }
-    ringer = Ringer(link: ManagerRingLink(manager));
+    ringer = Ringer(
+      link: FriendAwareRingLink(
+        ManagerRingLink(manager),
+        () => friendLinks,
+        friendScope,
+      ),
+    );
     manager.helloExtras = _helloExtras;
     manager.blocked.addAll(settings.blocked.keys);
     final relays = relayUrisFor(settings);
     friendLinks = FriendLinks(
       localId: nodeId,
       radio: ManagerFriendRadio(manager),
+      far: ManagerFriendFarPaths(manager),
       localName: () => name,
       relayFactory: relays.isEmpty
           ? null
@@ -169,6 +177,7 @@ class WalkieController extends ChangeNotifier {
     whosWhere = WhosWhere(
       localId: nodeId,
       sendLocal: manager.sendLobbyLocal,
+      sendRadio: manager.sendLobbyRadio,
       beacon: _lobbyBeacon,
       relayFactory: _lobbyRelayFactory(relays),
       plan: powerPlan,
@@ -198,7 +207,11 @@ class WalkieController extends ChangeNotifier {
   LobbyBeacon? _lobbyBeacon(Duration every) {
     if (!settings.showInWhosWhere) return null;
     if (isPrivate) {
-      return LobbyBeacon.private(callSign: settings.defaultName, every: every);
+      return LobbyBeacon.private(
+        callSign: settings.defaultName,
+        every: every,
+        battery: batteryPct,
+      );
     }
     final n = channelName;
     return LobbyBeacon.public(
@@ -207,7 +220,32 @@ class WalkieController extends ChangeNotifier {
       every: every,
       channelName: n?.name,
       channelEmoji: n?.emoji,
+      battery: batteryPct,
     );
+  }
+
+  /// This phone's battery 0..100 (null = unknown), shared in hellos, the
+  /// radio presence hello, check-ins and lobby beacons (v1.8.3).
+  int? batteryPct;
+
+  Future<void> _refreshBattery() async {
+    final b = await bridge.batteryLevel();
+    if (b == null || b.pct == batteryPct) return;
+    batteryPct = b.pct;
+    notifyListeners();
+  }
+
+  /// Someone's last known battery: their hellos, else their latest
+  /// check-in, else their lobby beacon.
+  int? batteryOf(int id) {
+    final p = manager.peer(id)?.battery;
+    if (p != null) return p;
+    final t = trip?.batteries[id]?.pct;
+    if (t != null) return t;
+    for (final e in whosWhere.entries) {
+      if (e.id == id) return e.beacon.battery;
+    }
+    return null;
   }
 
   /// Everyone this phone can see, grouped by channel (Who's where).
@@ -234,6 +272,7 @@ class WalkieController extends ChangeNotifier {
             talking: p.talking,
             info: p.info,
             feature: p.feature,
+            battery: batteryOf(p.id),
           ),
       ],
       lobby: whosWhere.entries,
@@ -263,6 +302,12 @@ class WalkieController extends ChangeNotifier {
   int get whosWhereElsewhereCount => whosWhereElsewhere(whosWhereGroups);
 
   /// Settings > "Show me in Who's where".
+  Future<void> setReadReceipts(bool on) async {
+    settings.readReceipts = on;
+    notifyListeners();
+    await settingsStore.save(settings);
+  }
+
   Future<void> setShowInWhosWhere(bool on) async {
     settings.showInWhosWhere = on;
     notifyListeners();
@@ -693,6 +738,13 @@ class WalkieController extends ChangeNotifier {
       history = h;
       _subs.add(h.changes.listen((_) => notifyListeners()));
       _timers.add(Timer.periodic(const Duration(seconds: 1), (_) => h.tick()));
+      unawaited(_refreshBattery());
+      _timers.add(
+        Timer.periodic(
+          const Duration(minutes: 2),
+          (_) => unawaited(_refreshBattery()),
+        ),
+      );
     } catch (_) {}
 
     // Voice messages.
@@ -715,6 +767,8 @@ class WalkieController extends ChangeNotifier {
           Directory('${(await _messageDir()).parent.path}/friendmsg'),
         ),
       );
+      // Friend voice messages over the radio arrive as Codec 2 (v1.8.3).
+      m.radioClipToVoice = _radioClipToVoice;
       await m.start();
       friendMessenger = m;
       _wireMessenger(m, friend: true);
@@ -763,6 +817,7 @@ class WalkieController extends ChangeNotifier {
         userAgent:
             'WalkieTalkie/$ver (+https://github.com/Brionwickstrom/walkie-talkie)',
       );
+      t.battery = () => batteryPct;
       await t.start();
       await t.setOfflineSaver(settings.offlineSaver);
       trip = t;
@@ -778,11 +833,30 @@ class WalkieController extends ChangeNotifier {
   void _wireMessenger(Messenger m, {required bool friend}) {
     m.alreadyHaveChat = (s, id) => chats?.contains(s, id) ?? false;
     _subs.add(m.received.listen(_onVoiceMessage));
+    _subs.add(
+      m.read.listen((r) async {
+        final (id, peer) = r;
+        final store = chats;
+        if (store != null && await store.markSeen(nodeId, id, peer)) return;
+        // Not a chat: one of our voice messages was listened to.
+        _notice(
+          '${friend ? friendName(peer) : nameOf(peer)} listened to your '
+          'voice message',
+        );
+      }),
+    );
     _subs.add(m.chats.listen((a) => unawaited(_onChat(a, friend: friend))));
     _subs.add(
       m.delivered.listen((d) {
         if (d.$1.isChat) {
-          unawaited(chats?.markDelivered(nodeId, d.$1.msgId, d.$2));
+          unawaited(
+            chats?.markDelivered(
+              nodeId,
+              d.$1.msgId,
+              d.$2,
+              viaRadio: m.deliveredOverRadio(d.$1.msgId, d.$2),
+            ),
+          );
         } else {
           _notice(
             'Voice message delivered to '
@@ -1619,13 +1693,11 @@ class WalkieController extends ChangeNotifier {
     }
     final m = rec.toFriend ? friendMessenger : messenger;
     if (m == null) return;
-    // With a radio paired, also keep a Codec 2 copy for phones that only
-    // the radio reaches (not for friends: friend chats stay off LoRa).
-    final radioClip = rec.toFriend ? null : _makeRadioClip(clip);
-    if (radioPaired &&
-        !rec.toFriend &&
-        radioClip == null &&
-        radioVoiceSupported) {
+    // With a radio paired, also keep a Codec 2 copy for phones (and, since
+    // v1.8.3, friends) that only the radio reaches. Friend copies are
+    // sealed with the pair key like everything else to that friend.
+    final radioClip = _makeRadioClip(clip);
+    if (radioPaired && radioClip == null && radioVoiceSupported) {
       _notice(
         'Over the radio voice messages can be up to '
         '${RadioClip.maxDurationMs ~/ 1000} s: this one goes by Wi-Fi, '
@@ -1794,6 +1866,7 @@ class WalkieController extends ChangeNotifier {
     _stopReplay();
     playingKey = e.key;
     await m.markPlayed(e);
+    if (settings.readReceipts) m.markRead(e.sender, e.msgId);
     notifyListeners();
     await _audio.playClip(clip.packets, fromPeer: e.sender);
     if (playingKey == e.key) playingKey = null;
@@ -1899,6 +1972,7 @@ class WalkieController extends ChangeNotifier {
     final n = settings.channelNames[scope];
     return {
       'v': featureLevel,
+      'bt': ?batteryPct,
       if (n != null && !n.isEmpty) ...{
         'cn': n.name,
         'ce': n.emoji,
@@ -2169,15 +2243,22 @@ class WalkieController extends ChangeNotifier {
   bool isFriend(int id) => friendLinks.isFriend(id);
   bool friendOnline(int id) => friendLinks.isOnline(id);
 
-  /// "Wi-Fi", "Bluetooth", "Internet" or null when offline.
-  String? friendVia(int id) => switch (friendLinks.bestLink(id)) {
-    TransportKind.lan => 'Wi-Fi',
-    TransportKind.wifiDirect => 'Wi-Fi Direct',
-    TransportKind.ble => 'Bluetooth',
-    TransportKind.internet => 'Internet',
-    TransportKind.lora => 'Radio',
-    _ => null,
-  };
+  /// "Wi-Fi", "Bluetooth", "Internet", "phone mesh (2 hops)", "radio" or
+  /// null when not reachable.
+  String? friendVia(int id) => friendLinks.pathTo(id)?.label;
+
+  /// Friend chat header line (v1.8.3, see [friendStatusLineFor]).
+  String friendStatusLine(int id) =>
+      friendStatusLineFor(friendLinks.statusOf(id), DateTime.now());
+
+  /// Not reachable now but heard privately within the last two minutes.
+  bool friendRecentlyHeard(int id) {
+    final s = friendLinks.statusOf(id);
+    final t = s.lastHeard;
+    return !s.connected &&
+        t != null &&
+        DateTime.now().difference(t) <= FriendLinks.recentFor;
+  }
 
   int get onlineFriends => friends.where((f) => friendOnline(f.id)).length;
 
@@ -2382,7 +2463,10 @@ class WalkieController extends ChangeNotifier {
       // friend link; there is no fallback to the channel.
       if (!canTalkPrivately(id)) {
         _notice(
-          friendLinks.isFriend(id)
+          friendLinks.isFriend(id) && friendLinks.radioPathTo(id)
+              ? '${friendName(id)} is only reachable over the radio: send a '
+                    'voice message (up to 8 s) instead.'
+              : friendLinks.isFriend(id)
               ? 'Not connected privately yet: ${friendName(id)} is not '
                     'reachable. Send a voice message instead.'
               : 'Not connected privately yet: you are not friends on both '
@@ -2422,9 +2506,10 @@ class WalkieController extends ChangeNotifier {
     }
   }
 
-  /// The friend is paired (pair key) and heard recently on some path.
+  /// The friend is paired (pair key) and reachable on a path that carries
+  /// live audio (a direct link or the phone mesh; never the radio).
   bool canTalkPrivately(int id) =>
-      friendLinks.friend(id) != null && friendLinks.isOnline(id);
+      friendLinks.friend(id) != null && friendLinks.canTalkLive(id);
 
   void _sendPrivate(Uint8List opus) {
     final id = privateTalkTo;
@@ -2518,7 +2603,18 @@ class WalkieController extends ChangeNotifier {
   List<ChatMessage> chatMessages(String conv) =>
       chats?.messages(conv) ?? const [];
 
-  Future<void> markChatRead(String conv) async => chats?.markRead(conv);
+  Future<void> markChatRead(String conv) async {
+    final store = chats;
+    if (store == null) return;
+    await store.markRead(conv);
+    // Read receipts (v1.8.3): the friend's messenger for friend chats.
+    final list = await store.takeUnreceipted(conv);
+    if (!settings.readReceipts || list.isEmpty) return;
+    final m = friendOf(conv) != null ? friendMessenger : messenger;
+    for (final x in list) {
+      m?.markRead(x.sender, x.id);
+    }
+  }
 
   int? friendOf(String conv) =>
       conv.startsWith('f') ? int.tryParse(conv.substring(1)) : null;

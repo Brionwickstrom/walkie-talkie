@@ -160,6 +160,12 @@ object BgBridge {
                 val cur = am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC)
                 result.success(if (max > 0) cur.toDouble() / max else 1.0)
             }
+            "batteryLevel" -> {
+                // 0..100 and whether it is charging (v1.8.3); -1 if unknown.
+                val bm = ctx.getSystemService(Context.BATTERY_SERVICE) as android.os.BatteryManager
+                val pct = bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
+                result.success(mapOf("pct" to (if (pct in 0..100) pct else -1), "chg" to bm.isCharging))
+            }
             "ignoringBattery" -> {
                 val pm = ctx.getSystemService(Context.POWER_SERVICE) as PowerManager
                 result.success(pm.isIgnoringBatteryOptimizations(ctx.packageName))

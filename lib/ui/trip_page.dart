@@ -1288,6 +1288,28 @@ class TripPageState extends State<TripPage> {
                     value: s.radioCheckIns,
                     onChanged: (v) => trip.update((x) => x.radioCheckIns = v),
                   ),
+                  Text(
+                    'Trail summary over the LoRa radio',
+                    style: Theme.of(ctx).textTheme.titleSmall,
+                  ),
+                  Wrap(
+                    spacing: 6,
+                    children: [
+                      for (final m in TripSettings.radioTrailChoices)
+                        ChoiceChip(
+                          label: Text(m == 0 ? 'Off' : 'Every $m min'),
+                          selected: s.radioTrailMinutes == m,
+                          onSelected: (_) =>
+                              trip.update((x) => x.radioTrailMinutes = m),
+                        ),
+                    ],
+                  ),
+                  Text(
+                    'While you record a trail: a thinned copy (up to 16 '
+                    'points, one small packet) to phones only the radio '
+                    'reaches.',
+                    style: Theme.of(ctx).textTheme.bodySmall,
+                  ),
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
                     title: const Text('Miles and feet'),

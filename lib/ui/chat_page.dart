@@ -178,6 +178,10 @@ class _ChatPageState extends State<ChatPage> {
                     name: c.friendName(friend),
                     online: c.friendOnline(friend),
                     via: c.friendVia(friend),
+                    status: c.friendStatusLine(friend),
+                    recent: c.friendRecentlyHeard(friend),
+                    canTalk: c.friendLinks.canTalkLive(friend),
+                    onRing: () => c.ring(toPeer: friend),
                     needsUpdate:
                         c.friendOnline(friend) &&
                         c.friendLinks.needsUpdate(friend),
@@ -211,9 +215,25 @@ class FriendTalkBar extends StatelessWidget {
     required this.onTalk,
     required this.onRecord,
     this.needsUpdate = false,
+    this.status,
+    this.recent = false,
+    this.canTalk,
+    this.onRing,
   });
   final String name;
   final bool online;
+
+  /// Header line from [friendStatusLineFor] (null = the old wording).
+  final String? status;
+
+  /// Not reachable right now but heard within the last couple of minutes.
+  final bool recent;
+
+  /// Live talk possible (direct link or phone mesh, not radio-only).
+  final bool? canTalk;
+
+  /// Ring the friend (over any private path, LoRa included).
+  final VoidCallback? onRing;
 
   /// Their app is too old for private talk (voice messages still work).
   final bool needsUpdate;
@@ -280,7 +300,11 @@ class FriendTalkBar extends StatelessWidget {
                 Icon(
                   Icons.circle,
                   size: 10,
-                  color: online ? Colors.green : Colors.grey,
+                  color: online
+                      ? Colors.green
+                      : recent
+                      ? Colors.amber
+                      : Colors.grey,
                 ),
                 const SizedBox(width: 6),
                 Expanded(
@@ -290,11 +314,13 @@ class FriendTalkBar extends StatelessWidget {
                         : needsUpdate
                         ? '$name needs to update to talk privately · '
                               'voice messages work'
-                        : online
-                        ? 'Online${via != null ? ' via $via' : ''} · '
-                              'end-to-end encrypted'
-                        : 'Not connected privately yet · messages wait '
-                              'up to 24 h',
+                        : status ??
+                              (online
+                                  ? 'Connected privately'
+                                        '${via != null ? ' via $via' : ''} · '
+                                        'end-to-end encrypted'
+                                  : 'Not connected privately yet · messages '
+                                        'wait up to 24 h'),
                     style: TextStyle(
                       color: hearing ? Colors.orange.shade800 : null,
                       fontWeight: hearing ? FontWeight.w600 : null,
@@ -316,7 +342,7 @@ class FriendTalkBar extends StatelessWidget {
                   active: talking,
                   activeColor: Colors.red,
                   onHold: onTalk,
-                  enabled: online && !needsUpdate,
+                  enabled: (canTalk ?? online) && !needsUpdate,
                 ),
                 holdButton(
                   label: recording ? 'Recording...' : 'Hold: voice msg',
@@ -325,6 +351,12 @@ class FriendTalkBar extends StatelessWidget {
                   activeColor: Colors.red,
                   onHold: onRecord,
                 ),
+                if (onRing != null)
+                  ActionChip(
+                    avatar: const Icon(Icons.notifications_active, size: 18),
+                    label: const Text('Ring'),
+                    onPressed: onRing,
+                  ),
               ],
             ),
           ],

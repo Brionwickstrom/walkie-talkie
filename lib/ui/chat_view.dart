@@ -197,10 +197,14 @@ class _Bubble extends StatelessWidget {
     final bg = m.mine ? cs.primaryContainer : cs.surfaceContainerHighest;
     final fg = m.mine ? cs.onPrimaryContainer : cs.onSurface;
     final status = m.mine
-        ? (m.deliveredTo.isEmpty
+        ? (m.seenBy.isNotEmpty
+              ? (m.seenBy.length == 1
+                    ? ' · seen'
+                    : ' · seen by ${m.seenBy.length}')
+              : m.deliveredTo.isEmpty
               ? ' · waiting'
               : m.deliveredTo.length == 1
-              ? ' · delivered'
+              ? (m.viaRadio ? ' · delivered via radio' : ' · delivered')
               : ' · delivered to ${m.deliveredTo.length}')
         : (m.viaRadio ? ' · via radio' : '');
     Widget content;

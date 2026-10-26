@@ -12,12 +12,17 @@ import 'dart:typed_data';
 /// ```
 /// chunk: 1 | msgId u32 | to u32 | index u16 | total u16 | durMs u32 | flags u8 | data
 /// ack:   2 | msgId u32 | to u32 | total u16 | nextMissing u16 | bitmap u32
+/// read:  3 | msgId u32 | to u32 | n u8 | n x msgId u32   (v1.8.3)
 /// ```
+/// A read receipt says "these messages from you were seen / listened to";
+/// [ReadPacket.maxIds] per packet (42 bytes), so a batch fits one LoRa
+/// packet. Older apps do not decode type 3 and ignore it.
 /// `nextMissing` = lowest chunk index not received yet (== total when
 /// complete); bit i of `bitmap` = chunk nextMissing+1+i received.
 abstract class DataPacket {
   static const int chunkType = 1;
   static const int ackType = 2;
+  static const int readType = 3;
 
   int get msgId;
   int get to;
@@ -50,6 +55,16 @@ abstract class DataPacket {
             total: bd.getUint16(9),
             nextMissing: bd.getUint16(11),
             bitmap: bd.getUint32(13),
+          );
+        case readType:
+          if (b.length < 10) return null;
+          final n = b[9];
+          if (n == 0 || n > ReadPacket.maxIds || b.length < 10 + 4 * n) {
+            return null;
+          }
+          return ReadPacket(
+            to: bd.getUint32(5),
+            ids: [for (var i = 0; i < n; i++) bd.getUint32(10 + 4 * i)],
           );
       }
     } catch (_) {}
@@ -140,6 +155,34 @@ class AckPacket implements DataPacket {
       ..setUint16(9, total)
       ..setUint16(11, nextMissing)
       ..setUint32(13, bitmap);
+    return out;
+  }
+}
+
+/// Read receipt (v1.8.3): [ids] of messages from [to] that were seen.
+class ReadPacket implements DataPacket {
+  ReadPacket({required this.to, required this.ids})
+    : assert(ids.isNotEmpty && ids.length <= maxIds);
+
+  static const int maxIds = 8;
+
+  @override
+  int get msgId => ids.first;
+  @override
+  final int to;
+  final List<int> ids;
+
+  @override
+  Uint8List encode() {
+    final out = Uint8List(10 + 4 * ids.length);
+    final bd = ByteData.sublistView(out)
+      ..setUint8(0, DataPacket.readType)
+      ..setUint32(1, ids.first)
+      ..setUint32(5, to)
+      ..setUint8(9, ids.length);
+    for (var i = 0; i < ids.length; i++) {
+      bd.setUint32(10 + 4 * i, ids[i]);
+    }
     return out;
   }
 }

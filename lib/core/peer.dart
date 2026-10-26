@@ -30,6 +30,9 @@ class Peer {
   /// Feature level from the hello (15 = v1.5 friends / chat), 0 = older.
   int feature = 0;
 
+  /// Phone battery 0..100 from its hellos (`bt`, v1.8.3), null = unknown.
+  int? battery;
+
   /// Hello extension fields (channel name, admin, announcement mode...).
   Map<String, Object?> info = const {};
 

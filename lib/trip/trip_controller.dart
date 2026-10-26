@@ -337,7 +337,41 @@ class TripController extends ChangeNotifier {
     checkIn: checkIn,
     accuracyM: f.accuracyM,
     fixAge: _clock().difference(f.at),
+    battery: checkIn ? battery?.call() : null,
   );
+
+  /// This phone's battery 0..100 for check-ins (null = unknown), v1.8.3.
+  int? Function()? battery;
+
+  /// Battery levels other phones sent with their check-ins.
+  final Map<int, ({int pct, DateTime at})> batteries = {};
+
+  DateTime? _lastRadioTrail;
+
+  /// Radio trail summaries sent (tests / Details).
+  int radioTrailsSent = 0;
+
+  /// Every [TripSettings.radioTrailMinutes] while recording in trip mode:
+  /// a thinned summary of the current trail, radio only, for phones only
+  /// the radio reaches (the radio's own rate limit and bulk priority
+  /// still apply). Public for tests.
+  void maybeSendRadioTrail() {
+    final every = settings.radioTrailMinutes;
+    if (every <= 0 || !settings.tripMode || !recorder.recording) return;
+    final t = recorder.track;
+    if (t == null || t.points.length < 2) return;
+    final now = _clock();
+    final last = _lastRadioTrail;
+    if (last != null && now.difference(last) < Duration(minutes: every)) {
+      return;
+    }
+    _lastRadioTrail = now;
+    radioTrailsSent++;
+    _send(
+      trackSummary(t, _nextId()),
+      const TripRoute(fast: false, radio: true),
+    );
+  }
 
   /// Send a check-in now (also over the radio to far phones).
   Future<bool> checkInNow() async {
@@ -374,6 +408,7 @@ class TripController extends ChangeNotifier {
         }
       }
       _maybeSendLive();
+      maybeSendRadioTrail();
     }
     if (_ticks % 5 == 0) {
       _refreshPeers();
@@ -609,6 +644,13 @@ class TripController extends ChangeNotifier {
         }
         if (lost.enabled) {
           lost.heard(origin, at: at, pos: msg.pos, posAt: fixAt);
+        }
+        final bt = msg.battery;
+        if (bt != null) {
+          final prev = batteries[origin];
+          if (prev == null || !at.isBefore(prev.at)) {
+            batteries[origin] = (pct: bt, at: at);
+          }
         }
       case SosMsg():
         final s = sos.onSos(origin, msg, held: held, age: age);

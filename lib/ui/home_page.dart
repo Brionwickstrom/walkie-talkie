@@ -509,6 +509,7 @@ class _HomePageState extends State<HomePage> {
           debug: peerDebugLine(p, now),
           distance: _distanceTo(p.id),
           arrowDeg: _arrowTo(p.id),
+          battery: c.batteryOf(p.id),
         ),
       );
     }
@@ -973,6 +974,18 @@ class _HomePageState extends State<HomePage> {
                   ),
                   value: c.settings.showInWhosWhere,
                   onChanged: c.setShowInWhosWhere,
+                ),
+                SwitchListTile(
+                  key: const Key('readReceipts'),
+                  contentPadding: EdgeInsets.zero,
+                  secondary: const Icon(Icons.done_all),
+                  title: const Text('Send read receipts'),
+                  subtitle: const Text(
+                    'People see "seen" once you open their chat or play '
+                    'their voice message. Tiny, works over the radio too.',
+                  ),
+                  value: c.settings.readReceipts,
+                  onChanged: c.setReadReceipts,
                 ),
                 const Divider(height: 32),
                 _SectionTitle('Off-grid (no internet)'),

@@ -230,6 +230,14 @@ class BackgroundBridge {
   /// Media-stream volume 0..1 (what walkie voices play on); null off Android.
   Future<double?> mediaVolume() => _call<double>('mediaVolume');
 
+  /// Phone battery 0..100 (null when unknown / not Android), v1.8.3.
+  Future<({int pct, bool charging})?> batteryLevel() async {
+    final m = await _call<Map<Object?, Object?>>('batteryLevel');
+    final p = (m?['pct'] as num?)?.toInt();
+    if (p == null || p < 0 || p > 100) return null;
+    return (pct: p, charging: m?['chg'] == true);
+  }
+
   /// True when Android won't put the app to sleep.
   Future<bool> ignoringBatteryOptimizations() async =>
       await _call<bool>('ignoringBattery') ?? true;

@@ -36,9 +36,17 @@ class LobbyEntry {
     return t < WhosWhere.minTtl ? WhosWhere.minTtl : t;
   }
 
+  /// The LoRa copy comes every [LobbyBeacon.radioInterval]: it counts
+  /// 3x that long.
+  Duration ttlFor(TransportKind k) {
+    if (k != TransportKind.lora) return ttl;
+    final r = LobbyBeacon.radioInterval * 3;
+    return r > ttl ? r : ttl;
+  }
+
   Set<TransportKind> liveLinks(DateTime now) => {
     for (final e in heard.entries)
-      if (now.difference(e.value) <= ttl) e.key,
+      if (now.difference(e.value) <= ttlFor(e.key)) e.key,
   };
 
   int? liveHops(DateTime now) {
@@ -61,7 +69,10 @@ class LobbyEntry {
 ///   [PowerPlan.lobbyRelayInterval] (30 s / 60 s). Only lobby frames are
 ///   read from that room. Off in offline power save; battery saver keeps
 ///   it only while the app is on screen.
-/// * Never over LoRa.
+/// * LoRa (v1.8.3): one copy every [LobbyBeacon.radioInterval] (15 min)
+///   while a radio is connected ([sendRadio]), at the radio's lowest
+///   priority and rate limit, so people only the radio reaches show up
+///   (kept for 3x that). Same privacy rules as every other copy.
 /// * "Show me in Who's where" off: nothing is sent (we still listen).
 /// * Inbound beacons go through a [LobbyLimiter]; at most [maxEntries]
 ///   phones are kept.
@@ -71,6 +82,7 @@ class WhosWhere extends ChangeNotifier {
     required this.sendLocal,
     required this.beacon,
     this.relayFactory,
+    this.sendRadio,
     this._plan = const PowerPlan(),
     DateTime Function()? clock,
     LobbyLimiter? limiter,
@@ -88,6 +100,12 @@ class WhosWhere extends ChangeNotifier {
   /// This phone's beacon for a path announcing [every], or null when
   /// "Show me in Who's where" is off.
   final LobbyBeacon? Function(Duration every) beacon;
+
+  /// Queues lobby frame bytes on the LoRa radio; false when no radio is
+  /// connected (tried again next tick). Null = no radio support.
+  bool Function(Uint8List bytes)? sendRadio;
+  DateTime? _lastRadio;
+  int sentRadio = 0;
 
   /// Opens the relay lobby room (null = no relay configured).
   Transport Function()? relayFactory;
@@ -185,7 +203,23 @@ class WhosWhere extends ChangeNotifier {
         (r == null || now.difference(r) >= _plan.lobbyRelayInterval)) {
       await _sendRelay();
     }
+    final rd = _lastRadio;
+    if (sendRadio != null &&
+        (rd == null || now.difference(rd) >= LobbyBeacon.radioInterval)) {
+      _sendRadio();
+    }
     prune();
+  }
+
+  void _sendRadio() {
+    final send = sendRadio;
+    if (send == null) return;
+    final b = beacon(LobbyBeacon.radioInterval);
+    if (b == null) return;
+    if (send(b.encode(senderId: localId, seq: _nextSeq()))) {
+      _lastRadio = _clock();
+      sentRadio++;
+    }
   }
 
   Future<void> _sendLocal() async {
@@ -256,7 +290,6 @@ class WhosWhere extends ChangeNotifier {
   /// A lobby beacon arrived (local link, mesh or relay room).
   void onLobby(InboundLobby m) {
     if (m.peerId == localId) return;
-    if (m.transport == TransportKind.lora) return;
     final path = m.hops > 1 ? 'mesh' : m.transport;
     if (!limiter.allow(m.peerId, path)) return;
     final now = _clock();
@@ -276,11 +309,16 @@ class WhosWhere extends ChangeNotifier {
       final n = m.beacon;
       if (o.channel != n.channel ||
           o.name != n.name ||
+          o.battery != n.battery ||
           o.channelName != n.channelName ||
           o.channelEmoji != n.channelEmoji) {
         changed = true;
       }
-      e.beacon = n;
+      // A rare radio copy keeps the interval the local copies announced
+      // (the radio path has its own, longer lifetime: [LobbyEntry.ttlFor]).
+      e.beacon = m.transport == TransportKind.lora
+          ? n.copyWith(every: o.every)
+          : n;
       if (!e.alive(now)) changed = true;
     }
     if (m.hops > 1) {
@@ -298,7 +336,7 @@ class WhosWhere extends ChangeNotifier {
     final now = _clock();
     final before = _entries.length;
     _entries.removeWhere((_, e) {
-      e.heard.removeWhere((_, t) => now.difference(t) > e.ttl);
+      e.heard.removeWhere((k, t) => now.difference(t) > e.ttlFor(k));
       final m = e.meshAt;
       if (m != null && now.difference(m) > e.ttl) e.meshAt = null;
       return e.heard.isEmpty && e.meshAt == null;
@@ -343,9 +381,13 @@ class WhoPerson {
     this.lastHeard,
     this.known = false,
     this.feature = 0,
+    this.battery,
   });
   final int id;
   final String name;
+
+  /// Phone battery 0..100 when shared (v1.8.3).
+  final int? battery;
   final bool me;
   final bool friend;
   final bool talking;
@@ -407,9 +449,11 @@ class WhoSeen {
     this.talking = false,
     this.info = const {},
     this.feature = 0,
+    this.battery,
   });
   final int id;
   final String name;
+  final int? battery;
 
   /// Channel number, or a private scope (see TransportManager.scope).
   final int scope;
@@ -501,6 +545,7 @@ List<WhoGroup> buildWhosWhere({
         lastHeard: s.lastHeard,
         known: true,
         feature: s.feature,
+        battery: s.battery ?? l?.beacon.battery,
       ),
     );
   }
@@ -528,6 +573,7 @@ List<WhoGroup> buildWhosWhere({
         hops: e.liveHops(now),
         lastHeard: now.difference(e.lastAt),
         feature: b.feature,
+        battery: b.battery,
       ),
     );
   }

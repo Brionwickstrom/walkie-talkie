@@ -482,6 +482,15 @@ class TransportManager {
     await Future.wait(local.map((t) => _safeSend(t, bytes, null)));
   }
 
+  /// The rare LoRa copy of our lobby beacon (v1.8.3, see WhosWhere): one
+  /// broadcast packet at the lowest priority, through the radio's rate
+  /// limiter. False when no radio is connected.
+  bool sendLobbyRadio(Uint8List bytes) {
+    final r = radio;
+    if (r == null || r.status != TransportStatus.running) return false;
+    return r.sendRadio(bytes, priority: LoraPriority.bulk);
+  }
+
   /// Broadcast presence on every running transport.
   Future<void> sendHello() => _broadcastControl(
     ControlMessage(
@@ -710,7 +719,7 @@ class TransportManager {
       message: ControlMessage(
         ControlKind.hello,
         name: localName,
-        x: {'v': ?v, 'lr': 1},
+        x: {'v': ?v, 'lr': 1, 'bt': ?helloExtras?.call()['bt']},
       ),
     );
     _sendRadio(f, _wire(f), null, presence: true);
@@ -1105,6 +1114,41 @@ class TransportManager {
     return null;
   }
 
+  /// A sealed friend frame towards [peerId] through the phone mesh (other
+  /// app phones carry it opaquely). False when no mesh neighbour exists.
+  bool sendSealedMesh(Uint8List bytes, int peerId) {
+    final r = mesh.originate(bytes, to: peerId);
+    if (r == null) return false;
+    _sendMesh(r);
+    return true;
+  }
+
+  /// Some phone carries mesh packets for us right now.
+  bool get hasMeshNeighbours => mesh.meshNeighbours().isNotEmpty;
+
+  /// A sealed friend frame over the LoRa radio. What may go (and how
+  /// urgently) is decided on the plain [inner] frame, as for channel
+  /// traffic; the radio only ever sees [bytes] (ciphertext). Addressed to
+  /// the friend's radio node when it is known, else broadcast.
+  bool sendSealedRadio(Frame inner, Uint8List bytes, int peerId) {
+    final r = radio;
+    if (r == null || r.status != TransportStatus.running) return false;
+    if (!radioAllowed(inner)) return false;
+    return r.sendRadio(
+      bytes,
+      peerIds: {peerId},
+      priority: _radioPriority(inner),
+    );
+  }
+
+  /// [peerId]'s phone was heard on [kind] recently (any frame it sent on
+  /// our channel, e.g. its hellos), by the normal link timeouts.
+  bool heardOn(TransportKind kind, int peerId) {
+    final p = _peers[peerId];
+    if (p == null) return false;
+    return usableLinks(p, _clock()).contains(kind);
+  }
+
   /// Send already-encoded bytes on one transport (friend links).
   Future<void> sendRaw(
     TransportKind kind,
@@ -1168,7 +1212,7 @@ class TransportManager {
     // Who's where before the channel / key checks, without touching the
     // people list. LoRa never carries them.
     if (f.type == FrameType.lobby) {
-      if (inbound.transport == TransportKind.lora) return;
+      // LoRa copies come rarely (every 15 min, v1.8.3).
       final b = LobbyBeacon.tryDecode(f);
       if (b != null && !_lobby.isClosed) {
         _lobby.add(
@@ -1192,9 +1236,20 @@ class TransportManager {
     if (f.type == FrameType.sealed) {
       final opened = key?.open(f);
       if (opened == null) {
-        // Friend frames are only taken from direct links: friend presence
-        // and replies are tied to the link they arrived on.
-        if (!relayed) sealedHandler?.call(inbound);
+        // Friend frames (v1.8.3): taken from direct links, the phone mesh
+        // and the LoRa radio alike. FriendLinks only accepts what opens
+        // with a pair key (AEAD), so the path proves nothing either way;
+        // the hop count tells it how the frame came.
+        sealedHandler?.call(
+          identical(f, inbound.frame) && !relayed
+              ? inbound
+              : InboundFrame(
+                  f,
+                  inbound.transport,
+                  rssi: inbound.rssi,
+                  hops: hops,
+                ),
+        );
         return;
       }
       f = opened;
@@ -1241,6 +1296,14 @@ class TransportManager {
         case FrameType.control:
           final msg = f.control;
           if (msg != null) {
+            if (msg.kind == ControlKind.hello) {
+              final bt = msg.x['bt'];
+              final b = bt is num && bt >= 0 && bt <= 100 ? bt.toInt() : null;
+              if (b != null && b != peer.battery) {
+                peer.battery = b;
+                changed = true;
+              }
+            }
             switch (msg.kind) {
               case ControlKind.hello when viaSlow:
                 // Radio presence: just enough to show the phone; do not

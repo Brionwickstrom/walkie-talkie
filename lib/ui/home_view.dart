@@ -22,9 +22,13 @@ class PersonView {
     this.hops,
     this.distance,
     this.arrowDeg,
+    this.battery,
   });
 
   final int id;
+
+  /// Their phone battery 0..100 (v1.8.3), null = unknown.
+  final int? battery;
 
   /// Trip: "0.8 mi NE" from my GPS fix to theirs, else null.
   final String? distance;
@@ -508,6 +512,39 @@ class StatusRow extends StatelessWidget {
 }
 
 /// A person on the channel (or "You").
+/// "🔋 64%" (red at 15 % or less).
+class BatteryBadge extends StatelessWidget {
+  const BatteryBadge(this.pct, {super.key});
+  final int pct;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final low = pct <= 15;
+    final color = low ? Colors.red : theme.colorScheme.outline;
+    final icon = pct >= 90
+        ? Icons.battery_full
+        : pct >= 50
+        ? Icons.battery_5_bar
+        : pct > 15
+        ? Icons.battery_3_bar
+        : Icons.battery_alert;
+    return Tooltip(
+      message: 'Phone battery',
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 15, color: color),
+          Text(
+            '$pct%',
+            style: theme.textTheme.bodySmall?.copyWith(color: color),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class PersonCard extends StatelessWidget {
   const PersonCard({
     super.key,
@@ -595,6 +632,7 @@ class PersonCard extends StatelessWidget {
           ),
         );
       }
+      if (p.battery != null) status.add(BatteryBadge(p.battery!));
       if ((p.volume - 1).abs() > 0.01) {
         status.add(
           Row(

@@ -210,6 +210,72 @@ class Messenger {
   final _chats = StreamController<ChatArrival>.broadcast();
   final _delivered = StreamController<(OutboxEntry, int)>.broadcast();
   final _changes = StreamController<void>.broadcast();
+  final _read = StreamController<(int, int)>.broadcast();
+
+  // ------------------------------------------------------ read receipts
+
+  /// Wait this long to batch receipts (fast links / LoRa radio).
+  static const readBatchDelay = Duration(seconds: 2);
+  static const radioReadBatchDelay = Duration(seconds: 20);
+
+  /// Receipts waiting to go out: sender -> (first queued, msg ids).
+  final Map<int, (DateTime, List<int>)> _readDue = {};
+  final Set<(int, int)> _readSent = {};
+
+  /// Read receipts sent (tests / Details).
+  int readPacketsSent = 0;
+
+  /// One of our messages was seen by a phone: (msgId, peer).
+  Stream<(int, int)> get read => _read.stream;
+
+  /// Tell [sender] their message [msgId] was seen (opened chat / played
+  /// voice message). Batched; goes over whatever reaches them, the radio
+  /// included (tiny). Each message at most once.
+  void markRead(int sender, int msgId) {
+    if (sender == link.localNodeId) return;
+    if (!_readSent.add((sender, msgId))) return;
+    if (_readSent.length > 2000) _readSent.remove(_readSent.first);
+    final cur = _readDue[sender];
+    if (cur == null) {
+      _readDue[sender] = (_clock(), [msgId]);
+    } else {
+      cur.$2.add(msgId);
+    }
+  }
+
+  Future<void> _flushReads(DateTime now) async {
+    for (final e in _readDue.entries.toList()) {
+      final peer = e.key;
+      if (!link.isReachable(peer)) continue;
+      final wait = link.bestLinkTo(peer) == TransportKind.lora
+          ? radioReadBatchDelay
+          : readBatchDelay;
+      final (since, ids) = e.value;
+      if (now.difference(since) < wait && ids.length < ReadPacket.maxIds) {
+        continue;
+      }
+      _readDue.remove(peer);
+      for (var i = 0; i < ids.length; i += ReadPacket.maxIds) {
+        final batch = ids.sublist(i, min(i + ReadPacket.maxIds, ids.length));
+        final ok = await link.sendData(
+          peer,
+          ReadPacket(to: peer, ids: batch).encode(),
+        );
+        if (ok) {
+          readPacketsSent++;
+        } else {
+          // Try again later with the rest.
+          final rest = ids.sublist(i);
+          _readDue[peer] = (now, rest);
+          break;
+        }
+      }
+    }
+    // Receipts nobody could take for a day are dropped.
+    _readDue.removeWhere(
+      (_, v) => now.difference(v.$1) > const Duration(hours: 24),
+    );
+  }
 
   /// A complete new voice message arrived.
   Stream<InboxEntry> get received => _received.stream;
@@ -253,6 +319,7 @@ class Messenger {
     await _chats.close();
     await _delivered.close();
     await _changes.close();
+    await _read.close();
   }
 
   /// Queue [clip] for [toPeer] (or everyone on [channel] when null) and
@@ -499,6 +566,8 @@ class Messenger {
       return stale;
     });
 
+    await _flushReads(now);
+
     if (changed) _changed();
   }
 
@@ -507,20 +576,29 @@ class Messenger {
     final pkt = DataPacket.tryDecode(d.payload);
     if (pkt == null || pkt.to != link.localNodeId) return;
     final now = _clock();
+    if (pkt is ReadPacket) {
+      for (final id in pkt.ids) {
+        if (!_read.isClosed) _read.add((id, d.peerId));
+      }
+      return;
+    }
     if (pkt is AckPacket) {
       final id = realMsgId(pkt.msgId);
       final key = (id, d.peerId);
+      final ackRadio =
+          (pkt.msgId & radioTransferBit) != 0 ||
+          d.transport == TransportKind.lora;
       final s = _sessions[key];
       if (s != null) {
         if (s.onAck(pkt, now)) _changed();
         if (s.complete) {
           _sessions.remove(key);
           _radioSessions.remove(key);
-          await _deliveredTo(id, d.peerId);
+          await _deliveredTo(id, d.peerId, viaRadio: ackRadio);
         }
       } else if (pkt.complete) {
         // Completed after the session was parked.
-        await _deliveredTo(id, d.peerId);
+        await _deliveredTo(id, d.peerId, viaRadio: ackRadio);
       }
       return;
     }
@@ -701,9 +779,26 @@ class Messenger {
     return ChatBody.tryDecode(b)?.type != ChatType.photo;
   }
 
-  Future<void> _deliveredTo(int msgId, int peer) async {
+  /// Deliveries confirmed over the LoRa radio: (msgId, peer).
+  final Set<(int, int)> _radioDelivered = {};
+
+  /// [msgId] reached [peer] over the LoRa radio ("delivered via radio").
+  bool deliveredOverRadio(int msgId, int peer) =>
+      _radioDelivered.contains((msgId, peer));
+
+  Future<void> _deliveredTo(
+    int msgId,
+    int peer, {
+    bool viaRadio = false,
+  }) async {
     final e = outbox.byId(msgId);
     if (e == null) return;
+    if (viaRadio) {
+      _radioDelivered.add((msgId, peer));
+      if (_radioDelivered.length > 200) {
+        _radioDelivered.remove(_radioDelivered.first);
+      }
+    }
     _attempts.remove((msgId, peer));
     _retryAt.remove((msgId, peer));
     if (await outbox.markDelivered(msgId, peer)) {

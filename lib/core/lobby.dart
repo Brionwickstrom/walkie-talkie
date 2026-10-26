@@ -33,7 +33,13 @@ import 'frame.dart';
 /// nameLen  1 B  + UTF-8 name (max [maxName] bytes)
 /// cnLen    1 B  + UTF-8 channel name (max [maxChannelName], public only)
 /// ceLen    1 B  + UTF-8 channel emoji (max [maxEmoji], public only)
+/// battery  1 B  optional (v1.8.3): phone battery 0..100; older apps
+///               stop reading before it
 /// ```
+///
+/// v1.8.3: a very rare copy (every [radioInterval]) also goes over the
+/// LoRa radio, so people only the radio reaches show up. Same bytes, same
+/// privacy: nothing about a private channel.
 ///
 /// About 30-70 bytes: fits one Bluetooth packet with room to spare.
 class LobbyBeacon {
@@ -44,7 +50,25 @@ class LobbyBeacon {
     required this.every,
     this.channelName,
     this.channelEmoji,
+    this.battery,
   });
+
+  /// LoRa copy of the beacon: this rarely (receivers keep it 3x as long).
+  static const Duration radioInterval = Duration(minutes: 15);
+
+  /// Phone battery 0..100, null = not shared / unknown.
+  final int? battery;
+
+  /// Same beacon with [every] / [battery] replaced.
+  LobbyBeacon copyWith({Duration? every, int? battery}) => LobbyBeacon._(
+    name: name,
+    channel: channel,
+    feature: feature,
+    every: every ?? this.every,
+    channelName: channelName,
+    channelEmoji: channelEmoji,
+    battery: battery ?? this.battery,
+  );
 
   /// On a public channel.
   factory LobbyBeacon.public({
@@ -54,6 +78,7 @@ class LobbyBeacon {
     Duration every = const Duration(seconds: 10),
     String? channelName,
     String? channelEmoji,
+    int? battery,
   }) => LobbyBeacon._(
     name: _clip(name, maxName),
     channel: channel.clamp(1, 0xFFFF),
@@ -61,7 +86,10 @@ class LobbyBeacon {
     every: every,
     channelName: _nonEmpty(_clip(channelName ?? '', maxChannelName)),
     channelEmoji: _nonEmpty(_clip(channelEmoji ?? '', maxEmoji)),
+    battery: _pct(battery),
   );
+
+  static int? _pct(int? b) => b != null && b >= 0 && b <= 100 ? b : null;
 
   /// On a private channel: only the call sign. There is deliberately no
   /// parameter for the channel.
@@ -69,11 +97,13 @@ class LobbyBeacon {
     required String callSign,
     int feature = featureLevel,
     Duration every = const Duration(seconds: 10),
+    int? battery,
   }) => LobbyBeacon._(
     name: _clip(callSign, maxName),
     channel: null,
     feature: feature,
     every: every,
+    battery: _pct(battery),
   );
 
   static const int version = 1;
@@ -113,6 +143,7 @@ class LobbyBeacon {
       ..add(cn)
       ..addByte(ce.length)
       ..add(ce);
+    if (battery != null) b.addByte(battery!);
     return b.toBytes();
   }
 
@@ -151,11 +182,13 @@ class LobbyBeacon {
       final name = str(maxName * 2)!;
       final cn = str(maxChannelName * 2);
       final ce = str(maxEmoji * 2);
+      final battery = i < p.length ? p[i] : null;
       if (private) {
         return LobbyBeacon.private(
           callSign: name,
           feature: feature,
           every: every,
+          battery: battery,
         );
       }
       if (ch == 0) return null;
@@ -166,6 +199,7 @@ class LobbyBeacon {
         every: every,
         channelName: cn,
         channelEmoji: ce,
+        battery: battery,
       );
     } catch (_) {
       return null;

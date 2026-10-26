@@ -33,13 +33,17 @@ enum TransportKind {
 /// A frame delivered by a transport, plus an opaque link address the
 /// transport can use later to unicast back to the sender.
 class InboundFrame {
-  InboundFrame(this.frame, this.transport, {this.rssi});
+  InboundFrame(this.frame, this.transport, {this.rssi, this.hops = 1});
 
   final Frame frame;
   final TransportKind transport;
 
   /// Optional signal strength hint (BLE). Not used for routing yet.
   final int? rssi;
+
+  /// 1 = heard straight from the sender; more = carried by the phone mesh
+  /// (set by the [TransportManager] for frames it unwrapped, v1.8.3).
+  final int hops;
 }
 
 enum TransportStatus { stopped, starting, running, unavailable, error }

@@ -68,12 +68,15 @@ sealed class TripMsg {
           final p = r.point();
           final acc = r.u8();
           final age = r.u8();
+          // v1.8.3: battery byte at the end (older apps ignore it).
+          final bt = flags & 4 != 0 ? r.u8() : null;
           return PosMsg(
             id,
             p,
             checkIn: flags & 1 != 0,
             accuracyM: flags & 2 != 0 ? acc.toDouble() : null,
             fixAge: Duration(seconds: age * 4),
+            battery: bt != null && bt <= 100 ? bt : null,
           );
         case TripKind.sos:
           final flags = r.u8();
@@ -163,10 +166,14 @@ class PosMsg extends TripMsg {
     this.checkIn = false,
     this.accuracyM,
     this.fixAge = Duration.zero,
+    this.battery,
   });
   final GeoPoint pos;
   final bool checkIn;
   final double? accuracyM;
+
+  /// Sender's phone battery 0..100 (v1.8.3, one byte), null = unknown.
+  final int? battery;
 
   /// How old the GPS fix was when sent (4 s steps, max 17 min).
   final Duration fixAge;
@@ -175,10 +182,15 @@ class PosMsg extends TripMsg {
   @override
   void _body(_Writer w) {
     w
-      ..u8((checkIn ? 1 : 0) | (accuracyM != null ? 2 : 0))
+      ..u8(
+        (checkIn ? 1 : 0) |
+            (accuracyM != null ? 2 : 0) |
+            (battery != null ? 4 : 0),
+      )
       ..point(pos)
       ..u8((accuracyM ?? 0).round().clamp(0, 255))
       ..u8((fixAge.inSeconds ~/ 4).clamp(0, 255));
+    if (battery != null) w.u8(battery!.clamp(0, 100));
   }
 }
 

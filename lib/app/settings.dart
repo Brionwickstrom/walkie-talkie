@@ -49,6 +49,7 @@ class AppSettings {
     this.autoPlay = true,
     this.relayForOthers = true,
     this.showInWhosWhere = true,
+    this.readReceipts = true,
     this.wifiDirect = true,
     this.notificationTalk = false,
     this.urgentLoud = true,
@@ -156,6 +157,9 @@ class AppSettings {
   /// other channels see this one. A private channel is never revealed
   /// either way (only "Private" and the call sign).
   bool showInWhosWhere;
+
+  /// Send read receipts ("seen") for chats and voice messages (v1.8.3).
+  bool readReceipts;
 
   /// Android: form a Wi-Fi Direct group with nearby app phones when there
   /// is no shared network.
@@ -325,6 +329,7 @@ class SharedPrefsSettingsStore implements SettingsStore {
   static const _kAutoPlay = 'auto_play';
   static const _kRelayOthers = 'relay_for_others';
   static const _kWhosWhere = 'show_whos_where';
+  static const _kReadReceipts = 'read_receipts';
   static const _kWifiDirect = 'wifi_direct';
   static const _kNotifTalk = 'notif_talk';
   static const _kUrgent = 'urgent_loud';
@@ -386,6 +391,7 @@ class SharedPrefsSettingsStore implements SettingsStore {
       autoPlay: prefs?.getBool(_kAutoPlay) ?? true,
       relayForOthers: prefs?.getBool(_kRelayOthers) ?? true,
       showInWhosWhere: prefs?.getBool(_kWhosWhere) ?? true,
+      readReceipts: prefs?.getBool(_kReadReceipts) ?? true,
       wifiDirect: prefs?.getBool(_kWifiDirect) ?? true,
       notificationTalk: prefs?.getBool(_kNotifTalk) ?? false,
       urgentLoud: prefs?.getBool(_kUrgent) ?? true,
@@ -426,6 +432,7 @@ class SharedPrefsSettingsStore implements SettingsStore {
       await prefs.setBool(_kAutoPlay, s.autoPlay);
       await prefs.setBool(_kRelayOthers, s.relayForOthers);
       await prefs.setBool(_kWhosWhere, s.showInWhosWhere);
+      await prefs.setBool(_kReadReceipts, s.readReceipts);
       await prefs.setBool(_kWifiDirect, s.wifiDirect);
       await prefs.setBool(_kNotifTalk, s.notificationTalk);
       await prefs.setBool(_kUrgent, s.urgentLoud);

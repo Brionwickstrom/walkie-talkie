@@ -25,7 +25,10 @@ class ChatMessage {
     this.liveId,
     this.viaRadio = false,
     Set<int>? deliveredTo,
-  }) : deliveredTo = deliveredTo ?? <int>{};
+    Set<int>? seenBy,
+    this.receiptSent = false,
+  }) : deliveredTo = deliveredTo ?? <int>{},
+       seenBy = seenBy ?? <int>{};
 
   factory ChatMessage.fromBody(
     ChatBody b, {
@@ -72,11 +75,18 @@ class ChatMessage {
   DateTime? liveUntil;
   final int? liveId;
 
-  /// Arrived over a LoRa radio (v1.7.0).
-  final bool viaRadio;
+  /// Arrived over a LoRa radio (v1.7.0); for our own messages: delivered
+  /// over the radio (v1.8.3).
+  bool viaRadio;
 
   /// Phones that confirmed receiving it (sent messages).
   final Set<int> deliveredTo;
+
+  /// Phones that saw it (read receipts, v1.8.3; sent messages).
+  final Set<int> seenBy;
+
+  /// We sent the read receipt for it (received messages).
+  bool receiptSent;
 
   String get photoBlob => 'p_${sender}_$id.jpg';
 
@@ -110,6 +120,8 @@ class ChatMessage {
     if (liveUntil != null) 'lu': liveUntil!.millisecondsSinceEpoch,
     'lid': ?liveId,
     if (deliveredTo.isNotEmpty) 'd': deliveredTo.toList(),
+    if (seenBy.isNotEmpty) 'sb': seenBy.toList(),
+    if (receiptSent) 'rs': 1,
     if (viaRadio) 'vr': 1,
   };
 
@@ -136,6 +148,10 @@ class ChatMessage {
         liveUntil: lu == null ? null : DateTime.fromMillisecondsSinceEpoch(lu),
         liveId: (j['lid'] as num?)?.toInt(),
         viaRadio: j['vr'] == 1,
+        receiptSent: j['rs'] == 1,
+        seenBy: {
+          for (final x in (j['sb'] as List?) ?? const []) (x as num).toInt(),
+        },
         deliveredTo: {
           for (final x in (j['d'] as List?) ?? const []) (x as num).toInt(),
         },
@@ -295,11 +311,18 @@ class ChatStore {
       m.hasPhoto ? storage.getBlob(m.photoBlob) : Future.value(null);
 
   /// A sent message reached [peer].
-  Future<void> markDelivered(int sender, int id, int peer) async {
+  Future<void> markDelivered(
+    int sender,
+    int id,
+    int peer, {
+    bool viaRadio = false,
+  }) async {
     for (final e in _convs.entries) {
       for (final m in e.value) {
         if (m.sender == sender && m.id == id && m.mine) {
-          if (m.deliveredTo.add(peer)) {
+          final radioNew = viaRadio && !m.viaRadio;
+          if (viaRadio) m.viaRadio = true;
+          if (m.deliveredTo.add(peer) || radioNew) {
             _emit(e.key);
             await _save();
           }
@@ -307,6 +330,38 @@ class ChatStore {
         }
       }
     }
+  }
+
+  /// [peer] saw our message [id] (read receipt). Also counts as delivered.
+  Future<bool> markSeen(int sender, int id, int peer) async {
+    for (final e in _convs.entries) {
+      for (final m in e.value) {
+        if (m.sender == sender && m.id == id && m.mine) {
+          final a = m.seenBy.add(peer);
+          final b = m.deliveredTo.add(peer);
+          if (a || b) {
+            _emit(e.key);
+            await _save();
+          }
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /// Received messages in [conv] we have not sent a read receipt for yet
+  /// (marks them as sent). Live-location updates are skipped.
+  Future<List<ChatMessage>> takeUnreceipted(String conv) async {
+    final out = <ChatMessage>[];
+    for (final m in _convs[conv] ?? const <ChatMessage>[]) {
+      if (m.mine || m.receiptSent) continue;
+      m.receiptSent = true;
+      if (m.liveId != null) continue;
+      out.add(m);
+    }
+    if (out.isNotEmpty) await _save();
+    return out;
   }
 
   /// Stop a live location early (sets its end time to [now]).
