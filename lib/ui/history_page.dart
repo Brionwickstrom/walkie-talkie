@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../app/walkie_controller.dart';
 import '../history/talk_history.dart';
 import 'home_view.dart';
+import 'stop_on_leave.dart';
 
 /// Map a stored transmission to its view.
 TakeView takeView(WalkieController c, TalkTake t) => TakeView(
@@ -25,52 +26,56 @@ class HistoryPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = controller;
-    return ListenableBuilder(
-      listenable: c,
-      builder: (context, _) {
-        final list = c.takes;
-        return HistoryView(
-          channelLabel: c.channelLabel,
-          takes: [for (final t in list) takeView(c, t)],
-          unheard: c.unheardTakes,
-          speed: c.playbackSpeed,
-          playingAll: c.playingAll,
-          onPlay: (v) {
-            final t = list.where((x) => x.id == v.id).firstOrNull;
-            if (t != null) c.playTake(t);
-          },
-          onPlayMissed: () => c.playingAll ? c.pauseTake() : c.playAllMissed(),
-          onSpeed: c.setPlaybackSpeed,
-          onDelete: (v) {
-            final t = list.where((x) => x.id == v.id).firstOrNull;
-            if (t != null) c.deleteTake(t);
-          },
-          onMarkAllHeard: c.markAllHeard,
-          onClear: () async {
-            final ok = await showDialog<bool>(
-              context: context,
-              builder: (ctx) => AlertDialog(
-                title: const Text('Clear history?'),
-                content: Text(
-                  'Deletes every saved transmission on ${c.channelLabel} '
-                  'from this phone.',
+    return StopOnLeave(
+      onLeave: c.stopSavedPlayback,
+      child: ListenableBuilder(
+        listenable: c,
+        builder: (context, _) {
+          final list = c.takes;
+          return HistoryView(
+            channelLabel: c.channelLabel,
+            takes: [for (final t in list) takeView(c, t)],
+            unheard: c.unheardTakes,
+            speed: c.playbackSpeed,
+            playingAll: c.playingAll,
+            onPlay: (v) {
+              final t = list.where((x) => x.id == v.id).firstOrNull;
+              if (t != null) c.playTake(t);
+            },
+            onPlayMissed: () =>
+                c.playingAll ? c.pauseTake() : c.playAllMissed(),
+            onSpeed: c.setPlaybackSpeed,
+            onDelete: (v) {
+              final t = list.where((x) => x.id == v.id).firstOrNull;
+              if (t != null) c.deleteTake(t);
+            },
+            onMarkAllHeard: c.markAllHeard,
+            onClear: () async {
+              final ok = await showDialog<bool>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('Clear history?'),
+                  content: Text(
+                    'Deletes every saved transmission on ${c.channelLabel} '
+                    'from this phone.',
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('Cancel'),
+                    ),
+                    FilledButton(
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text('Clear'),
+                    ),
+                  ],
                 ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(ctx, false),
-                    child: const Text('Cancel'),
-                  ),
-                  FilledButton(
-                    onPressed: () => Navigator.pop(ctx, true),
-                    child: const Text('Clear'),
-                  ),
-                ],
-              ),
-            );
-            if (ok == true) await c.clearHistory();
-          },
-        );
-      },
+              );
+              if (ok == true) await c.clearHistory();
+            },
+          );
+        },
+      ),
     );
   }
 }

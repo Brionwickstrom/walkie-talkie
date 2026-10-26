@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../app/walkie_controller.dart';
 import '../messaging/voice_clip.dart';
+import 'stop_on_leave.dart';
 
 /// Received voice messages (play / delete) and ones still waiting to be
 /// delivered.
@@ -12,96 +13,99 @@ class InboxPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = controller;
-    return ListenableBuilder(
-      listenable: c,
-      builder: (context, _) {
-        final out = c.outgoing;
-        final waiting = c.waitingForAnyone;
-        return Scaffold(
-          appBar: AppBar(title: const Text('Voice messages')),
-          body: ListView(
-            children: [
-              if (out.isNotEmpty || waiting.isNotEmpty) ...[
-                const _Header('Waiting to be delivered'),
-                for (final o in out)
-                  ListTile(
-                    leading: Icon(o.sending ? Icons.upload : Icons.schedule),
-                    title: Text(
-                      'To ${c.nameOf(o.peer)}'
-                      '${o.entry.isChannel ? ' (${c.labelFor(o.entry.channel)})' : ''}'
-                      ' - ${formatDuration(o.entry.durationMs)}',
+    return StopOnLeave(
+      onLeave: c.stopSavedPlayback,
+      child: ListenableBuilder(
+        listenable: c,
+        builder: (context, _) {
+          final out = c.outgoing;
+          final waiting = c.waitingForAnyone;
+          return Scaffold(
+            appBar: AppBar(title: const Text('Voice messages')),
+            body: ListView(
+              children: [
+                if (out.isNotEmpty || waiting.isNotEmpty) ...[
+                  const _Header('Waiting to be delivered'),
+                  for (final o in out)
+                    ListTile(
+                      leading: Icon(o.sending ? Icons.upload : Icons.schedule),
+                      title: Text(
+                        'To ${c.nameOf(o.peer)}'
+                        '${o.entry.isChannel ? ' (${c.labelFor(o.entry.channel)})' : ''}'
+                        ' - ${formatDuration(o.entry.durationMs)}',
+                      ),
+                      subtitle: Text(
+                        o.sending
+                            ? 'Sending ${(o.progress * 100).round()}%'
+                            : 'Will send when they are in range '
+                                  '(${_expires(o.entry.createdAt)})',
+                      ),
+                      trailing: IconButton(
+                        tooltip: 'Cancel',
+                        icon: const Icon(Icons.close),
+                        onPressed: () => c.cancelOutgoing(o.entry.msgId),
+                      ),
                     ),
-                    subtitle: Text(
-                      o.sending
-                          ? 'Sending ${(o.progress * 100).round()}%'
-                          : 'Will send when they are in range '
-                                '(${_expires(o.entry.createdAt)})',
+                  for (final e in waiting)
+                    ListTile(
+                      leading: const Icon(Icons.schedule),
+                      title: Text(
+                        'To ${c.labelFor(e.channel)} - ${formatDuration(e.durationMs)}',
+                      ),
+                      subtitle: Text(
+                        'Nobody on that channel yet (${_expires(e.createdAt)})',
+                      ),
+                      trailing: IconButton(
+                        tooltip: 'Cancel',
+                        icon: const Icon(Icons.close),
+                        onPressed: () => c.cancelOutgoing(e.msgId),
+                      ),
                     ),
-                    trailing: IconButton(
-                      tooltip: 'Cancel',
-                      icon: const Icon(Icons.close),
-                      onPressed: () => c.cancelOutgoing(o.entry.msgId),
+                ],
+                const _Header('Received'),
+                if (c.inbox.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Text(
+                      'No voice messages yet. Long-press a person (or use '
+                      '"Hold: message") to send one.',
+                      textAlign: TextAlign.center,
                     ),
                   ),
-                for (final e in waiting)
+                for (final e in c.inbox)
                   ListTile(
-                    leading: const Icon(Icons.schedule),
+                    leading: IconButton.filledTonal(
+                      icon: Icon(
+                        c.playingKey == e.key ? Icons.stop : Icons.play_arrow,
+                      ),
+                      onPressed: () => c.playingKey == e.key
+                          ? c.stopPlayback()
+                          : c.playMessage(e),
+                    ),
                     title: Text(
-                      'To ${c.labelFor(e.channel)} - ${formatDuration(e.durationMs)}',
+                      '${e.senderName.isEmpty ? c.nameOf(e.sender) : e.senderName}'
+                      ' - ${formatDuration(e.durationMs)}',
+                      style: TextStyle(
+                        fontWeight: e.played
+                            ? FontWeight.normal
+                            : FontWeight.bold,
+                      ),
                     ),
                     subtitle: Text(
-                      'Nobody on that channel yet (${_expires(e.createdAt)})',
+                      '${_when(e.receivedAt)}'
+                      '${e.channelMessage ? ' - to ${c.labelFor(e.channel)}' : ''}',
                     ),
                     trailing: IconButton(
-                      tooltip: 'Cancel',
-                      icon: const Icon(Icons.close),
-                      onPressed: () => c.cancelOutgoing(e.msgId),
+                      tooltip: 'Delete',
+                      icon: const Icon(Icons.delete_outline),
+                      onPressed: () => c.deleteMessage(e),
                     ),
                   ),
               ],
-              const _Header('Received'),
-              if (c.inbox.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.all(24),
-                  child: Text(
-                    'No voice messages yet. Long-press a person (or use '
-                    '"Hold: message") to send one.',
-                    textAlign: TextAlign.center,
-                  ),
-                ),
-              for (final e in c.inbox)
-                ListTile(
-                  leading: IconButton.filledTonal(
-                    icon: Icon(
-                      c.playingKey == e.key ? Icons.stop : Icons.play_arrow,
-                    ),
-                    onPressed: () => c.playingKey == e.key
-                        ? c.stopPlayback()
-                        : c.playMessage(e),
-                  ),
-                  title: Text(
-                    '${e.senderName.isEmpty ? c.nameOf(e.sender) : e.senderName}'
-                    ' - ${formatDuration(e.durationMs)}',
-                    style: TextStyle(
-                      fontWeight: e.played
-                          ? FontWeight.normal
-                          : FontWeight.bold,
-                    ),
-                  ),
-                  subtitle: Text(
-                    '${_when(e.receivedAt)}'
-                    '${e.channelMessage ? ' - to ${c.labelFor(e.channel)}' : ''}',
-                  ),
-                  trailing: IconButton(
-                    tooltip: 'Delete',
-                    icon: const Icon(Icons.delete_outline),
-                    onPressed: () => c.deleteMessage(e),
-                  ),
-                ),
-            ],
-          ),
-        );
-      },
+            ),
+          );
+        },
+      ),
     );
   }
 

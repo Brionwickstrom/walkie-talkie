@@ -7,6 +7,7 @@ import 'package:flutter_pcm_sound/flutter_pcm_sound.dart';
 import 'package:record/record.dart' hide IosAudioCategory;
 
 import 'agc.dart';
+import 'clip_player.dart';
 import 'codec.dart';
 import 'mic_gate.dart';
 import 'opus_voice_codec.dart';
@@ -27,9 +28,12 @@ class AudioEngine {
   final _playout = PlayoutBuffer(sampleRate: VoiceFormat.sampleRate);
   AudioSession? _session;
   bool _focused = false;
-  Timer? _clipTimer;
+  ClipPump? _pump;
   VoiceDecoder? _clipDecoder;
   Completer<void>? _clipDone;
+
+  /// False while the native player is being reset (feeds would fail).
+  bool _speakerOk = false;
 
   /// Mic read sizes to try, smallest (lowest latency) first. The record
   /// plugin's default is 2x the OS minimum, often 80-240 ms per chunk, which
@@ -84,6 +88,11 @@ class AudioEngine {
     );
     // The plugin logs every feed() call by default (50 per second).
     await FlutterPcmSound.setLogLevel(LogLevel.error);
+    await _setupSpeaker();
+    _ready = true;
+  }
+
+  Future<void> _setupSpeaker() async {
     await FlutterPcmSound.setup(
       sampleRate: VoiceFormat.sampleRate,
       channelCount: VoiceFormat.channels,
@@ -91,7 +100,31 @@ class AudioEngine {
       iosAllowBackgroundAudio: true,
     );
     await FlutterPcmSound.setFeedThreshold(VoiceFormat.samplesPerFrame * 4);
-    _ready = true;
+    _speakerOk = true;
+  }
+
+  void _feed(PcmArrayInt16 pcm) {
+    if (!_speakerOk) return;
+    FlutterPcmSound.feed(pcm).catchError((_) {});
+  }
+
+  Future<void>? _flushing;
+
+  /// Drop everything already queued in the native player (it has no flush
+  /// call: release + setup empties its queue and stops the AudioTrack).
+  Future<void> flushSpeaker() {
+    if (!_ready) return Future.value();
+    return _flushing ??= () async {
+      _speakerOk = false;
+      _playout.reset();
+      try {
+        await FlutterPcmSound.release();
+      } catch (_) {}
+      try {
+        await _setupSpeaker();
+      } catch (_) {}
+      _flushing = null;
+    }();
   }
 
   Future<bool> hasMicPermission() => _recorder.hasPermission();
@@ -154,14 +187,8 @@ class AudioEngine {
     for (final pcm in _pipeline.decode(peerId, seq, opus)) {
       final pre = _playout.admit(pcm.length);
       if (pre == null) continue; // too far behind: drop to catch up
-      if (pre > 0) {
-        FlutterPcmSound.feed(PcmArrayInt16.zeros(count: pre));
-      }
-      FlutterPcmSound.feed(
-        PcmArrayInt16(
-          bytes: pcm.buffer.asByteData(pcm.offsetInBytes, pcm.lengthInBytes),
-        ),
-      );
+      if (pre > 0) _feed(PcmArrayInt16.zeros(count: pre));
+      _feed(exactPcm(pcm));
     }
   }
 
@@ -216,55 +243,46 @@ class AudioEngine {
       final input = samples;
       samples = await Isolate.run(() => timeStretch(input, speed));
     }
+    final flushing = _flushing;
+    if (flushing != null) await flushing; // previous clip's leftovers gone
     if (!identical(_clipDone, done)) return false; // stopped meanwhile
-    var i = 0;
-    final n = VoiceFormat.samplesPerFrame;
-    final start = DateTime.now();
-    final totalMs = samples.length * 1000 ~/ VoiceFormat.sampleRate;
-    var finished = false;
-    void pump() {
-      final elapsed = DateTime.now().difference(start).inMilliseconds;
-      // Stay at most ~200 ms ahead of real time so pause / stop is quick.
-      while (i < samples.length &&
-          i * 1000 ~/ VoiceFormat.sampleRate < elapsed + 200) {
-        final end = (i + n).clamp(0, samples.length);
-        final chunk = Int16List.sublistView(samples, i, end);
-        try {
-          FlutterPcmSound.feed(
-            PcmArrayInt16(
-              bytes: chunk.buffer.asByteData(
-                chunk.offsetInBytes,
-                chunk.lengthInBytes,
-              ),
-            ),
-          );
-        } catch (_) {}
-        i = end;
-      }
-      onPosition?.call(startMs + (elapsed.clamp(0, totalMs) * speed).round());
-      if (i >= samples.length && elapsed > totalMs + 250) {
-        finished = true;
-        stopClip();
-      }
-    }
-
-    pump();
-    _clipTimer = Timer.periodic(
-      const Duration(milliseconds: 40),
-      (_) => pump(),
+    final pump = ClipPump(
+      samples: samples,
+      feed: _feed,
+      sampleRate: VoiceFormat.sampleRate,
+      frameSamples: VoiceFormat.samplesPerFrame,
+      speed: speed,
+      startMs: startMs,
+      onPosition: onPosition,
     );
-    await done.future;
+    _pump = pump;
+    final finished = await pump.run();
+    if (identical(_pump, pump)) {
+      _pump = null;
+      // Nothing of this clip may keep playing after it ended / was stopped.
+      await flushSpeaker();
+    }
+    final d = _clipDone;
+    if (identical(d, done)) {
+      _clipDone = null;
+      _clipDecoder?.dispose();
+      _clipDecoder = null;
+    }
+    if (!done.isCompleted) done.complete();
     return finished;
   }
 
+  /// Stop the clip now, including audio already handed to the player.
   void stopClip() {
-    _clipTimer?.cancel();
-    _clipTimer = null;
+    final hadClip = _clipDone != null || _pump != null;
+    _pump?.stop();
+    _pump = null;
     _clipDecoder?.dispose();
     _clipDecoder = null;
     final d = _clipDone;
     _clipDone = null;
     if (d != null && !d.isCompleted) d.complete();
+    if (hadClip) unawaited(flushSpeaker());
   }
 
   void peerStopped(int peerId) {

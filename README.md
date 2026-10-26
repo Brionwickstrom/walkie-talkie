@@ -331,6 +331,31 @@ decrypt).
 * Private talk to a friend is not saved in the replay history.
 * 1.4 and older phones do not see chats, names, friends or moderation.
 
+## v1.5.3: saved messages looping (the real cause)
+
+Saved voice messages and History replays kept playing over and over. The
+cause was in `AudioEngine.playClip` (lib/audio/audio_engine.dart), present
+since v1.4.0. It fed the decoded clip to the speaker in 20 ms pieces made
+with `Int16List.sublistView(samples, i, end)` and wrapped each piece as
+`PcmArrayInt16(bytes: chunk.buffer.asByteData(offset, length))`. But
+`FlutterPcmSound.feed` sends `buffer.bytes.buffer.asUint8List()`, the
+whole backing buffer, ignoring the view. So every 20 ms piece queued the
+entire clip again in the native player: a 10 s message was queued 500 times
+(83 minutes). Stop only stopped feeding, not the copies already queued, so
+it only ended when the app's process died (phone restart).
+
+* `exactPcm` (lib/audio/clip_player.dart) copies exactly the samples of a
+  view; every feed (saved clips and live talk) goes through it.
+* `ClipPump` feeds a clip in real time and ends exactly once: at the end
+  plus 300 ms, or at the latest after the clip's length plus 1 s (hard cap).
+* When a clip ends or is stopped, the native player's queue is flushed
+  (release + setup), so nothing keeps playing. Stop also flushes it.
+* Leaving the Voice messages or History screen stops saved playback.
+* `test/clip_playback_test.dart` feeds through a fake speaker that behaves
+  like the plugin: the old code queues the clip 500 times, and the new one
+  plays each sample once at 1x/1.5x/2x and for "play all" over 3 items.
+  It also covers Stop and the hard cap.
+
 ## v1.5.2: loops from older phones, clean slate
 
 Still looping on 1.5.1 with every other phone on 1.5.0 or older: voice

@@ -1375,6 +1375,17 @@ class WalkieController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Stop a saved voice message / replay / "Play all missed" (leaving the
+  /// Voice messages or History screen). Live talk is not affected.
+  void stopSavedPlayback() {
+    if (playingKey == null && playingTake == null && !playingAll) return;
+    playbackLog.add('stop', 'Left the screen: saved playback stopped');
+    _stopReplay();
+    _audio.stopClip();
+    playingKey = null;
+    notifyListeners();
+  }
+
   void stopPlayback() {
     _audio.stopClip();
     playingKey = null;
@@ -1400,6 +1411,8 @@ class WalkieController extends ChangeNotifier {
     if (transmitting) await pushToTalk(false);
     if (recording != null) await stopRecording(cancel: true);
     await _audio.forceStopTransmit();
+    // Whatever is still queued in the speaker goes too.
+    await _audio.flushSpeaker();
     await _audio.setFocus(false);
     notifyListeners();
   }
