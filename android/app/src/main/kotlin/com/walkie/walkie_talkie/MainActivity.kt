@@ -63,6 +63,9 @@ class MainActivity : FlutterActivity() {
             Notifier.ACTION_OPEN_INBOX -> {
                 BgBridge.deliver(this, mapOf("type" to "openInbox", "key" to (i.getStringExtra("key") ?: "")))
             }
+            Notifier.ACTION_OPEN_FRIEND -> {
+                BgBridge.deliver(this, mapOf("type" to "openFriend", "friend" to i.getLongExtra("friend", 0)))
+            }
             Notifier.ACTION_OPEN_CHANNEL -> {
                 BgBridge.deliver(this, mapOf("type" to "openChannel", "channel" to channel))
             }

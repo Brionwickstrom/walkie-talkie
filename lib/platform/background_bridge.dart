@@ -130,10 +130,12 @@ class BackgroundBridge {
     required int peer,
     required String name,
     required int channel,
+    bool friend = false,
   }) => _call<void>('showTalking', {
     'peer': peer,
     'name': name,
     'channel': channel,
+    'friend': friend,
   });
 
   Future<void> cancelTalking(int peer) =>

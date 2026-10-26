@@ -32,6 +32,7 @@ object Notifier {
     const val ACTION_RING_OPEN = "com.walkie.walkie_talkie.RING_OPEN"
     const val ACTION_OPEN_INBOX = "com.walkie.walkie_talkie.OPEN_INBOX"
     const val ACTION_OPEN_CHANNEL = "com.walkie.walkie_talkie.OPEN_CHANNEL"
+    const val ACTION_OPEN_FRIEND = "com.walkie.walkie_talkie.OPEN_FRIEND"
     const val ACTION_TALK = "com.walkie.walkie_talkie.TALK"
     const val ACTION_STOP_AUDIO = "com.walkie.walkie_talkie.STOP_AUDIO"
 
@@ -221,16 +222,23 @@ object Notifier {
 
     private fun talkId(peer: Long): Int = (4000000 + (peer and 0xFFFFF)).toInt()
 
-    fun showTalking(ctx: Context, peer: Long, name: String, channel: Int) {
+    fun showTalking(ctx: Context, peer: Long, name: String, channel: Int, friend: Boolean = false) {
         ensureChannels(ctx)
+        // Private talk from a friend opens that friend's chat (reply
+        // privately there), never the channel.
+        val open = if (friend) {
+            activityIntent(ctx, ACTION_OPEN_FRIEND, 6000 + (peer and 0xFFFF).toInt()) { putExtra("friend", peer) }
+        } else {
+            activityIntent(ctx, ACTION_OPEN_CHANNEL, 5) { putExtra("channel", channel) }
+        }
         val n = NotificationCompat.Builder(ctx, CH_TALK)
             .setSmallIcon(R.drawable.ic_stat_walkie)
-            .setContentTitle("$name is talking")
-            .setContentText("Channel $channel")
+            .setContentTitle(if (friend) "\uD83D\uDD12 $name is talking to you privately" else "$name is talking")
+            .setContentText(if (friend) "Tap to reply privately" else "Channel $channel")
             .setOngoing(true)
             .setSilent(true)
             .setTimeoutAfter(2 * 60 * 1000L)
-            .setContentIntent(activityIntent(ctx, ACTION_OPEN_CHANNEL, 5) { putExtra("channel", channel) })
+            .setContentIntent(open)
             .build()
         post(ctx, talkId(peer), n)
     }

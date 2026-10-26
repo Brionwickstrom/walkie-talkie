@@ -163,9 +163,14 @@ enum ControlKind {
   rekeyAck,
 }
 
-/// Feature level we announce in hello `x.v`: 15 = v1.5.0 (friends, chat,
-/// channel names, moderation). Absent on older phones.
-const int featureLevel = 15;
+/// Feature level we announce in hello and friend presence `x.v`:
+/// 15 = v1.5.0-1.5.3 (friends, chat, channel names, moderation),
+/// 16 = v1.5.4 (private reply on the home screen). Absent on older phones.
+const int featureLevel = 16;
+
+/// Friends need at least this to talk privately (v1.5.4: their big talk
+/// button replies privately instead of to the whole channel).
+const int privateTalkFeature = 16;
 
 /// What happened to a ring on the receiving phone.
 enum RingStatus { sending, delivered, answered, dismissed, missed, unreachable }

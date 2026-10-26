@@ -97,7 +97,16 @@ class _HomePageState extends State<HomePage> {
     );
     _subs.add(
       c.uiRequests.listen((r) {
-        if (r == 'inbox' && mounted) _openInbox(context);
+        if (!mounted) return;
+        if (r == 'inbox') _openInbox(context);
+        // Private talk / message notification from a friend: open their
+        // chat so the reply is private, never the channel.
+        if (r.startsWith('friend:')) {
+          final id = int.tryParse(r.substring(7));
+          if (id != null) {
+            _openChat(context, friendConversation(id));
+          }
+        }
       }),
     );
     // Refresh link ages / debug lines / recording timer.
@@ -328,15 +337,7 @@ class _HomePageState extends State<HomePage> {
                 onBeepAll: () => c.ring(beep: true),
                 record: _RecordButton(controller: c),
               ),
-              ptt: PttButton(
-                transmitting: c.transmitting && c.privateTalkTo == null,
-                busy:
-                    c.talkingPeer != null || (c.announcementMode && !c.isAdmin),
-                onChanged: c.pushToTalk,
-                size: pttSize,
-                toggle: c.settings.toggleTalk,
-                onTap: c.toggleTalk,
-              ),
+              ptt: _mainTalk(context, pttSize),
             ),
           ),
         );
@@ -603,6 +604,38 @@ class _HomePageState extends State<HomePage> {
     Navigator.of(
       context,
     ).push(MaterialPageRoute<void>(builder: (_) => HistoryPage(controller: c)));
+  }
+
+  /// Big talk button + private reply banner (v1.5.4).
+  Widget _mainTalk(BuildContext context, double pttSize) {
+    final reply = c.replyTarget;
+    final name = reply == null ? null : c.friendName(reply);
+    final n = c.channelListeners;
+    final replyTalking =
+        reply != null && c.transmitting && c.privateTalkTo == reply;
+    return MainTalkArea(
+      replyName: name,
+      replyTransmitting: replyTalking,
+      onReplyTalk: reply == null ? null : (d) => c.talkToFriend(reply, d),
+      onChannelInstead: c.talkToChannelInstead,
+      onOpenChat: reply == null
+          ? null
+          : () => _openChat(context, friendConversation(reply)),
+      button: PttButton(
+        transmitting: reply != null
+            ? replyTalking
+            : c.transmitting && c.privateTalkTo == null,
+        busy: c.talkingPeer != null || (c.announcementMode && !c.isAdmin),
+        onChanged: c.mainTalk,
+        size: reply != null ? pttSize * 0.85 : pttSize,
+        toggle: c.settings.toggleTalk,
+        onTap: c.toggleTalk,
+        private: reply != null,
+        caption: name != null
+            ? 'Reply privately to $name'
+            : 'Talk to CH ${c.channel} ($n ${n == 1 ? 'person' : 'people'})',
+      ),
+    );
   }
 
   void _openChat(BuildContext context, String conv) {

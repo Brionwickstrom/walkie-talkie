@@ -178,6 +178,9 @@ class _ChatPageState extends State<ChatPage> {
                     name: c.friendName(friend),
                     online: c.friendOnline(friend),
                     via: c.friendVia(friend),
+                    needsUpdate:
+                        c.friendOnline(friend) &&
+                        c.friendLinks.needsUpdate(friend),
                     talking: c.privateTalkTo == friend,
                     hearing: c.friendsTalking.contains(friend),
                     recording:
@@ -207,9 +210,13 @@ class FriendTalkBar extends StatelessWidget {
     required this.recording,
     required this.onTalk,
     required this.onRecord,
+    this.needsUpdate = false,
   });
   final String name;
   final bool online;
+
+  /// Their app is too old for private talk (voice messages still work).
+  final bool needsUpdate;
   final String? via;
   final bool talking;
   final bool hearing;
@@ -280,6 +287,9 @@ class FriendTalkBar extends StatelessWidget {
                   child: Text(
                     hearing
                         ? '$name is talking to you...'
+                        : needsUpdate
+                        ? '$name needs to update to talk privately · '
+                              'voice messages work'
                         : online
                         ? 'Online${via != null ? ' via $via' : ''} · '
                               'end-to-end encrypted'
@@ -306,7 +316,7 @@ class FriendTalkBar extends StatelessWidget {
                   active: talking,
                   activeColor: Colors.red,
                   onHold: onTalk,
-                  enabled: online,
+                  enabled: online && !needsUpdate,
                 ),
                 holdButton(
                   label: recording ? 'Recording...' : 'Hold: voice msg',

@@ -37,6 +37,7 @@ import '../transports/relay_transport.dart';
 import 'call_signs.dart';
 import 'config.dart';
 import 'playback_log.dart';
+import 'private_reply.dart';
 import 'settings.dart';
 
 /// A friend request waiting for an answer.
@@ -174,6 +175,39 @@ class WalkieController extends ChangeNotifier {
   final List<Timer> _timers = [];
   AppLifecycleListener? _lifecycle;
   int _micOrphanTicks = 0;
+
+  /// Big talk button: reply privately for 30 s after a friend's private
+  /// talk / voice message (see [PrivateReply]).
+  final privateReply = PrivateReply();
+  late final _mainTalk = MainTalkRouter(
+    reply: privateReply,
+    talkPrivate: (id, down) async {
+      await talkToFriend(id, down);
+      return !down || privateTalkTo == id;
+    },
+    talkChannel: pushToTalk,
+    privateTalkTo: () => privateTalkTo,
+  );
+
+  /// The big talk button (and talk keys): private reply or channel.
+  Future<void> mainTalk(bool down) => _mainTalk.talk(down);
+
+  /// Friend the big button replies to right now (null = the channel).
+  int? get replyTarget {
+    // Still talking privately from the big button after the window ran out.
+    final p = privateTalkTo;
+    if (transmitting && p != null && p == privateReply.lastId) return p;
+    final t = privateReply.target;
+    return t != null && friendLinks.isFriend(t) ? t : null;
+  }
+
+  void talkToChannelInstead() {
+    privateReply.dismiss();
+    notifyListeners();
+  }
+
+  /// People on this channel who hear the big button (not counting you).
+  int get channelListeners => peers.where((p) => p.channel == scope).length;
 
   /// Which live audio may play (see [LiveAudioGate]).
   final liveGate = LiveAudioGate();
@@ -727,7 +761,12 @@ class WalkieController extends ChangeNotifier {
             messenger?.inbox.byKey(key) ?? friendMessenger?.inbox.byKey(key);
         if (e != null) await playMessage(e, trigger: 'notification');
       case 'openInbox':
-        _uiRequests.add('inbox');
+        final k = a['key'] as String? ?? '';
+        final fe = friendMessenger?.inbox.byKey(k);
+        _uiRequests.add(fe != null ? 'friend:${fe.sender}' : 'inbox');
+      case 'openFriend':
+        final id = n('friend');
+        if (friendLinks.isFriend(id)) _uiRequests.add('friend:$id');
       case 'hwKey':
         await onHardwareKey(a['src'] as String? ?? '', a['down'] == true);
     }
@@ -790,7 +829,7 @@ class WalkieController extends ChangeNotifier {
       );
       return;
     }
-    await pushToTalk(on);
+    await mainTalk(on);
     if (on && latched) _latch();
   }
 
@@ -810,9 +849,9 @@ class WalkieController extends ChangeNotifier {
   /// Toggle mode: tap to start, tap to stop.
   Future<void> toggleTalk() async {
     if (transmitting) {
-      await pushToTalk(false);
+      await mainTalk(false);
     } else {
-      await pushToTalk(true);
+      await mainTalk(true);
       _latch();
     }
   }
@@ -1338,6 +1377,7 @@ class WalkieController extends ChangeNotifier {
       'voice-msg',
       '$name #${e.sender} id ${e.msgId}: arrived, notification only',
     );
+    if (e.channel == friendScope) privateReply.heard(e.sender);
     if (foreground) {
       _notice('Voice message from $name (${formatDuration(e.durationMs)})');
     }
@@ -1960,6 +2000,12 @@ class WalkieController extends ChangeNotifier {
         );
         return;
       }
+      if (friendLinks.needsUpdate(id)) {
+        // Older apps answer private talk with their big button, which
+        // goes to the whole channel.
+        _notice('${friendName(id)} needs to update to talk privately.');
+        return;
+      }
       privateTalkTo = id;
       transmitting = true;
       _stopReplay();
@@ -2051,9 +2097,20 @@ class WalkieController extends ChangeNotifier {
     if (isNew) {
       _audio.setFocus(true);
       if (!foreground) {
-        bridge.showTalking(peer: id, name: friendName(id), channel: channel);
+        bridge.showTalking(
+          peer: id,
+          name: friendName(id),
+          channel: channel,
+          friend: true,
+        );
       }
       notifyListeners();
+    }
+    if (privateReply.target != id) {
+      privateReply.heard(id);
+      notifyListeners();
+    } else {
+      privateReply.heard(id);
     }
     _audio.play(id, f.frame.seq, f.frame.payload);
   }

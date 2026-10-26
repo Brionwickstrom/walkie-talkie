@@ -819,6 +819,8 @@ class PttButton extends StatelessWidget {
     this.size = 160,
     this.toggle = false,
     this.onTap,
+    this.caption,
+    this.private = false,
   });
   final bool transmitting;
   final bool busy;
@@ -828,6 +830,15 @@ class PttButton extends StatelessWidget {
   /// Toggle mode: tap to start, tap to stop ([onTap]).
   final bool toggle;
   final VoidCallback? onTap;
+
+  /// Who hears it, under the button: "Talk to CH 1 (3 people)" or
+  /// "Reply privately to Ann".
+  final String? caption;
+
+  /// Private reply mode: lock icon, purple, "HOLD TO REPLY".
+  final bool private;
+
+  static const privateColor = Color(0xFF7B1FA2);
 
   Widget _gesture(Widget child) {
     if (toggle) {
@@ -848,12 +859,14 @@ class PttButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = transmitting
-        ? Colors.red
-        : busy
+        ? (private ? const Color(0xFFC2185B) : Colors.red)
+        : busy && !private
         ? Colors.orange
+        : private
+        ? privateColor
         : Theme.of(context).colorScheme.primary;
     final d = transmitting ? size * 1.08 : size;
-    return SizedBox(
+    final circle = SizedBox(
       width: size * 1.08,
       height: size * 1.08,
       child: Center(
@@ -880,15 +893,21 @@ class PttButton extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(
-                      transmitting ? Icons.mic : Icons.mic_none,
+                      private
+                          ? Icons.lock
+                          : transmitting
+                          ? Icons.mic
+                          : Icons.mic_none,
                       size: size * 0.32,
                       color: Colors.white,
                     ),
                     Text(
                       transmitting
                           ? (toggle ? 'TAP TO STOP' : 'TALKING')
-                          : busy
+                          : busy && !private
                           ? 'RECEIVING'
+                          : private
+                          ? (toggle ? 'TAP TO REPLY' : 'HOLD TO REPLY')
                           : (toggle ? 'TAP TO TALK' : 'HOLD TO TALK'),
                       style: const TextStyle(
                         color: Colors.white,
@@ -902,6 +921,188 @@ class PttButton extends StatelessWidget {
           ),
         ),
       ),
+    );
+    final cap = caption;
+    if (cap == null) return circle;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        circle,
+        const SizedBox(height: 2),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (private)
+              const Padding(
+                padding: EdgeInsets.only(right: 4),
+                child: Icon(Icons.lock, size: 14, color: privateColor),
+              ),
+            Flexible(
+              child: Text(
+                cap,
+                key: const Key('ptt-caption'),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: private ? privateColor : null,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+/// "🔒 Private from Ann: Hold here to reply privately", pinned above the
+/// big talk button while private talk / a voice message from a friend is
+/// recent. Holding the banner talks privately to that friend only.
+class PrivateReplyBanner extends StatelessWidget {
+  const PrivateReplyBanner({
+    super.key,
+    required this.name,
+    required this.onTalk,
+    required this.onChannelInstead,
+    this.transmitting = false,
+    this.onOpenChat,
+  });
+  final String name;
+  final ValueChanged<bool> onTalk;
+  final VoidCallback onChannelInstead;
+  final VoidCallback? onOpenChat;
+  final bool transmitting;
+
+  @override
+  Widget build(BuildContext context) {
+    const purple = PttButton.privateColor;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+      child: Material(
+        color: transmitting ? const Color(0xFFF8BBD0) : const Color(0xFFF3E5F5),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+          side: const BorderSide(color: purple, width: 1.5),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(4, 4, 8, 4),
+          child: Row(
+            children: [
+              Expanded(
+                child: Listener(
+                  key: const Key('private-reply-hold'),
+                  behavior: HitTestBehavior.opaque,
+                  onPointerDown: (_) => onTalk(true),
+                  onPointerUp: (_) => onTalk(false),
+                  onPointerCancel: (_) => onTalk(false),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 6,
+                    ),
+                    child: Row(
+                      children: [
+                        CircleAvatar(
+                          radius: 18,
+                          backgroundColor: transmitting
+                              ? const Color(0xFFC2185B)
+                              : purple,
+                          child: Icon(
+                            transmitting ? Icons.mic : Icons.lock,
+                            color: Colors.white,
+                            size: 20,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            transmitting
+                                ? '🔒 Talking privately to $name… '
+                                      '(only $name hears you)'
+                                : '🔒 Private from $name: '
+                                      'Hold here to reply privately',
+                            style: const TextStyle(
+                              color: Color(0xFF4A148C),
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  if (onOpenChat != null)
+                    IconButton(
+                      tooltip: 'Open private chat',
+                      visualDensity: VisualDensity.compact,
+                      icon: const Icon(
+                        Icons.chat_bubble_outline,
+                        color: purple,
+                      ),
+                      onPressed: onOpenChat,
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The bottom of the home screen: optional private reply banner, the big
+/// talk button with "who hears it", and "Talk to channel instead".
+class MainTalkArea extends StatelessWidget {
+  const MainTalkArea({
+    super.key,
+    required this.button,
+    this.replyName,
+    this.onReplyTalk,
+    this.onChannelInstead,
+    this.replyTransmitting = false,
+    this.onOpenChat,
+  });
+  final Widget button;
+  final String? replyName;
+  final ValueChanged<bool>? onReplyTalk;
+  final VoidCallback? onChannelInstead;
+  final VoidCallback? onOpenChat;
+  final bool replyTransmitting;
+
+  @override
+  Widget build(BuildContext context) {
+    final name = replyName;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (name != null)
+          PrivateReplyBanner(
+            name: name,
+            transmitting: replyTransmitting,
+            onTalk: onReplyTalk ?? (_) {},
+            onChannelInstead: onChannelInstead ?? () {},
+            onOpenChat: onOpenChat,
+          ),
+        button,
+        if (name != null)
+          TextButton(
+            key: const Key('talk-to-channel'),
+            style: TextButton.styleFrom(
+              visualDensity: VisualDensity.compact,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              minimumSize: const Size(0, 28),
+            ),
+            onPressed: onChannelInstead,
+            child: const Text('Talk to channel instead'),
+          ),
+      ],
     );
   }
 }

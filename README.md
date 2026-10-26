@@ -331,6 +331,44 @@ decrypt).
 * Private talk to a friend is not saved in the replay history.
 * 1.4 and older phones do not see chats, names, friends or moderation.
 
+## v1.5.4: private talk heard by everyone (the real cause)
+
+Report: "If I create a private chat it plays on just the person's phone. But
+when they talk it plays on all phones" (all phones on 1.5.3, over the
+internet).
+
+**Cause: the reply, not the encryption.** Private talk from a friend plays on
+the home screen, and the "is talking" notification opened the channel. The
+friend then answered with the big HOLD TO TALK button (or a talk key /
+toggle / the notification), and that button always goes to the whole
+channel (`WalkieController.pushToTalk`). Private frames themselves never
+leaked: they are sealed with the pair key, sent only to the friend's own
+relay room (`FriendLinks.send` -> `_relays[key.room]`, room = "f" + 16 hex,
+never the channel room), and a phone without the pair key cannot open them
+(the channel key only opens its own tag; unknown sealed frames are dropped).
+`test/private_relay_test.dart` checks this over the relay only, both ways,
+after accept and after QR add, with a 3rd phone on the channel (and even
+inside the friend room): it hears nothing, and the channel room carries no
+extra frame.
+
+Fix:
+
+* **Reply on the home screen.** For 30 s after private talk / a voice
+  message from a friend (renewed by each reply), a purple banner
+  "🔒 Private from Ann: Hold here to reply privately" sits above the big
+  button, and the big button itself becomes "HOLD TO REPLY" with a lock,
+  "Reply privately to Ann". Talk keys and tap-to-talk follow the same rule
+  (`MainTalkRouter`, `lib/app/private_reply.dart`). "Talk to channel
+  instead" switches back. A refused private talk never falls back to the
+  channel.
+* **Who hears it.** The big button says "Talk to CH 1 (3 people)".
+* **Notifications.** "🔒 Ann is talking to you privately" and friend voice
+  messages open that friend's chat, not the channel.
+* **Version gate.** Presence now carries feature level 16. Private talk to a
+  friend whose app announces less (1.5.0-1.5.3 all send 15) is blocked with
+  "Ann needs to update to talk privately" (voice messages still work), so an
+  old app can't answer through the channel button.
+
 ## v1.5.3: saved messages looping (the real cause)
 
 Saved voice messages and History replays kept playing over and over. The

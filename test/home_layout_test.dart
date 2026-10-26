@@ -118,6 +118,10 @@ Widget historyApp() => MaterialApp(
 Widget app({
   List<PersonView> peers = people,
   bool details = false,
+  String? replyFrom,
+  ValueChanged<bool>? onReply,
+  ValueChanged<bool>? onMain,
+  VoidCallback? onChannelInstead,
 }) => MaterialApp(
   debugShowCheckedModeBanner: false,
   theme: ThemeData(
@@ -125,6 +129,7 @@ Widget app({
     brightness: Brightness.dark,
     useMaterial3: true,
     fontFamily: 'Roboto',
+    fontFamilyFallback: const ['NotoColorEmoji'],
   ),
   home: Scaffold(
     appBar: AppBar(
@@ -199,11 +204,21 @@ Widget app({
           label: const Text('Hold: message'),
         ),
       ),
-      ptt: PttButton(
-        transmitting: false,
-        busy: true,
-        onChanged: (_) {},
-        size: 132,
+      ptt: MainTalkArea(
+        replyName: replyFrom,
+        onReplyTalk: onReply,
+        onChannelInstead: onChannelInstead,
+        onOpenChat: () {},
+        button: PttButton(
+          transmitting: false,
+          busy: replyFrom == null,
+          onChanged: onMain ?? (_) {},
+          size: replyFrom == null ? 132 : 112,
+          private: replyFrom != null,
+          caption: replyFrom != null
+              ? 'Reply privately to $replyFrom'
+              : 'Talk to CH 1 (3 people)',
+        ),
       ),
     ),
   ),
@@ -378,6 +393,15 @@ Future<void> loadFonts() async {
     'Roboto-Italic.ttf',
   ]);
   await load('MaterialIcons', ['MaterialIcons-Regular.otf']);
+  // Emoji in names / the private banner (previews only).
+  const emoji = '/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf';
+  if (File(emoji).existsSync()) {
+    final l = FontLoader('NotoColorEmoji')
+      ..addFont(
+        Future.value(ByteData.sublistView(File(emoji).readAsBytesSync())),
+      );
+    await l.load();
+  }
 }
 
 void main() {
@@ -503,6 +527,66 @@ void main() {
     final out = Platform.environment['PREVIEW_PNG'];
     if (out == null) return;
     await snapshot(tester, app(), out);
+  });
+
+  testWidgets('private reply banner: lays out, routes to the friend', (
+    tester,
+  ) async {
+    final reply = <bool>[], main = <bool>[];
+    var channelInstead = 0;
+    for (final scale in [1.0, 1.3, 2.0]) {
+      await pumpAt(
+        tester,
+        app(
+          replyFrom: 'Ginger Snap Dragon 🐉',
+          onReply: reply.add,
+          onMain: main.add,
+          onChannelInstead: () => channelInstead++,
+        ),
+        scale: scale,
+      );
+      expect(tester.takeException(), isNull, reason: 'scale $scale');
+    }
+    expect(
+      find.text(
+        '🔒 Private from Ginger Snap Dragon 🐉: Hold here to reply privately',
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.text('Reply privately to Ginger Snap Dragon 🐉'),
+      findsOneWidget,
+    );
+    expect(find.text('HOLD TO REPLY'), findsOneWidget);
+    expect(find.byIcon(Icons.lock), findsWidgets);
+    // Holding the banner talks privately (down, then up).
+    final g = await tester.startGesture(
+      tester.getCenter(find.byKey(const Key('private-reply-hold'))),
+    );
+    await tester.pump();
+    await g.up();
+    await tester.pump();
+    expect(reply, [true, false]);
+    expect(main, isEmpty);
+    await tester.tap(find.byKey(const Key('talk-to-channel')));
+    expect(channelInstead, 1);
+  });
+
+  testWidgets('main button says who hears it', (tester) async {
+    await pumpAt(tester, app());
+    expect(find.text('Talk to CH 1 (3 people)'), findsOneWidget);
+    expect(find.textContaining('Private from'), findsNothing);
+    expect(find.byKey(const Key('talk-to-channel')), findsNothing);
+  });
+
+  testWidgets('reply preview PNG (REPLY_PNG=path)', (tester) async {
+    final out = Platform.environment['REPLY_PNG'];
+    if (out == null) return;
+    await snapshot(
+      tester,
+      app(replyFrom: 'Ginger Snap Dragon 🐉', onChannelInstead: () {}),
+      out,
+    );
   });
 
   testWidgets('history preview PNG (HISTORY_PNG=path)', (tester) async {

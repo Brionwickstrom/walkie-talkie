@@ -129,7 +129,7 @@ object BgBridge {
                 result.success(null)
             }
             "showTalking" -> {
-                Notifier.showTalking(ctx, long(call, "peer"), str(call, "name"), int(call, "channel"))
+                Notifier.showTalking(ctx, long(call, "peer"), str(call, "name"), int(call, "channel"), bool(call, "friend"))
                 result.success(null)
             }
             "cancelTalking" -> {

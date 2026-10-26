@@ -112,11 +112,15 @@ class FriendLinks {
     required String Function() localName,
     this.relayFactory,
     DateTime Function()? clock,
+    this.feature = featureLevel,
   }) : _name = localName,
        _clock = clock ?? DateTime.now;
 
   final int localId;
   final FriendRadio radio;
+
+  /// Feature level announced in presence (tests simulate older apps).
+  final int feature;
   final String Function() _name;
 
   /// Opens the friend's relay room (null = no internet path).
@@ -134,6 +138,14 @@ class FriendLinks {
   final Map<String, StreamSubscription<InboundFrame>> _relaySubs = {};
   final Map<int, Map<TransportKind, DateTime>> _seen = {};
   final Map<int, _Window> _dedupe = {};
+  final Map<int, int> _feature = {};
+
+  /// Feature level the friend's app announced (0 = not heard yet / old).
+  int featureOf(int id) => _feature[id] ?? 0;
+
+  /// The friend's app is too old for private talk (v1.5.4+ needed: older
+  /// apps answer with their big button, which goes to the whole channel).
+  bool needsUpdate(int id) => featureOf(id) < privateTalkFeature;
   final _inbound = StreamController<FriendInbound>.broadcast();
   final _paired = StreamController<(int, String, PairKey)>.broadcast();
   final _changes = StreamController<void>.broadcast();
@@ -285,7 +297,7 @@ class FriendLinks {
           message: ControlMessage(
             ControlKind.fhello,
             name: _name(),
-            x: const {'v': featureLevel},
+            x: {'v': feature},
           ),
         ),
       );
@@ -365,6 +377,9 @@ class FriendLinks {
         // They have the key: count them as heard, so private talk works
         // right away in both directions once the friend is added here.
         _seen.putIfAbsent(f.senderId, () => {})[inb.transport] = _clock();
+        if (msg?.kind == ControlKind.fhello) {
+          _feature[f.senderId] = (msg!.x['v'] as num?)?.toInt() ?? 0;
+        }
         if (msg?.kind == ControlKind.fhello &&
             !_friends.containsKey(f.senderId) &&
             _pairedSeen.add('${k.encoded}/${f.senderId}')) {
@@ -385,6 +400,11 @@ class FriendLinks {
     }
     final msg = inner.control;
     if (msg != null && msg.kind == ControlKind.fhello) {
+      final v = (msg.x['v'] as num?)?.toInt() ?? 0;
+      if (_feature[f.senderId] != v) {
+        _feature[f.senderId] = v;
+        _emit();
+      }
       final n = msg.name;
       if (n != null && n.isNotEmpty && n != friend!.name) {
         friend.name = n;
