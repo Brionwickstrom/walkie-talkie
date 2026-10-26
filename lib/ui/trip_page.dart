@@ -10,6 +10,11 @@ import 'package:sensors_plus/sensors_plus.dart';
 import '../app/walkie_controller.dart';
 import '../trip/geo.dart';
 import '../trip/imports/map_layers.dart';
+import '../trip/search/fetch.dart';
+import '../trip/search/map_search.dart';
+import '../trip/search/nominatim.dart';
+import '../trip/search/offline_search.dart';
+import '../trip/search/overpass.dart';
 import '../trip/tile_cache.dart';
 import '../trip/track.dart';
 import '../trip/trip_controller.dart';
@@ -20,6 +25,7 @@ import 'home_view.dart';
 import 'map_import.dart';
 import 'map_layer_widgets.dart';
 import 'map_layers_page.dart';
+import 'map_search_page.dart';
 import 'network_map_page.dart';
 import 'offline_maps_page.dart';
 import 'sheets.dart';
@@ -61,6 +67,10 @@ class TripPageState extends State<TripPage> {
   bool _full = false;
   Track? _shown;
 
+  /// Search result being highlighted on the map (cleared after a while).
+  SearchHit? _hl;
+  Timer? _hlTimer;
+
   bool get fullScreen => _full;
 
   void setFullScreen(bool on) {
@@ -79,6 +89,7 @@ class TripPageState extends State<TripPage> {
 
   @override
   void dispose() {
+    _hlTimer?.cancel();
     t?.setVisible(false);
     for (final s in _sensors) {
       s.cancel();
@@ -187,7 +198,16 @@ class TripPageState extends State<TripPage> {
         (trip.people.values.isNotEmpty ? trip.people.values.first.pos : null) ??
         (trip.pins.isNotEmpty ? trip.pins.first.pos : null);
     final track = _shown ?? trip.currentTrack;
+    final hl = _hl;
     final lines = <Polyline>[
+      if (hl != null && hl.doc.line != null && hl.doc.line!.length > 1)
+        Polyline(
+          points: [for (final p in hl.doc.line!) ll(p)],
+          strokeWidth: 9,
+          color: Colors.yellow.withValues(alpha: 0.75),
+          borderStrokeWidth: 1.5,
+          borderColor: Colors.orange.withValues(alpha: 0.8),
+        ),
       for (final s in trip.sharedTracks.values)
         if (s.points.length > 1)
           Polyline(
@@ -216,6 +236,37 @@ class TripPageState extends State<TripPage> {
         ),
     ];
     final markers = <Marker>[
+      if (hl != null)
+        Marker(
+          key: const Key('searchHighlight'),
+          point: ll(hl.doc.pos),
+          width: 160,
+          height: 72,
+          child: GestureDetector(
+            onTap: () => setState(() => _hl = null),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(height: 18),
+                Container(
+                  width: 32,
+                  height: 32,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Colors.yellow.withValues(alpha: 0.35),
+                    border: Border.all(color: Colors.orange, width: 3),
+                  ),
+                  child: Icon(
+                    searchKindIcon(hl.doc),
+                    size: 16,
+                    color: Colors.black87,
+                  ),
+                ),
+                _label(hl.title, Colors.orange),
+              ],
+            ),
+          ),
+        ),
       for (final p in trip.pins)
         Marker(
           point: ll(p.pos),
@@ -339,11 +390,14 @@ class TripPageState extends State<TripPage> {
             MarkerLayer(markers: markers),
             SimpleAttributionWidget(
               source: Text(
-                [
+                {
                   src.attribution,
                   if (trip.baseTiles != null)
                     trip.layers.tilesOf(trip.baseTiles!.id)?.attribution ?? '',
-                ].where((x) => x.isNotEmpty).join(' · '),
+                  for (final l in trip.layers.trails)
+                    if (l.visible && l.attribution.isNotEmpty)
+                      'Trails ${l.attribution}',
+                }.where((x) => x.isNotEmpty).join(' · '),
                 style: const TextStyle(fontSize: 10),
               ),
               backgroundColor: Colors.white.withValues(alpha: 0.85),
@@ -357,6 +411,12 @@ class TripPageState extends State<TripPage> {
   List<Widget> _mapControls(BuildContext context, TripController trip) {
     final cs = Theme.of(context).colorScheme;
     return [
+      RoundMapButton(
+        key: const Key('mapSearch'),
+        icon: Icons.search,
+        tip: 'Search maps, trails and places',
+        onTap: () => _openSearch(context, trip),
+      ),
       RoundMapButton(
         icon: _follow ? Icons.my_location : Icons.location_searching,
         tip: _follow ? 'Following you' : 'Center on me',
@@ -486,6 +546,218 @@ class TripPageState extends State<TripPage> {
     final trip = t;
     if (trip == null || !mounted) return;
     await importMapFile(context, trip, File(path), name, temporary: true);
+  }
+
+  // ------------------------------------------------------------ search
+
+  GeoBounds? get _visibleBounds {
+    if (!_mapReady) return null;
+    final v = _map.camera.visibleBounds;
+    return GeoBounds(v.south, v.west, v.north, v.east);
+  }
+
+  void _fit(GeoBounds b, {double maxZoom = 16}) {
+    if (!_mapReady) return;
+    if ((b.north - b.south).abs() < 1e-4 && (b.east - b.west).abs() < 1e-4) {
+      _map.move(ll(b.center), maxZoom.clamp(2, 15));
+      return;
+    }
+    _map.fitCamera(
+      CameraFit.bounds(
+        bounds: LatLngBounds(LatLng(b.south, b.west), LatLng(b.north, b.east)),
+        padding: const EdgeInsets.all(40),
+        maxZoom: maxZoom,
+      ),
+    );
+  }
+
+  Future<void> _openSearch(BuildContext context, TripController trip) async {
+    final near = trip.myFix?.pos ?? (_mapReady ? gp(_map.camera.center) : null);
+    final pick = await Navigator.of(context).push<MapSearchPick>(
+      MaterialPageRoute(
+        builder: (_) => MapSearchPage(trip: trip, near: near),
+      ),
+    );
+    if (!mounted || pick == null) return;
+    switch (pick) {
+      case OfflinePick(:final hit):
+        showHit(hit);
+      case PlacePick(:final place):
+        if (!context.mounted) return;
+        await _placeSheet(context, trip, place);
+    }
+  }
+
+  /// Center the map on a search result and highlight it.
+  void showHit(SearchHit hit) {
+    _hlTimer?.cancel();
+    setState(() {
+      _follow = false;
+      _hl = hit;
+    });
+    final b = hit.doc.bounds;
+    if (b != null && hit.doc.kind != SearchKind.person) {
+      _fit(b);
+    } else if (_mapReady) {
+      _map.move(ll(hit.doc.pos), _map.camera.zoom < 14 ? 15 : _map.camera.zoom);
+    }
+    _hlTimer = Timer(const Duration(seconds: 20), () {
+      if (mounted) setState(() => _hl = null);
+    });
+  }
+
+  Future<void> _placeSheet(
+    BuildContext context,
+    TripController trip,
+    PlaceResult place,
+  ) async {
+    setState(() => _follow = false);
+    if (place.bounds != null) {
+      _fit(place.bounds!, maxZoom: 15);
+    } else if (_mapReady) {
+      _map.move(ll(place.center), 14);
+    }
+    var busy = false;
+    String? error;
+    await showAppSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, set) {
+          Future<void> getTrails({bool onScreen = false}) async {
+            set(() {
+              busy = true;
+              error = null;
+            });
+            try {
+              final r = await trip.importTrailsFor(
+                place: onScreen ? null : place,
+                visible: _visibleBounds,
+              );
+              if (ctx.mounted) Navigator.pop(ctx);
+              final b = boundsOfPoints(r.layer.data?.allPoints ?? const []);
+              if (b != null) _fit(b, maxZoom: 15);
+              if (!context.mounted) return;
+              ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+                SnackBar(
+                  duration: const Duration(seconds: 6),
+                  content: Text(
+                    'Saved "${r.layer.name}": ${r.result.trails} trails and '
+                    '${r.result.places} places, ready offline.'
+                    '${r.trimmed ? ' Big area, so only the middle ${maxTrailAreaKm.round()} km was fetched.' : ''}'
+                    '${r.result.partial ? ' The server stopped early, so some may be missing.' : ''}',
+                  ),
+                ),
+              );
+            } on NoSignalException catch (e) {
+              set(
+                () => error = e.message
+                    .replaceAll(
+                      'offline search below',
+                      'try again when you have signal',
+                    )
+                    .replaceAll(
+                      'Offline search below.',
+                      'Try again when you have signal.',
+                    ),
+              );
+            } on FetchException catch (e) {
+              set(() => error = e.message);
+            } on StorageLimitException catch (e) {
+              set(() => error = e.message);
+            } catch (e) {
+              set(() => error = 'Could not get trails: $e');
+            } finally {
+              if (ctx.mounted) set(() => busy = false);
+            }
+          }
+
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(place.name, style: Theme.of(ctx).textTheme.titleLarge),
+                Text(
+                  place.displayName,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(ctx).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 12),
+                FilledButton.icon(
+                  key: const Key('getTrails'),
+                  icon: busy
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.route),
+                  label: Text(
+                    busy ? 'Getting trails...' : 'Get trails for this area',
+                  ),
+                  onPressed: busy ? null : () => getTrails(),
+                ),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.download_for_offline),
+                  label: const Text('Download topo map for offline'),
+                  onPressed: busy
+                      ? null
+                      : () {
+                          Navigator.pop(ctx);
+                          _downloadPlace(context, trip, place);
+                        },
+                ),
+                TextButton(
+                  onPressed: busy ? null : () => getTrails(onScreen: true),
+                  child: const Text(
+                    'Get trails for the area on screen instead',
+                  ),
+                ),
+                if (error != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      error!,
+                      style: TextStyle(color: Theme.of(ctx).colorScheme.error),
+                    ),
+                  ),
+                const SizedBox(height: 8),
+                Text(
+                  'Trails and places from OpenStreetMap ($osmAttribution). '
+                  'Search by Nominatim. Saved on the phone, so they work with '
+                  'no signal. Always check official maps and closures.',
+                  style: Theme.of(ctx).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  void _downloadPlace(
+    BuildContext context,
+    TripController trip,
+    PlaceResult place,
+  ) {
+    final area = areaForPlace(place, visible: _visibleBounds);
+    final zoom = _mapReady ? _map.camera.zoom : 12.0;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => OfflineMapsPage(
+          trip: trip,
+          bounds: area.bounds,
+          zoom: zoom.clamp(10.0, 14.0) + 1,
+          autoDownload: true,
+          suggestedName: place.name,
+        ),
+      ),
+    );
   }
 
   void _openOffline(BuildContext context, TripController trip) {

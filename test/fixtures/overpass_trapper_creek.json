@@ -1,0 +1,85 @@
+{
+  "version": 0.6,
+  "generator": "Overpass API 0.7.62",
+  "osm3s": {
+    "timestamp_osm_base": "2026-10-26T17:00:00Z",
+    "copyright": "The data included in this document is from www.openstreetmap.org. The data is made available under ODbL."
+  },
+  "elements": [
+    {
+      "type": "way", "id": 101,
+      "geometry": [{"lat": 45.8800, "lon": -121.9800}, {"lat": 45.8850, "lon": -121.9750}],
+      "tags": {"highway": "path", "name": "Observation Trail", "ref": "132"}
+    },
+    {
+      "type": "way", "id": 103,
+      "geometry": [{"lat": 45.8700, "lon": -121.9900}, {"lat": 45.8720, "lon": -121.9880}, {"lat": 45.8740, "lon": -121.9860}],
+      "tags": {"highway": "path", "name": "Trapper Creek Trail", "ref": "192"}
+    },
+    {
+      "type": "way", "id": 104,
+      "geometry": [{"lat": 45.8780, "lon": -121.9820}, {"lat": 45.8740, "lon": -121.9860}],
+      "tags": {"highway": "path", "name": "Trapper Creek Trail", "ref": "192"}
+    },
+    {
+      "type": "way", "id": 105,
+      "geometry": [{"lat": 45.8600, "lon": -122.0000}, {"lat": 45.8610, "lon": -121.9950}],
+      "tags": {"highway": "track", "name": "Forest Road 5401"}
+    },
+    {
+      "type": "way", "id": 106,
+      "geometry": [{"lat": 45.8500, "lon": -122.0000}, {"lat": 45.8510, "lon": -121.9990}],
+      "tags": {"highway": "path"}
+    },
+    {
+      "type": "way", "id": 107,
+      "geometry": [{"lat": 45.8500, "lon": -122.0100}, {"lat": 45.8510, "lon": -122.0090}],
+      "tags": {"highway": "residential", "name": "Main Street"}
+    },
+    {
+      "type": "relation", "id": 9001,
+      "members": [
+        {"type": "way", "ref": 101, "role": "", "geometry": [{"lat": 45.8800, "lon": -121.9800}, {"lat": 45.8850, "lon": -121.9750}]},
+        {"type": "way", "ref": 102, "role": "", "geometry": [{"lat": 45.8900, "lon": -121.9700}, {"lat": 45.8850, "lon": -121.9750}]},
+        {"type": "node", "ref": 5, "role": "trailhead", "lat": 45.88, "lon": -121.98}
+      ],
+      "tags": {"type": "route", "route": "hiking", "name": "Observation Trail", "ref": "132"}
+    },
+    {
+      "type": "node", "id": 201, "lat": 45.8700, "lon": -121.9900,
+      "tags": {"highway": "trailhead", "name": "Trapper Creek Trailhead"}
+    },
+    {
+      "type": "node", "id": 202, "lat": 45.87004, "lon": -121.99003,
+      "tags": {"highway": "trailhead", "name": "Trapper Creek Trailhead"}
+    },
+    {
+      "type": "node", "id": 203, "lat": 45.8900, "lon": -121.9700,
+      "tags": {"natural": "peak", "name": "Observation Peak", "ele": "1287.4"}
+    },
+    {
+      "type": "node", "id": 204, "lat": 45.8760, "lon": -121.9840,
+      "tags": {"natural": "spring"}
+    },
+    {
+      "type": "way", "id": 205, "center": {"lat": 45.8950, "lon": -121.9600},
+      "tags": {"natural": "water", "water": "lake", "name": "Sister Rocks Lake"}
+    },
+    {
+      "type": "node", "id": 206, "lat": 45.8955, "lon": -121.9610,
+      "tags": {"tourism": "camp_site", "name": "Lake Camp"}
+    },
+    {
+      "type": "way", "id": 207, "center": {"lat": 45.8820, "lon": -121.9790},
+      "tags": {"amenity": "shelter", "name": "Big Hollow Shelter"}
+    },
+    {
+      "type": "node", "id": 208, "lat": 45.8600, "lon": -122.0000,
+      "tags": {"amenity": "drinking_water"}
+    },
+    {
+      "type": "node", "id": 209, "lat": 95.0, "lon": -122.0,
+      "tags": {"natural": "peak", "name": "Broken"}
+    }
+  ]
+}

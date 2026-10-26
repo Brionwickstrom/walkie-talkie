@@ -12,6 +12,12 @@ import 'geo.dart';
 import 'imports/map_layers.dart';
 import 'imports/route_share.dart';
 import 'lost_contact.dart';
+import 'search/fetch.dart';
+import 'search/map_search.dart';
+import 'search/nominatim.dart';
+import 'search/offline_search.dart';
+import 'search/overpass.dart';
+import 'search/rate_limiter.dart';
 import 'sos.dart';
 import 'store_forward.dart';
 import 'tile_cache.dart';
@@ -103,6 +109,8 @@ class TripController extends ChangeNotifier {
     required this.dir,
     required this.userAgent,
     Clock? clock,
+    Fetch? fetch,
+    RateLimiter? searchLimiter,
   }) : _clock = clock ?? DateTime.now {
     sos =
         SosManager(
@@ -129,6 +137,21 @@ class TripController extends ChangeNotifier {
       File('${dir.path}/weather.json'),
       userAgent: userAgent,
     );
+    final f = fetch ?? ioFetch(userAgent);
+    search = MapSearch(
+      fetch: f,
+      // Tests pass an instant limiter; the app shares the polite ones.
+      nominatim: NominatimClient(fetch: f, limiter: searchLimiter),
+      overpass: OverpassClient(fetch: f, limiter: searchLimiter),
+      canUseNetwork: () {
+        if (_offline) {
+          return 'Offline power save is on, so online map search is off. '
+              'Offline search below.';
+        }
+        if (!tiles.online) return noSignalMessage;
+        return null;
+      },
+    );
     _applySettings();
   }
 
@@ -150,6 +173,9 @@ class TripController extends ChangeNotifier {
   /// The newest route someone shared being stored (tests wait on it).
   Future<MapLayer>? lastSharedRoute;
   late final WeatherCache weather;
+
+  /// Online "Find maps" (Nominatim + Overpass), v1.8.4.
+  late final MapSearch search;
   final TrackRecorder recorder = TrackRecorder();
   final TrackAssembler _assembler = TrackAssembler();
 
@@ -924,6 +950,132 @@ class TripController extends ChangeNotifier {
     await _updateLocationNeed();
     if (settings.tripMode) _maybeSendLive();
     notifyListeners();
+  }
+
+  // ------------------------------------------------------------ search
+
+  /// Everything searchable besides imported layers: pins, people, recorded
+  /// and shared trails, downloaded areas and imported MBTiles maps.
+  List<SearchDoc> searchDocs() {
+    final me = host.localId;
+    final out = <SearchDoc>[
+      for (final p in pins)
+        SearchDoc(
+          kind: p.origin == me ? SearchKind.pin : SearchKind.sharedPin,
+          title: p.title,
+          subtitle: [
+            p.type.label,
+            if (p.origin != me) 'from ${host.nameOf(p.origin)}',
+          ].join(' · '),
+          pos: p.pos,
+          ref: p.key,
+          placeKind: p.type.label,
+        ),
+      for (final pp in people.values)
+        SearchDoc(
+          kind: SearchKind.person,
+          title: host.nameOf(pp.id),
+          subtitle:
+              'Last seen ${pp.at.hour.toString().padLeft(2, '0')}:'
+              '${pp.at.minute.toString().padLeft(2, '0')}',
+          pos: pp.pos,
+          ref: '${pp.id}',
+        ),
+      for (final t in [...savedTracks, ?recorder.track])
+        if (t.points.isNotEmpty)
+          SearchDoc(
+            kind: SearchKind.track,
+            title: t.name.isEmpty ? 'Trail ${t.id}' : t.name,
+            subtitle: t == recorder.track ? 'Recording now' : 'My trail',
+            pos: t.points.last.pos,
+            line: [for (final x in t.points) x.pos],
+            bounds: boundsOfPoints(t.points.map((x) => x.pos)),
+            ref: '${t.id}',
+            lengthM: t.lengthM,
+          ),
+      for (final e in sharedTracks.entries)
+        if (e.value.points.isNotEmpty)
+          SearchDoc(
+            kind: SearchKind.track,
+            title: "${host.nameOf(e.value.origin)}'s trail",
+            subtitle: 'Shared trail',
+            pos: e.value.points.last.pos,
+            line: [for (final x in e.value.points) x.pos],
+            bounds: boundsOfPoints(e.value.points.map((x) => x.pos)),
+            ref: e.key,
+          ),
+      for (final r in tiles.regions)
+        SearchDoc(
+          kind: SearchKind.area,
+          title: r.name,
+          subtitle: 'Downloaded map · zoom ${r.minZoom}-${r.maxZoom}',
+          pos: r.bounds.center,
+          bounds: r.bounds,
+          ref: 'region:${r.name}',
+        ),
+    ];
+    for (final l in layers.tileSets) {
+      final b = layers.tilesOf(l.id)?.bounds;
+      if (b == null) continue;
+      out.add(
+        SearchDoc(
+          kind: SearchKind.area,
+          title: l.name,
+          subtitle: 'Imported offline map',
+          pos: b.center,
+          bounds: b,
+          ref: 'layer:${l.id}',
+          layerId: l.id,
+        ),
+      );
+    }
+    return out;
+  }
+
+  /// Offline search (no network): imported trails and places, pins,
+  /// people, trails and downloaded areas, best first (closer wins ties).
+  List<SearchHit> searchOffline(
+    String query, {
+    GeoPoint? near,
+    int limit = 40,
+  }) => layers.index.search(
+    query,
+    extra: searchDocs(),
+    near: near ?? myFix?.pos,
+    limit: limit,
+  );
+
+  /// Online places for [query] (never throws; says when there is no
+  /// signal).
+  Future<OnlineSearchResult> findPlaces(String query) =>
+      search.findPlaces(query);
+
+  /// "Get trails for this area": OSM trails and places for [place] (or the
+  /// area on screen) saved as an offline layer with OSM attribution.
+  /// Throws [NoSignalException], [FetchException] or
+  /// [StorageLimitException].
+  Future<({MapLayer layer, OverpassResult result, bool trimmed})>
+  importTrailsFor({PlaceResult? place, GeoBounds? visible}) async {
+    final area = areaForPlace(place, visible: visible);
+    final name = place == null
+        ? 'Trails on screen'
+        : '${place.name.isEmpty ? 'Area' : place.name} trails';
+    final r = await search.trailsFor(
+      area.bounds,
+      areaId: area.trimmed ? null : place?.overpassAreaId,
+      name: name,
+    );
+    if (r.data.isEmpty) {
+      throw FetchException(
+        'No named trails or places found here in OpenStreetMap.',
+      );
+    }
+    final l = await layers.addTrail(
+      r.data,
+      attribution: osmAttribution,
+      color: 0xFF6D4C41,
+    );
+    return (layer: l, result: r, trimmed: area.trimmed);
   }
 
   // ------------------------------------------------------------ storage

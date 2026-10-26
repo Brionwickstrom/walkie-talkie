@@ -331,6 +331,41 @@ decrypt).
 * Private talk to a friend is not saved in the replay history.
 * 1.4 and older phones do not see chats, names, friends or moderation.
 
+## v1.8.4: map search (find trail maps online, search offline)
+
+* **Search button on the Trip map** (also in full screen). Typing searches
+  everything already on the phone, live and with no network: imported trail
+  names and waypoints, peaks / lakes / trailheads / springs / campsites /
+  shelters saved by map search, my pins, shared pins, people on the map,
+  recorded and shared trails, downloaded map areas and imported MBTiles
+  maps. Exact and prefix matches rank first, closer things win ties.
+  Tapping a result centers the map and highlights it (yellow line or ring,
+  20 s). Imported layers are indexed when they are imported or loaded
+  (`lib/trip/search/offline_search.dart`).
+* **Find maps online** (press search): places come from OpenStreetMap's
+  Nominatim, following its usage policy: identifying User-Agent, at most one
+  request per second app-wide (`RateLimiter`), results cached for 6 h, no
+  search-as-you-type, attribution under the results. Picking a place zooms
+  there and offers:
+  * **Get trails for this area**: one Overpass API request for named
+    paths / footways / tracks / bridleways, hiking route relations,
+    trailheads, peaks, lakes, springs, drinking water, campsites and
+    shelters inside the place's outline (falls back to its box), capped to
+    40 km a side, 30 s server timeout, 12 MB answer cap, one busy-server
+    retry. Ways of the same trail are joined; ways in a hiking route are
+    drawn once as the route. Saved as an offline trail layer with
+    "© OpenStreetMap contributors, ODbL" shown in Map layers and on the map.
+    "Get trails for the area on screen instead" uses the visible map.
+  * **Download topo map for offline**: opens the existing OpenTopoMap area
+    download for the place (same estimate, detail slider and 3000-tile cap).
+* **No signal** (or Offline power save on): online search says "Search
+  needs signal; offline search below" and offline results still show.
+
+Limits: online search needs signal; OSM trail data is only as complete as
+OpenStreetMap (unnamed paths are skipped; check official maps and
+closures); the public Overpass server can be slow (up to a minute) or busy;
+very large places are trimmed to their middle 40 km.
+
 ## v1.8.3: friends over LoRa, read receipts, battery, map imports
 
 * **Friend chat over the Meshtastic radio.** When a friend can be reached

@@ -8,6 +8,7 @@ import '../trip/imports/map_layers.dart';
 import '../trip/imports/mbtiles_provider.dart';
 import '../trip/tile_provider.dart';
 import '../trip/trip_controller.dart';
+import 'map_search_page.dart' show placeKindIcon;
 
 LatLng _ll(GeoPoint p) => LatLng(p.lat, p.lng);
 
@@ -120,7 +121,11 @@ List<Widget> importedLayers(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       const SizedBox(height: 8),
-                      Icon(Icons.place, size: 20, color: Color(l.color)),
+                      Icon(
+                        placeKindIcon(w.kind),
+                        size: 20,
+                        color: Color(l.color),
+                      ),
                       if (w.name.isNotEmpty)
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 3),

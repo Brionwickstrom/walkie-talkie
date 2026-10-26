@@ -110,7 +110,8 @@ class MapLayersPage extends StatelessWidget {
                     'not placed yet',
                   if (isBase) 'base map',
                 ].join(' · ') +
-                from,
+                from +
+                (l.attribution.isEmpty ? '' : '\n${l.attribution}'),
           ),
           trailing: Row(
             mainAxisSize: MainAxisSize.min,

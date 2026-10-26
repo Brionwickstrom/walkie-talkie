@@ -17,10 +17,16 @@ class OfflineMapsPage extends StatefulWidget {
     required this.trip,
     this.bounds,
     this.zoom,
+    this.autoDownload = false,
+    this.suggestedName,
   });
   final TripController trip;
   final GeoBounds? bounds;
   final double? zoom;
+
+  /// Open the download dialog right away (from map search).
+  final bool autoDownload;
+  final String? suggestedName;
   @override
   State<OfflineMapsPage> createState() => _OfflineMapsPageState();
 }
@@ -34,6 +40,12 @@ class _OfflineMapsPageState extends State<OfflineMapsPage> {
   void initState() {
     super.initState();
     _measure();
+    final b = widget.bounds;
+    if (widget.autoDownload && b != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _download(context, b);
+      });
+    }
   }
 
   Future<void> _measure() async {
@@ -163,7 +175,9 @@ class _OfflineMapsPageState extends State<OfflineMapsPage> {
       src.maxZoom,
       math.max(z0, (widget.zoom ?? 13).floor() + 2),
     );
-    final name = TextEditingController(text: 'Trip area');
+    final name = TextEditingController(
+      text: widget.suggestedName ?? 'Trip area',
+    );
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(

@@ -5,6 +5,7 @@ import 'dart:isolate';
 import 'package:flutter/foundation.dart';
 
 import '../geo.dart';
+import '../search/offline_search.dart';
 import 'geo_import.dart';
 import 'georef.dart';
 import 'mbtiles.dart';
@@ -43,6 +44,7 @@ class MapLayer {
     this.from,
     this.sourceBytes = 0,
     this.summary = '',
+    this.attribution = '',
     DateTime? added,
   }) : added = added ?? DateTime.now();
 
@@ -73,6 +75,10 @@ class MapLayer {
 
   /// e.g. "2 tracks · 14 waypoints · 12.4 km" or "z10-16 · 1830 tiles".
   String summary;
+
+  /// Data licence to show with the layer (e.g. OpenStreetMap ODbL for
+  /// trails from map search).
+  final String attribution;
   final DateTime added;
 
   /// Parsed lines / waypoints (trail layers, loaded on demand).
@@ -95,6 +101,7 @@ class MapLayer {
     'h': imageH,
     'from': ?from,
     's': summary,
+    if (attribution.isNotEmpty) 'at': attribution,
     'a': added.millisecondsSinceEpoch,
   };
 
@@ -121,6 +128,7 @@ class MapLayer {
       imageH: (j['h'] as num?)?.toInt() ?? 0,
       from: (j['from'] as num?)?.toInt(),
       summary: (j['s'] as String?) ?? '',
+      attribution: (j['at'] as String?) ?? '',
       added: DateTime.fromMillisecondsSinceEpoch(
         (j['a'] as num?)?.toInt() ?? 0,
       ),
@@ -217,6 +225,10 @@ class MapLayers extends ChangeNotifier {
 
   final List<MapLayer> _layers = [];
   final Map<String, MbTiles> _open = {};
+
+  /// Offline search over imported trails and places (v1.8.4), kept up to
+  /// date on import, load, rename and delete.
+  final SearchIndex index = SearchIndex();
   int _seq = 0;
 
   List<MapLayer> get all => List.unmodifiable(_layers);
@@ -243,8 +255,10 @@ class MapLayers extends ChangeNotifier {
         final l = MapLayer.fromJson(x);
         if (l != null && await _f(l.file).exists()) _layers.add(l);
       }
+      index.clear();
       for (final l in _layers) {
         if (l.kind == MapLayerKind.trail) await _loadData(l);
+        index.indexLayer(l);
       }
     } catch (_) {}
     notifyListeners();
@@ -303,7 +317,13 @@ class MapLayers extends ChangeNotifier {
     ],
     'w': [
       for (final w in d.waypoints)
-        [w.name, w.pos.latE5, w.pos.lngE5, w.description],
+        [
+          w.name,
+          w.pos.latE5,
+          w.pos.lngE5,
+          w.description,
+          if (w.kind.isNotEmpty) w.kind,
+        ],
     ],
   };
 
@@ -326,6 +346,7 @@ class MapLayers extends ChangeNotifier {
           '${v[0]}',
           GeoPoint.fromE5((v[1] as num).toInt(), (v[2] as num).toInt()),
           description: v.length > 3 ? '${v[3]}' : '',
+          kind: v.length > 4 ? '${v[4]}' : '',
         ),
       );
     }
@@ -362,6 +383,7 @@ class MapLayers extends ChangeNotifier {
     int? color,
     int? from,
     int sourceBytes = 0,
+    String attribution = '',
   }) async {
     final json = utf8.encode(jsonEncode(_dataJson(d)));
     _ensureRoom(json.length, d.name.isEmpty ? 'this trail' : d.name);
@@ -379,9 +401,11 @@ class MapLayers extends ChangeNotifier {
       color: color ?? (d.color ?? _nextColor()),
       from: from,
       summary: trailSummary(d),
+      attribution: attribution,
       added: _clock(),
     )..data = d;
     _layers.insert(0, l);
+    index.indexLayer(l);
     await _save();
     notifyListeners();
     return l;
@@ -521,8 +545,10 @@ class MapLayers extends ChangeNotifier {
   // ------------------------------------------------------------ edits
 
   Future<void> setVisible(MapLayer l, bool v) => _edit(() => l.visible = v);
-  Future<void> rename(MapLayer l, String name) =>
-      _edit(() => l.name = name.trim().isEmpty ? l.name : name.trim());
+  Future<void> rename(MapLayer l, String name) => _edit(() {
+    l.name = name.trim().isEmpty ? l.name : name.trim();
+    index.indexLayer(l);
+  });
   Future<void> recolor(MapLayer l, int argb) => _edit(() => l.color = argb);
   Future<void> setOpacity(MapLayer l, double o) =>
       _edit(() => l.opacity = o.clamp(0.1, 1.0));
@@ -539,6 +565,7 @@ class MapLayers extends ChangeNotifier {
 
   Future<void> delete(MapLayer l) async {
     _layers.remove(l);
+    index.removeLayer(l.id);
     _open.remove(l.id)?.close();
     try {
       await _f(l.file).delete();

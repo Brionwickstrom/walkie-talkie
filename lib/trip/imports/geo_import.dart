@@ -19,10 +19,19 @@ class ImportedLine {
 
 /// A waypoint (GPX wpt, KML Point placemark).
 class ImportedWaypoint {
-  ImportedWaypoint(this.name, this.pos, {this.description = ''});
+  ImportedWaypoint(
+    this.name,
+    this.pos, {
+    this.description = '',
+    this.kind = '',
+  });
   String name;
   final GeoPoint pos;
   final String description;
+
+  /// Place kind from map search (v1.8.4): 'peak', 'lake', 'trailhead',
+  /// 'spring', 'water', 'campsite', 'shelter'; '' for a plain waypoint.
+  final String kind;
 }
 
 /// What came out of a GPX / KML / KMZ file.
