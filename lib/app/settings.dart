@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../friends/friend_links.dart';
+import '../trip/trip_settings.dart';
 import 'call_signs.dart';
 
 /// A channel's display name and emoji (shared with the others on it via
@@ -51,6 +52,7 @@ class AppSettings {
     this.urgentLoud = true,
     this.radioId,
     this.radioName,
+    TripSettings? trip,
     Map<int, String>? privateChannels,
     Map<int, double>? peerVolumes,
     List<Friend>? friends,
@@ -59,7 +61,8 @@ class AppSettings {
     Set<int>? announceScopes,
     Set<int>? muted,
     Map<int, String>? blocked,
-  }) : privateChannels = privateChannels ?? {},
+  }) : trip = trip ?? TripSettings(),
+       privateChannels = privateChannels ?? {},
        peerVolumes = peerVolumes ?? {},
        friends = friends ?? [],
        channelNames = channelNames ?? {},
@@ -155,6 +158,9 @@ class AppSettings {
   /// Paired Meshtastic LoRa radio (Bluetooth id / name), v1.7.0.
   String? radioId;
   String? radioName;
+
+  /// Trip tab settings (v1.8.0).
+  final TripSettings trip;
 
   /// Passcodes of the channels marked private (channel -> passcode).
   /// Channels not in the map are public.
@@ -312,6 +318,7 @@ class SharedPrefsSettingsStore implements SettingsStore {
   static const _kSocial = 'social';
   static const _kRadioId = 'lora_radio_id';
   static const _kRadioName = 'lora_radio_name';
+  static const _kTrip = 'trip_settings';
 
   @override
   Future<AppSettings> load({required int defaultChannel}) async {
@@ -368,6 +375,7 @@ class SharedPrefsSettingsStore implements SettingsStore {
       urgentLoud: prefs?.getBool(_kUrgent) ?? true,
       radioId: prefs?.getString(_kRadioId),
       radioName: prefs?.getString(_kRadioName),
+      trip: TripSettings.decode(prefs?.getString(_kTrip)),
     );
   }
 
@@ -415,6 +423,7 @@ class SharedPrefsSettingsStore implements SettingsStore {
         AppSettings.encodeVolumes(s.peerVolumes),
       );
       await prefs.setString(_kFriends, Friend.encodeList(s.friends));
+      await prefs.setString(_kTrip, s.trip.encode());
       await prefs.setString(_kSocial, AppSettings.encodeSocial(s));
       await prefs.setString(
         _kPrivate,

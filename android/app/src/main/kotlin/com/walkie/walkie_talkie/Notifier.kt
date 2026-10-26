@@ -35,6 +35,9 @@ object Notifier {
     const val ACTION_OPEN_FRIEND = "com.walkie.walkie_talkie.OPEN_FRIEND"
     const val ACTION_TALK = "com.walkie.walkie_talkie.TALK"
     const val ACTION_STOP_AUDIO = "com.walkie.walkie_talkie.STOP_AUDIO"
+    const val ACTION_SOS_OPEN = "com.walkie.walkie_talkie.SOS_OPEN"
+    private const val SOS_MS = 5 * 60000L
+    private const val SOS_KEY_BIT = 1L shl 40
 
     private const val RING_MS = 15000L
     private const val URGENT_MS = 60000L
@@ -204,6 +207,51 @@ object Notifier {
         if (ringKey == null || ringKey == (from to id)) stopRingSound()
     }
 
+    private fun sosId(from: Long, id: Long): Int = (7000000 + ((from xor id) and 0xFFFFF)).toInt()
+
+    /**
+     * Trip SOS (v1.8.0): full-screen alert and the alarm tone at alarm
+     * volume (through silent mode, and through Do Not Disturb when access
+     * was granted) for up to [SOS_MS], until the user acknowledges in the
+     * app or the sender cancels.
+     */
+    fun showSos(ctx: Context, from: Long, id: Long, name: String, text: String) {
+        ensureChannels(ctx)
+        val nid = sosId(from, id)
+        val put: Intent.() -> Unit = {
+            putExtra("from", from)
+            putExtra("id", id)
+        }
+        val full = activityIntent(ctx, ACTION_SOS_OPEN, nid, put)
+        val dnd = nm(ctx).isNotificationPolicyAccessGranted
+        val n = NotificationCompat.Builder(ctx, if (dnd) CH_URGENT_DND else CH_URGENT)
+            .setSmallIcon(R.drawable.ic_stat_walkie)
+            .setContentTitle("SOS from $name")
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setOngoing(true)
+            .setContentIntent(full)
+            .setFullScreenIntent(full, true)
+            .addAction(0, "Open", full)
+            .build()
+        post(ctx, nid, n)
+        startRingSound(ctx, from to (id or SOS_KEY_BIT), urgent = true, loud = true, ms = SOS_MS)
+    }
+
+    fun stopSos(ctx: Context, from: Long, id: Long) {
+        cancel(ctx, sosId(from, id))
+        if (ringKey == (from to (id or SOS_KEY_BIT))) stopRingSound()
+    }
+
+    /** Silence the alarm only (the alert stays on screen). */
+    fun silenceSos() {
+        val k = ringKey ?: return
+        if (k.second and SOS_KEY_BIT != 0L) stopRingSound()
+    }
+
     fun showBeep(ctx: Context, from: Long, name: String, notify: Boolean) {
         playOnce(ctx, R.raw.chirp)
         if (!notify) return
@@ -329,14 +377,14 @@ object Notifier {
 
     private var urgentNow = false
 
-    private fun startRingSound(ctx: Context, key: Pair<Long, Long>, urgent: Boolean, loud: Boolean) {
+    private fun startRingSound(ctx: Context, key: Pair<Long, Long>, urgent: Boolean, loud: Boolean, ms: Long? = null) {
         main.post {
             stopRingSound()
             ringKey = key
             appCtx = ctx.applicationContext
             val alarm = urgent && loud
             urgentNow = urgent
-            ringMs = if (urgent) URGENT_MS else RING_MS
+            ringMs = ms ?: if (urgent) URGENT_MS else RING_MS
             if (alarm) overrideQuiet(ctx)
             try {
                 val mp = MediaPlayer()

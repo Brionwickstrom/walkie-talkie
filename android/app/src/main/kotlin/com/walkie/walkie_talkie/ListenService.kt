@@ -78,6 +78,27 @@ class ListenService : Service() {
             }
         }
 
+        /** Trip tab: keep getting location with the app in the background
+         *  (adds the location service type; only allowed from the
+         *  foreground with location permission granted). */
+        @Volatile
+        var wantLocation = false
+            private set
+
+        @Volatile
+        var locType = false
+            private set
+
+        fun setLocation(ctx: Context, on: Boolean) {
+            if (wantLocation == on) return
+            wantLocation = on
+            if (!running) return
+            try {
+                ContextCompat.startForegroundService(ctx, Intent(ctx, ListenService::class.java))
+            } catch (_: Exception) {
+            }
+        }
+
         fun stop(ctx: Context) {
             ctx.stopService(Intent(ctx, ListenService::class.java))
         }
@@ -98,27 +119,34 @@ class ListenService : Service() {
         val n = Notifier.listening(this, title, text, talkAction, talking)
         var ok = false
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            if (wantMic) {
-                // Microphone type: lets you talk with the app in the
-                // background. Android refuses it unless the app is on screen.
-                try {
-                    ServiceCompat.startForeground(
-                        this, NOTIF_ID, n,
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
-                            ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
-                    )
-                    micType = true
-                    ok = true
-                } catch (_: Exception) {
-                }
+            val base = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+            val mic = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            val loc = ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+            val locOk = wantLocation && (
+                ContextCompat.checkSelfPermission(this, android.Manifest.permission.ACCESS_FINE_LOCATION) ==
+                    android.content.pm.PackageManager.PERMISSION_GRANTED ||
+                    ContextCompat.checkSelfPermission(this, android.Manifest.permission.ACCESS_COARSE_LOCATION) ==
+                    android.content.pm.PackageManager.PERMISSION_GRANTED
+                )
+            // Most capable first; Android refuses microphone / location
+            // types unless the app is on screen, so fall back step by step.
+            val tries = buildList {
+                if (wantMic && locOk) add(base or mic or loc)
+                if (wantMic) add(base or mic)
+                if (locOk) add(base or loc)
+                add(base)
             }
-            if (!ok) {
+            for (types in tries) {
                 try {
-                    ServiceCompat.startForeground(
-                        this, NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
-                    )
-                    if (!running) micType = false
+                    ServiceCompat.startForeground(this, NOTIF_ID, n, types)
+                    if (types and mic != 0) {
+                        micType = true
+                    } else if (!running) {
+                        micType = false
+                    }
+                    locType = types and loc != 0
                     ok = true
+                    break
                 } catch (_: Exception) {
                 }
             }
@@ -126,6 +154,7 @@ class ListenService : Service() {
             try {
                 startForeground(NOTIF_ID, n)
                 micType = true
+                locType = true
                 ok = true
             } catch (_: Exception) {
             }
@@ -158,6 +187,7 @@ class ListenService : Service() {
     override fun onDestroy() {
         running = false
         micType = false
+        locType = false
         PttKeys.updateSession(this)
         try {
             wakeLock?.let { if (it.isHeld) it.release() }

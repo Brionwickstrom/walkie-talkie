@@ -28,7 +28,10 @@ abstract class RadioLink {
 }
 
 /// Order in which queued radio packets go out.
-enum LoraPriority { urgent, normal, bulk, presence }
+///
+/// [sos] (Trip SOS and its answers) jumps the queue but still uses the
+/// same rate limiter, so the radio stays within its duty cycle.
+enum LoraPriority { sos, urgent, normal, bulk, presence }
 
 /// Token bucket: at most [burst] packets at once, then one every
 /// [refillEvery]. LoRa LongFast needs ~1-2 s of airtime per full packet
@@ -335,7 +338,9 @@ class LoraTransport extends Transport {
             q.bytes,
             to: to,
             wantAck: ack,
-            priority: q.priority == LoraPriority.urgent
+            priority:
+                q.priority == LoraPriority.urgent ||
+                    q.priority == LoraPriority.sos
                 ? MeshPacketPb.priorityHigh
                 : q.priority == LoraPriority.presence
                 ? MeshPacketPb.priorityDefault

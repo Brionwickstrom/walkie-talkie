@@ -20,9 +20,17 @@ class PersonView {
     this.debug,
     this.volume = 1.0,
     this.hops,
+    this.distance,
+    this.arrowDeg,
   });
 
   final int id;
+
+  /// Trip: "0.8 mi NE" from my GPS fix to theirs, else null.
+  final String? distance;
+
+  /// Trip: compass arrow angle towards them (0 = up), else null.
+  final double? arrowDeg;
 
   /// Reachable only through other phones (mesh relay): radio hops, else
   /// null.
@@ -560,6 +568,27 @@ class PersonCard extends StatelessWidget {
         );
       } else if (p.links.isEmpty) {
         status.add(Text('no path', style: theme.textTheme.bodySmall));
+      }
+      if (p.distance != null) {
+        status.add(
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (p.arrowDeg != null)
+                Transform.rotate(
+                  angle: p.arrowDeg! * math.pi / 180,
+                  child: Icon(Icons.navigation, size: 15, color: cs.secondary),
+                ),
+              Text(
+                p.distance!,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: cs.secondary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        );
       }
       if ((p.volume - 1).abs() > 0.01) {
         status.add(

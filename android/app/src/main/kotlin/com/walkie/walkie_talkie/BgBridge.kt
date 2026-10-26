@@ -196,6 +196,28 @@ object BgBridge {
                 result.success(null)
             }
             "getLocation" -> getLocation(ctx, result)
+            "startLocationUpdates" -> result.success(startLocationUpdates(ctx, long(call, "interval")))
+            "stopLocationUpdates" -> {
+                stopLocationUpdates(ctx)
+                result.success(null)
+            }
+            "setServiceLocation" -> {
+                ListenService.setLocation(ctx, bool(call, "on"))
+                result.success(null)
+            }
+            "showSos" -> {
+                Notifier.showSos(ctx, long(call, "from"), long(call, "id"), str(call, "name"), str(call, "text"))
+                result.success(null)
+            }
+            "stopSos" -> {
+                Notifier.stopSos(ctx, long(call, "from"), long(call, "id"))
+                result.success(null)
+            }
+            "silenceSos" -> {
+                Notifier.silenceSos()
+                result.success(null)
+            }
+            "shareFile" -> result.success(shareFile(ctx, str(call, "path"), str(call, "mime"), str(call, "title")))
             "openUrl" -> {
                 try {
                     open(ctx, Intent(Intent.ACTION_VIEW, Uri.parse(str(call, "url"))))
@@ -273,6 +295,91 @@ object BgBridge {
             }
         } catch (_: Exception) {
             finish(null)
+        }
+    }
+
+    private var locListener: LocationListener? = null
+
+    /**
+     * Continuous fixes for the Trip tab (live location, trail recording):
+     * each one goes to Dart as an action {type: loc, lat, lng, acc, t, alt,
+     * spd}. GPS when allowed, else network. False without permission.
+     */
+    @SuppressLint("MissingPermission")
+    private fun startLocationUpdates(ctx: Context, intervalMs: Long): Boolean {
+        val fine = ctx.checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        val coarse = ctx.checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (!fine && !coarse) return false
+        stopLocationUpdates(ctx)
+        val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        val providers = lm.getProviders(true)
+        val provider = when {
+            fine && providers.contains(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
+            providers.contains(LocationManager.FUSED_PROVIDER) -> LocationManager.FUSED_PROVIDER
+            providers.contains(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
+            else -> return false
+        }
+        val l = object : LocationListener {
+            override fun onLocationChanged(location: Location) {
+                deliver(
+                    ctx,
+                    mapOf(
+                        "type" to "loc",
+                        "lat" to location.latitude,
+                        "lng" to location.longitude,
+                        "acc" to (if (location.hasAccuracy()) location.accuracy.toDouble() else null),
+                        "t" to location.time,
+                        "alt" to (if (location.hasAltitude()) location.altitude else null),
+                        "spd" to (if (location.hasSpeed()) location.speed.toDouble() else null),
+                    ),
+                )
+            }
+            @Deprecated("old API")
+            override fun onStatusChanged(p: String?, s: Int, e: android.os.Bundle?) {}
+            override fun onProviderEnabled(p: String) {}
+            override fun onProviderDisabled(p: String) {}
+        }
+        return try {
+            lm.requestLocationUpdates(provider, intervalMs.coerceAtLeast(1000L), 0f, l, Looper.getMainLooper())
+            locListener = l
+            // Hand over the last known fix right away.
+            try {
+                lm.getLastKnownLocation(provider)?.let { l.onLocationChanged(it) }
+            } catch (_: Exception) {
+            }
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun stopLocationUpdates(ctx: Context) {
+        val l = locListener ?: return
+        locListener = null
+        try {
+            (ctx.getSystemService(Context.LOCATION_SERVICE) as LocationManager).removeUpdates(l)
+        } catch (_: Exception) {
+        }
+    }
+
+    /** Share a file (GPX trail) with another app through the FileProvider. */
+    private fun shareFile(ctx: Context, path: String, mime: String, title: String): Boolean {
+        return try {
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                ctx, "${ctx.packageName}.updates", java.io.File(path),
+            )
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = mime
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_SUBJECT, title)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            open(ctx, Intent.createChooser(send, title).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+            true
+        } catch (_: Exception) {
+            false
         }
     }
 

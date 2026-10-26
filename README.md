@@ -331,6 +331,87 @@ decrypt).
 * Private talk to a friend is not saved in the replay history.
 * 1.4 and older phones do not see chats, names, friends or moderation.
 
+## v1.8.0: Trip tab (map, SOS, check-ins, trails, weather)
+
+A new **Trip** tab (bottom bar: Talk / Trip) works online and offline. Every
+Trip message goes over whatever path reaches the person: internet relay,
+LAN, Wi-Fi Direct, Bluetooth, the phone mesh, and the Meshtastic radio
+only as the last resort, with the same fastest-path routing as talk. Trip
+packets are frame type 6 (older phones ignore them) and are sealed on
+private channels like everything else. Radio, relay and base camp options
+stay in **Settings > Off-grid**.
+
+**Map.** `flutter_map` with OpenTopoMap (default) or OpenStreetMap, with
+attribution shown. People appear as dots with name, age of their fix and a
+path icon (Wi-Fi, Bluetooth, mesh, radio). Long-press to drop a shared pin
+(camp, water, trailhead, meet-up, danger, car or custom).
+*Offline maps:* "Download area" saves the visible area for chosen zooms,
+shows the tile count and size first, and has a progress bar and cancel.
+Downloads use OpenTopoMap or a custom tile server only, are throttled (2
+connections, short pauses) and capped at 3000 tiles per area, because the
+OpenStreetMap tile policy forbids bulk/offline downloading; OSM tiles you
+have viewed are still cached for offline use. The cache is capped at
+500 MB (oldest non-downloaded tiles are trimmed) and keeps tiles at least
+7 days, re-checking with ETag/Last-Modified.
+
+**SOS.** Hold the SOS button for 3 s (or tap and confirm). It is sent to
+everyone on every path including LoRa at the highest radio priority, and
+repeats (fast links every 10 s, radio every 30 s, at most 20 radio copies
+to respect duty limits) until someone acknowledges, then once a minute.
+Receivers get a loud alarm and full-screen alert even when the app is muted
+(SOS from any public channel is accepted), with Acknowledge / Silence /
+Show on map. The sender sees who acknowledged and can cancel; a cancel stops
+the alarm on every phone.
+
+**Check-ins and lost contact.** With trip mode on, your position is sent
+on fast links every 15-60 s and a check-in every 5 min (configurable, also
+by radio if "check-ins over radio" is on). If someone has not been heard
+for 20 min (configurable) you get a lost-contact alert with their last
+known location and time.
+
+**Distance and bearing** ("0.8 mi NE") with a compass arrow on people cards
+and the map; the arrow uses the phone's compass (accelerometer +
+magnetometer). Miles/feet or km/m.
+
+**Network map.** The Trip tab shows a graph of who you hear and how:
+direct links (green), relayed hops (orange) and radio (purple dashed),
+with RTT, RSSI, LoRa SNR and last heard.
+
+**Quick messages.** One-tap canned messages ("On my way", "Need help", "At
+camp" ...) are 5-byte coded packets; custom ones are editable and short.
+
+**Trails.** Record a breadcrumb trail (battery aware: 5 s while moving,
+backing off to 60 s when still, at least 20 s in battery saver; bad fixes
+and tiny moves are skipped). Trails show on the map, can be shared
+(delta-compressed chunks on fast links; over LoRa only a thinned 16-point
+summary), have a **Backtrack** view (distance back along the trail) and
+export as GPX 1.1.
+
+**Base camp mode** (Settings > Off-grid). A phone left at camp stores Trip
+messages (check-ins, SOS, acks, quick messages, pins, trail summaries) for
+people out of range and hands them over when they come back, over any path
+including the radio. Messages expire after 6 h, the store is capped at 300
+items / 64 KB, and copies are de-duplicated by mesh packet ids. Turning it
+on also turns on relaying.
+
+**Weather and daylight.** Open-Meteo forecast (no key) for your position,
+cached and shown offline with its age; sunrise/sunset are also calculated
+on the phone, so daylight works with no internet at all.
+
+**Limits (honest list).**
+* Background location only works when the app started its background
+  service while in the foreground with location allowed ("Allow all the
+  time" helps); otherwise positions update while the app is open.
+* The SOS alarm bypasses Do Not Disturb only if DND access was granted; it
+  plays on the alarm stream so silent/vibrate mode does not mute it.
+* No offline downloads of OpenStreetMap tiles (policy); topo areas are
+  limited to 3000 tiles each.
+* The compass needs calibration (figure-8) and assumes portrait.
+* Base camp stores Trip messages only (not chat or voice, which already
+  have their own store-and-forward).
+* Weather needs internet once; iPhone builds have no Trip location bridge yet.
+* LoRa duty limits apply: live positions and full trails never use the radio.
+
 ## v1.7.0: long-range radio (Meshtastic LoRa)
 
 Pair a Meshtastic radio (RAK WisMesh Pocket V2, SenseCAP T1000-E, or any

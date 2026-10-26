@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:cryptography/cryptography.dart' show SimpleKeyPair;
 import 'package:permission_handler/permission_handler.dart';
@@ -42,6 +43,10 @@ import '../transports/mdns_discovery.dart';
 import '../transports/relay_socket.dart';
 import '../transports/relay_transport.dart';
 import '../transports/wifi_direct_transport.dart';
+import '../trip/geo.dart';
+import '../trip/sos.dart';
+import '../trip/trip_controller.dart';
+import '../trip/trip_route.dart';
 import 'call_signs.dart';
 import 'config.dart';
 import 'playback_log.dart';
@@ -198,6 +203,10 @@ class WalkieController extends ChangeNotifier {
   late final TransportManager manager;
   late final Ringer ringer;
   Messenger? messenger;
+
+  /// Trip tab (map, SOS, check-ins, pins, trails, base camp, weather);
+  /// null until [start] has set it up.
+  TripController? trip;
   final MultiRelayTransport _relay;
   WifiDirectTransport? _wifiDirect;
 
@@ -626,6 +635,25 @@ class WalkieController extends ChangeNotifier {
       }),
     );
 
+    // Trip tab.
+    try {
+      var ver = '1.8';
+      try {
+        ver = (await PackageInfo.fromPlatform()).version;
+      } catch (_) {}
+      final t = TripController(
+        host: _WalkieTripHost(this),
+        settings: settings.trip,
+        dir: Directory('${(await _messageDir()).parent.path}/trip'),
+        userAgent:
+            'WalkieTalkie/$ver (+https://github.com/Brionwickstrom/walkie-talkie)',
+      );
+      await t.start();
+      trip = t;
+    } catch (e) {
+      debugPrint('trip: $e');
+    }
+
     await applyBackgroundSettings();
     await _applyPttConfig();
     notifyListeners();
@@ -820,6 +848,24 @@ class WalkieController extends ChangeNotifier {
         if (friendLinks.isFriend(id)) _uiRequests.add('friend:$id');
       case 'hwKey':
         await onHardwareKey(a['src'] as String? ?? '', a['down'] == true);
+      case 'loc':
+        final lat = a['lat'], lng = a['lng'];
+        if (lat is num && lng is num) {
+          final t = (a['t'] as num?)?.toInt();
+          trip?.onFix(
+            Fix(
+              GeoPoint(lat.toDouble(), lng.toDouble()),
+              t == null || t <= 0
+                  ? DateTime.now()
+                  : DateTime.fromMillisecondsSinceEpoch(t),
+              accuracyM: (a['acc'] as num?)?.toDouble(),
+              speedMps: (a['spd'] as num?)?.toDouble(),
+              altM: (a['alt'] as num?)?.toDouble(),
+            ),
+          );
+        }
+      case 'sosOpen':
+        _uiRequests.add('sos');
     }
   }
 
@@ -936,6 +982,18 @@ class WalkieController extends ChangeNotifier {
     manager.relayForOthers = on;
     notifyListeners();
     await settingsStore.save(settings);
+  }
+
+  /// Base camp (Off-grid): this phone stays put as a relay and holds Trip
+  /// messages for people who are out of range. Turns relaying on.
+  Future<void> setBaseCamp(bool on) async {
+    if (on && !settings.relayForOthers) await setRelayForOthers(true);
+    await trip?.update((s) => s.baseCamp = on);
+    if (trip == null) {
+      settings.trip.baseCamp = on;
+      await settingsStore.save(settings);
+    }
+    notifyListeners();
   }
 
   /// Wi-Fi Direct on/off (Android).
@@ -1066,6 +1124,7 @@ class WalkieController extends ChangeNotifier {
     }
     peers = list;
     _adoptChannelInfo(list);
+    trip?.onPeersChanged();
     final talking = {
       for (final p in list)
         if (p.talking && p.channel == scope) p.id,
@@ -2665,6 +2724,7 @@ class WalkieController extends ChangeNotifier {
     for (final l in _live.values) {
       l.timer?.cancel();
     }
+    trip?.dispose();
     friendLinks.dispose();
     friendMessenger?.dispose();
     chats?.dispose();
@@ -2680,4 +2740,118 @@ class WalkieController extends ChangeNotifier {
     _uiRequests.close();
     super.dispose();
   }
+}
+
+/// The Trip tab's view of the app.
+class _WalkieTripHost implements TripHost {
+  _WalkieTripHost(this.c);
+  final WalkieController c;
+  bool _askedLocation = false;
+
+  @override
+  int get localId => c.nodeId;
+  @override
+  int get scope => c.scope;
+  @override
+  bool get privateScope => c.isPrivate;
+  @override
+  String nameOf(int id) => c.nameOf(id);
+  @override
+  bool get powerSaver => c.settings.powerSaver;
+
+  @override
+  Future<Set<int>> sendTrip(Uint8List payload, TripRoute r) =>
+      c.manager.sendTrip(
+        payload,
+        to: r.to,
+        fast: r.fast,
+        radio: r.radio,
+        flood: r.flood,
+      );
+
+  @override
+  Stream<InboundTrip> get trips => c.manager.trips;
+
+  @override
+  List<TripPeer> channelPeers() => [
+    for (final p in c.peers)
+      if (p.channel == c.scope)
+        TripPeer(
+          p.id,
+          lastHeard: [
+            ...p.lastSeen.values,
+            ?p.meshSeen,
+          ].fold<DateTime?>(null, (a, b) => a == null || b.isAfter(a) ? b : a),
+          reachable: c.manager.isReachable(p.id),
+        ),
+  ];
+
+  @override
+  Future<void> saveTripSettings() => c.settingsStore.save(c.settings);
+
+  Future<bool> _permission() async {
+    try {
+      if (await Permission.locationWhenInUse.isGranted) return true;
+      if (_askedLocation) return false;
+      _askedLocation = true;
+      return (await Permission.locationWhenInUse.request()).isGranted;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  @override
+  Future<bool> startLocation(Duration interval) async {
+    if (!await _permission()) return false;
+    return c.bridge.startLocationUpdates(interval);
+  }
+
+  @override
+  Future<void> stopLocation() => c.bridge.stopLocationUpdates();
+
+  @override
+  Future<Fix?> locateOnce() async {
+    final l = await c._locate();
+    if (l == null) return null;
+    return Fix(GeoPoint(l.lat, l.lng), DateTime.now(), accuracyM: l.acc);
+  }
+
+  @override
+  Future<void> backgroundLocation(bool on) => c.bridge.setServiceLocation(on);
+
+  @override
+  void showSosAlarm(IncomingSos s, String text) => unawaited(
+    c.bridge.showSos(
+      from: s.origin,
+      id: s.id,
+      name: c.nameOf(s.origin),
+      text: text,
+    ),
+  );
+
+  @override
+  void stopSosAlarm(IncomingSos s) =>
+      unawaited(c.bridge.stopSos(from: s.origin, id: s.id));
+
+  @override
+  void notify(String title, String text) {
+    if (c.foreground) {
+      c._notice('$title: $text');
+    } else {
+      unawaited(
+        c.bridge.showInfo(
+          nid: 8000000 + (title.hashCode & 0xFFFF),
+          title: title,
+          text: text,
+        ),
+      );
+    }
+  }
+
+  @override
+  void notice(String text) => c._notice(text);
+
+  @override
+  Future<bool> shareFile(String path, String mime, String title) =>
+      c.bridge.shareFile(path, mime: mime, title: title);
 }

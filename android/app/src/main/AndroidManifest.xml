@@ -21,7 +21,7 @@
     <!-- Bluetooth LE, Android 11 and below -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
-    <!-- BLE scan on Android <= 11, and "share my location" in chats. -->
+    <!-- BLE scan on Android <= 11, "share my location" in chats, Trip map. -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <!-- Stay reachable when the app is closed: foreground service, wake lock,
@@ -35,6 +35,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <!-- Trip tab (v1.8.0): live location and trail recording keep working
+         with the app in the background while the listening service runs. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <!-- Optional: urgent rings may sound through Do Not Disturb when the
          user grants access -->
     <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
@@ -75,7 +78,7 @@
         <service
             android:name=".ListenService"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice|microphone" />
+            android:foregroundServiceType="connectedDevice|microphone|location" />
         <!-- Optional "hold volume-down to talk" with another app open -->
         <service
             android:name=".PttAccessibilityService"

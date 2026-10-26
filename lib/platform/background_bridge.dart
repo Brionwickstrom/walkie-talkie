@@ -173,6 +173,53 @@ class BackgroundBridge {
     );
   }
 
+  /// Continuous location fixes (Trip tab); they arrive on [actions] as
+  /// `{type: loc, lat, lng, acc, t, alt, spd}`. False without permission.
+  Future<bool> startLocationUpdates(Duration interval) async =>
+      await _call<bool>('startLocationUpdates', {
+        'interval': interval.inMilliseconds,
+      }) ??
+      false;
+
+  Future<void> stopLocationUpdates() => _call<void>('stopLocationUpdates');
+
+  /// Keep location working with the app in the background (adds the
+  /// location type to the listening service).
+  Future<void> setServiceLocation(bool on) =>
+      _call<void>('setServiceLocation', {'on': on});
+
+  /// Trip SOS: full-screen alert + alarm tone (through silent mode, and
+  /// Do Not Disturb when allowed) until [stopSos].
+  Future<void> showSos({
+    required int from,
+    required int id,
+    required String name,
+    required String text,
+  }) => _call<void>('showSos', {
+    'from': from,
+    'id': id,
+    'name': name,
+    'text': text,
+  });
+
+  Future<void> stopSos({required int from, required int id}) =>
+      _call<void>('stopSos', {'from': from, 'id': id});
+
+  Future<void> silenceSos() => _call<void>('silenceSos');
+
+  /// Share a file (e.g. a GPX trail) with another app.
+  Future<bool> shareFile(
+    String path, {
+    required String mime,
+    String title = '',
+  }) async =>
+      await _call<bool>('shareFile', {
+        'path': path,
+        'mime': mime,
+        'title': title,
+      }) ??
+      false;
+
   /// Open a link (Google Maps) in another app.
   Future<bool> openUrl(String url) async =>
       await _call<bool>('openUrl', {'url': url}) ?? false;

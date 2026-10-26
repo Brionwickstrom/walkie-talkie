@@ -38,6 +38,32 @@ class InboundData {
   final TransportKind transport;
 }
 
+/// A Trip message ([FrameType.trip], v1.8.0) from a peer.
+class InboundTrip {
+  InboundTrip(
+    this.peerId,
+    this.channel,
+    this.payload,
+    this.transport, {
+    this.hops = 1,
+    this.packetId = 0,
+    this.rssi,
+  });
+  final int peerId;
+
+  /// Scope it was sent on (see [TransportManager.scope]).
+  final int channel;
+  final Uint8List payload;
+  final TransportKind transport;
+
+  /// 1 = direct, 2+ = relayed by other phones.
+  final int hops;
+
+  /// Mesh packet id of the frame as it travelled (see [meshPacketId]).
+  final int packetId;
+  final int? rssi;
+}
+
 /// A ring / beep / ring-ack control message from a peer.
 class InboundControl {
   InboundControl(this.peerId, this.channel, this.message, this.transport);
@@ -181,6 +207,7 @@ class TransportManager {
   final _audio = StreamController<ReceivedAudio>.broadcast();
   final _data = StreamController<InboundData>.broadcast();
   final _controls = StreamController<InboundControl>.broadcast();
+  final _trips = StreamController<InboundTrip>.broadcast();
   final _peerChanges = StreamController<List<Peer>>.broadcast();
   final _transportChanges = StreamController<void>.broadcast();
 
@@ -220,6 +247,9 @@ class TransportManager {
 
   /// Ring / beep / ring-ack messages.
   Stream<InboundControl> get controls => _controls.stream;
+
+  /// Trip messages (location, SOS, pins...).
+  Stream<InboundTrip> get trips => _trips.stream;
   Stream<List<Peer>> get peerChanges => _peerChanges.stream;
   Stream<void> get transportChanges => _transportChanges.stream;
 
@@ -311,6 +341,7 @@ class TransportManager {
     await _audio.close();
     await _data.close();
     await _controls.close();
+    await _trips.close();
     await _peerChanges.close();
     await _transportChanges.close();
   }
@@ -535,6 +566,9 @@ class TransportManager {
           case ControlKind.fhello:
             return false;
         }
+      case FrameType.trip:
+        // The Trip layer decides what may use the radio (see sendTrip).
+        return true;
       case FrameType.audio:
       case FrameType.sealed:
       case FrameType.mesh:
@@ -543,6 +577,7 @@ class TransportManager {
   }
 
   LoraPriority _radioPriority(Frame f) {
+    if (f.type == FrameType.trip) return tripRadioPriority(f.payload);
     if (f.type == FrameType.control) {
       final k = f.control?.kind;
       if (k == ControlKind.hello) return LoraPriority.presence;
@@ -727,6 +762,121 @@ class TransportManager {
       payload: payload,
     ),
   );
+
+  /// LoRa queue order for a Trip payload: SOS and SOS answers first, quick
+  /// messages and pins normal, locations and trails last.
+  static LoraPriority tripRadioPriority(Uint8List payload) {
+    if (payload.isEmpty) return LoraPriority.bulk;
+    var kind = payload[0] & 0xF;
+    // A base camp delivery carries the original message after 9 bytes.
+    if (kind == 8 && payload.length > 9) kind = payload[9] & 0xF;
+    switch (kind) {
+      case 2: // sos
+      case 3: // sos ack
+        return LoraPriority.sos;
+      case 4: // canned
+      case 5: // pin
+      case 6: // pin delete
+        return LoraPriority.normal;
+      default:
+        return LoraPriority.bulk;
+    }
+  }
+
+  /// Send a Trip message (v1.8.0) over whatever reaches:
+  /// * [to] set: that phone only, on its best link, else through the
+  ///   phone mesh, else (if [radio]) the LoRa radio.
+  /// * [flood]: to everyone every running fast transport can reach (not
+  ///   only known phones on our channel; phones in range relay it on
+  ///   through the mesh), plus a radio broadcast if [radio].
+  /// * otherwise: phones on our channel on their best links, the mesh for
+  ///   phones only it reaches, and (if [radio]) one radio packet for
+  ///   phones only the radio reaches.
+  /// [fast] false = radio only. Returns the phones it was handed to.
+  Future<Set<int>> sendTrip(
+    Uint8List payload, {
+    int? to,
+    bool fast = true,
+    bool radio = false,
+    bool flood = false,
+  }) async {
+    final frame = Frame(
+      type: FrameType.trip,
+      senderId: localNodeId,
+      channel: _wireChannel,
+      seq: _nextSeq(),
+      payload: payload,
+    );
+    final bytes = _wire(frame);
+    final pr = tripRadioPriority(payload);
+    final r = this.radio;
+    final radioUp = radio && r != null && r.status == TransportStatus.running;
+    if (to != null) {
+      if (fast) {
+        final route = routeTo(to);
+        if (route.isNotEmpty) {
+          await Future.wait(
+            route.map((k) => _safeSend(_transportOf(k)!, bytes, {to})),
+          );
+          return {to};
+        }
+        if (meshReachable(to)) {
+          final m = mesh.originate(bytes, to: to);
+          if (m != null) {
+            _sendMesh(m);
+            return {to};
+          }
+        }
+      }
+      if (radioUp && radioReachable(to)) {
+        if (r.sendRadio(bytes, peerIds: {to}, priority: pr)) return {to};
+      }
+      return const {};
+    }
+    final targets = reachablePeersOn(scope);
+    if (flood) {
+      if (fast) {
+        mesh.markSeen(meshPacketId(bytes));
+        await Future.wait(
+          _transports
+              .where(
+                (t) => t.status == TransportStatus.running && !t.lowBandwidth,
+              )
+              .map((t) => _safeSend(t, bytes, null)),
+        );
+        if (_hasMeshOnlyPeers()) {
+          final m = mesh.originate(bytes);
+          if (m != null) _sendMesh(m);
+        }
+      }
+      if (radioUp) r.sendRadio(bytes, priority: pr);
+      return targets;
+    }
+    if (fast) {
+      final routes = routeForChannel();
+      if (_hasMeshOnlyPeers()) {
+        final direct = <int>{for (final s in routes.values) ...s};
+        final m = mesh.originate(bytes, skip: direct);
+        if (m != null) _sendMesh(m);
+      }
+      await Future.wait(
+        routes.entries.map((e) {
+          final t = _transports.firstWhere((t) => t.kind == e.key);
+          return _safeSend(t, bytes, e.value);
+        }),
+      );
+    }
+    if (radioUp) {
+      final far = <int>{
+        for (final p in _peers.values)
+          if (p.channel == scope &&
+              (fast ? onlyRadio(p.id) : radioReachable(p.id)))
+            p.id,
+      };
+      if (far.isNotEmpty) r.sendRadio(bytes, peerIds: far, priority: pr);
+    }
+    return targets;
+  }
 
   Future<void> _broadcastControl(ControlMessage msg) async {
     final bytes = _wire(
@@ -961,6 +1111,8 @@ class TransportManager {
       peer.hops = hops;
     } else {
       peer.lastSeen[inbound.transport] = now;
+      final rssi = inbound.rssi;
+      if (rssi != null && rssi != 0) peer.rssi[inbound.transport] = rssi;
     }
     peer.channel = frameScope;
     _updateMeshHops(peer, now);
@@ -1098,6 +1250,20 @@ class TransportManager {
           if (!_data.isClosed) {
             _data.add(
               InboundData(f.senderId, frameScope, f.payload, inbound.transport),
+            );
+          }
+        case FrameType.trip:
+          if (!_trips.isClosed) {
+            _trips.add(
+              InboundTrip(
+                f.senderId,
+                frameScope,
+                f.payload,
+                inbound.transport,
+                hops: hops,
+                packetId: meshPacketId(frame.encode()),
+                rssi: inbound.rssi,
+              ),
             );
           }
         case FrameType.sealed:

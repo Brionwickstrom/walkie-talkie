@@ -10,6 +10,7 @@ import '../core/peer.dart';
 import '../core/transport.dart';
 import '../update/update_ui.dart';
 import '../chat/chat_store.dart';
+import '../trip/geo.dart';
 import 'chat_page.dart';
 import 'friends_page.dart';
 import 'history_page.dart';
@@ -17,6 +18,9 @@ import 'home_view.dart';
 import 'inbox_page.dart';
 import 'radio_settings.dart';
 import 'sheets.dart';
+import 'trip_page.dart';
+import 'trip_widgets.dart';
+import '../trip/sos.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key, required this.controller});
@@ -35,10 +39,19 @@ class _HomePageState extends State<HomePage> {
   AppLifecycleListener? _lifecycle;
   DateTime _lastUpdateCheck = DateTime.now();
 
+  /// 0 = Talk, 1 = Trip.
+  int _tab = 0;
+  final GlobalKey<TripPageState> _tripKey = GlobalKey();
+  final Set<String> _sosShown = {};
+  bool _tripWired = false;
+
   @override
   void initState() {
     super.initState();
-    c.start().then((_) => _maybeAskBattery());
+    c.start().then((_) {
+      _wireTrip();
+      _maybeAskBattery();
+    });
     _updates.updater
         .currentVersionLabel()
         .then((v) {
@@ -100,6 +113,10 @@ class _HomePageState extends State<HomePage> {
       c.uiRequests.listen((r) {
         if (!mounted) return;
         if (r == 'inbox') _openInbox(context);
+        if (r == 'sos') {
+          final open = c.trip?.sos.unanswered ?? const [];
+          if (open.isNotEmpty) _showSos(open.first, force: true);
+        }
         // Private talk / message notification from a friend: open their
         // chat so the reply is private, never the channel.
         if (r.startsWith('friend:')) {
@@ -129,6 +146,40 @@ class _HomePageState extends State<HomePage> {
     }
     super.dispose();
   }
+
+  void _wireTrip() {
+    final t = c.trip;
+    if (t == null || _tripWired || !mounted) return;
+    _tripWired = true;
+    _subs.add(t.sosAlerts.listen((a) => _showSos(a)));
+  }
+
+  /// Full-screen alert for someone's SOS (once per alert unless [force]).
+  void _showSos(IncomingSos a, {bool force = false}) {
+    if (!mounted) return;
+    if (!force && !_sosShown.add(a.key)) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        fullscreenDialog: true,
+        builder: (_) => SosAlertPage(
+          controller: c,
+          alert: a,
+          onShowMap: () {
+            setState(() => _tab = 1);
+            final p = a.pos;
+            if (p != null) {
+              WidgetsBinding.instance.addPostFrameCallback(
+                (_) => _tripKey.currentState?.focusOn(p),
+              );
+            }
+          },
+        ),
+      ),
+    );
+  }
+
+  int get _tripAlerts =>
+      (c.trip?.sos.unanswered.length ?? 0) + (c.trip?.lost.lost.length ?? 0);
 
   /// One-time friendly explanation before Android's battery prompt.
   Future<void> _maybeAskBattery() async {
@@ -217,134 +268,174 @@ class _HomePageState extends State<HomePage> {
               ),
             ],
           ),
-          body: SafeArea(
-            child: HomeBody(
-              banners: [
-                if (c.playingSomething)
-                  Card(
-                    margin: const EdgeInsets.fromLTRB(8, 4, 8, 0),
-                    color: Theme.of(context).colorScheme.tertiaryContainer,
-                    child: ListTile(
-                      dense: true,
-                      leading: const Icon(Icons.volume_up),
-                      title: Text(
-                        c.playingTake != null
-                            ? 'Replaying ${c.playingTake!.name}'
-                                  '${c.playingAll ? ' (all missed)' : ''}'
-                            : c.playingKey != null
-                            ? 'Playing a voice message'
-                            : 'Playing live talk',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      trailing: FilledButton.icon(
-                        icon: const Icon(Icons.stop),
-                        label: const Text('Stop'),
-                        onPressed: c.stopAllAudio,
-                      ),
-                    ),
-                  ),
-                for (final r in List.of(c.activeRings))
-                  _RingBanner(
-                    urgent: r.urgent,
-                    name: c.nameOf(r.from),
-                    channel: c.labelFor(r.channel),
-                    onAnswer: () => c.answerRing(r),
-                    onDismiss: () => c.dismissRing(r),
-                  ),
-              ],
-              links: [
-                for (final t in c.transports)
-                  if (t.kind != TransportKind.lora || c.radioPaired)
-                    (t.kind, t.status),
-              ],
-              internet: c.internetStatus,
-              showDetails: c.settings.showDiagnostics,
-              onToggleDetails: c.setShowDiagnostics,
-              details: _detailLines(),
-              channelLabel: c.channelName == null
-                  ? 'CH ${c.channel}'
-                  : '${c.channelTitle} (CH ${c.channel})',
-              isPrivate: c.isPrivate,
-              me: PersonView(
-                id: c.nodeId,
-                name: c.name,
-                me: true,
-                talking: c.transmitting,
+          bottomNavigationBar: NavigationBar(
+            key: const Key('mainTabs'),
+            height: 60,
+            labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+            selectedIndex: _tab,
+            onDestinationSelected: (i) {
+              _wireTrip();
+              setState(() => _tab = i);
+            },
+            destinations: [
+              const NavigationDestination(
+                icon: Icon(Icons.record_voice_over_outlined),
+                selectedIcon: Icon(Icons.record_voice_over),
+                label: 'Talk',
               ),
-              people: _people(),
-              onRing: (p) => c.ring(toPeer: p.id),
-              onBeep: (p) => c.ring(toPeer: p.id, beep: true),
-              onMessage: (p) => _openRecordSheet(context, p.id, p.name),
-              onVolume: (p) => _openPersonSheet(context, p),
-              notice: c.announcementMode && !c.isAdmin
-                  ? Card(
-                      margin: const EdgeInsets.fromLTRB(8, 4, 8, 0),
-                      child: ListTile(
-                        dense: true,
-                        leading: const Icon(Icons.campaign),
-                        title: Text(
-                          'Announcement mode: only '
-                          '${c.adminId == null ? 'the admin' : c.nameOf(c.adminId!)}'
-                          ' can talk here.',
+              NavigationDestination(
+                icon: Badge(
+                  isLabelVisible: _tripAlerts > 0,
+                  label: Text('$_tripAlerts'),
+                  child: Icon(
+                    c.trip?.sos.active != null
+                        ? Icons.sos
+                        : Icons.terrain_outlined,
+                    color: c.trip?.sos.active != null ? Colors.red : null,
+                  ),
+                ),
+                selectedIcon: const Icon(Icons.terrain),
+                label: 'Trip',
+              ),
+            ],
+          ),
+          body: _tab == 1
+              ? SafeArea(
+                  child: TripPage(key: _tripKey, controller: c),
+                )
+              : SafeArea(
+                  child: HomeBody(
+                    banners: [
+                      if (c.playingSomething)
+                        Card(
+                          margin: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+                          color: Theme.of(context)
+                              .colorScheme
+                              .tertiaryContainer,
+                          child: ListTile(
+                            dense: true,
+                            leading: const Icon(Icons.volume_up),
+                            title: Text(
+                              c.playingTake != null
+                                  ? 'Replaying ${c.playingTake!.name}'
+                                        '${c.playingAll ? ' (all missed)' : ''}'
+                                  : c.playingKey != null
+                                  ? 'Playing a voice message'
+                                  : 'Playing live talk',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            trailing: FilledButton.icon(
+                              icon: const Icon(Icons.stop),
+                              label: const Text('Stop'),
+                              onPressed: c.stopAllAudio,
+                            ),
+                          ),
                         ),
-                      ),
-                    )
-                  : (c.mediaVolume ?? 1) < 0.3
-                  ? Card(
-                      margin: const EdgeInsets.fromLTRB(8, 4, 8, 0),
-                      color: Theme.of(context).colorScheme.errorContainer,
-                      child: Padding(
-                        padding: const EdgeInsets.all(10),
-                        child: Row(
-                          children: [
-                            const Icon(Icons.volume_down),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                'Media volume is low '
-                                '(${((c.mediaVolume ?? 0) * 100).round()}%). '
-                                'Press volume up to hear others clearly.',
+                      for (final r in List.of(c.activeRings))
+                        _RingBanner(
+                          urgent: r.urgent,
+                          name: c.nameOf(r.from),
+                          channel: c.labelFor(r.channel),
+                          onAnswer: () => c.answerRing(r),
+                          onDismiss: () => c.dismissRing(r),
+                        ),
+                    ],
+                    links: [
+                      for (final t in c.transports)
+                        if (t.kind != TransportKind.lora || c.radioPaired)
+                          (t.kind, t.status),
+                    ],
+                    internet: c.internetStatus,
+                    showDetails: c.settings.showDiagnostics,
+                    onToggleDetails: c.setShowDiagnostics,
+                    details: _detailLines(),
+                    channelLabel: c.channelName == null
+                        ? 'CH ${c.channel}'
+                        : '${c.channelTitle} (CH ${c.channel})',
+                    isPrivate: c.isPrivate,
+                    me: PersonView(
+                      id: c.nodeId,
+                      name: c.name,
+                      me: true,
+                      talking: c.transmitting,
+                    ),
+                    people: _people(),
+                    onRing: (p) => c.ring(toPeer: p.id),
+                    onBeep: (p) => c.ring(toPeer: p.id, beep: true),
+                    onMessage: (p) => _openRecordSheet(context, p.id, p.name),
+                    onVolume: (p) => _openPersonSheet(context, p),
+                    notice: c.announcementMode && !c.isAdmin
+                        ? Card(
+                            margin: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+                            child: ListTile(
+                              dense: true,
+                              leading: const Icon(Icons.campaign),
+                              title: Text(
+                                'Announcement mode: only '
+                                '${c.adminId == null ? 'the admin' : c.nameOf(c.adminId!)}'
+                                ' can talk here.',
                               ),
                             ),
-                          ],
-                        ),
-                      ),
-                    )
-                  : null,
-              onEditMe: () => _openSettings(context),
-              error: c.error,
-              queued: c.outgoing.isNotEmpty || c.waitingForAnyone.isNotEmpty
-                  ? TextButton.icon(
-                      icon: const Icon(Icons.schedule_send, size: 18),
-                      label: Text(
-                        _queuedLabel(),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      onPressed: () => _openInbox(context),
-                    )
-                  : null,
-              recent: c.takes.isEmpty
-                  ? null
-                  : RecentStrip(
-                      takes: [for (final t in c.takes.take(8)) takeView(c, t)],
-                      unheard: c.unheardTakes,
-                      onPlay: (v) {
-                        final t = c.takes.where((x) => x.id == v.id);
-                        if (t.isNotEmpty) c.playTake(t.first);
-                      },
-                      onPlayMissed: c.playAllMissed,
-                      onOpenHistory: () => _openHistory(context),
+                          )
+                        : (c.mediaVolume ?? 1) < 0.3
+                        ? Card(
+                            margin: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+                            color: Theme.of(context).colorScheme.errorContainer,
+                            child: Padding(
+                              padding: const EdgeInsets.all(10),
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.volume_down),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      'Media volume is low '
+                                      '(${((c.mediaVolume ?? 0) * 100).round()}%). '
+                                      'Press volume up to hear others clearly.',
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          )
+                        : null,
+                    onEditMe: () => _openSettings(context),
+                    error: c.error,
+                    queued:
+                        c.outgoing.isNotEmpty || c.waitingForAnyone.isNotEmpty
+                        ? TextButton.icon(
+                            icon: const Icon(Icons.schedule_send, size: 18),
+                            label: Text(
+                              _queuedLabel(),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            onPressed: () => _openInbox(context),
+                          )
+                        : null,
+                    recent: c.takes.isEmpty
+                        ? null
+                        : RecentStrip(
+                            takes: [
+                              for (final t in c.takes.take(8)) takeView(c, t),
+                            ],
+                            unheard: c.unheardTakes,
+                            onPlay: (v) {
+                              final t = c.takes.where((x) => x.id == v.id);
+                              if (t.isNotEmpty) c.playTake(t.first);
+                            },
+                            onPlayMissed: c.playAllMissed,
+                            onOpenHistory: () => _openHistory(context),
+                          ),
+                    actions: ChannelActions(
+                      onRingAll: () => c.ring(),
+                      onBeepAll: () => c.ring(beep: true),
+                      record: _RecordButton(controller: c),
                     ),
-              actions: ChannelActions(
-                onRingAll: () => c.ring(),
-                onBeepAll: () => c.ring(beep: true),
-                record: _RecordButton(controller: c),
-              ),
-              ptt: _mainTalk(context, pttSize),
-            ),
-          ),
+                    ptt: _mainTalk(context, pttSize),
+                  ),
+                ),
         );
       },
     );
@@ -376,6 +467,8 @@ class _HomePageState extends State<HomePage> {
           volume: c.volumeOf(p.id),
           hops: p.meshHops,
           debug: peerDebugLine(p, now),
+          distance: _distanceTo(p.id),
+          arrowDeg: _arrowTo(p.id),
         ),
       );
     }
@@ -395,6 +488,22 @@ class _HomePageState extends State<HomePage> {
       );
     }
     return out;
+  }
+
+  String? _distanceTo(int id) {
+    final t = c.trip;
+    final me = t?.myFix?.pos;
+    final them = t?.people[id]?.pos;
+    if (t == null || me == null || them == null) return null;
+    return formatDistanceBearing(me, them, imperial: t.settings.imperial);
+  }
+
+  double? _arrowTo(int id) {
+    final t = c.trip;
+    final me = t?.myFix?.pos;
+    final them = t?.people[id]?.pos;
+    if (t == null || me == null || them == null) return null;
+    return arrowAngleDeg(bearingDeg(me, them), t.heading);
   }
 
   /// Long-press on a person: their volume (0-200 %), beep, ring, message.
@@ -842,6 +951,21 @@ class _HomePageState extends State<HomePage> {
                     value: c.settings.wifiDirect,
                     onChanged: c.setWifiDirect,
                   ),
+                SwitchListTile(
+                  key: const Key('baseCamp'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Base camp mode'),
+                  subtitle: Text(
+                    'Leave this phone at camp (plugged in) as a fixed relay. '
+                    'It holds Trip messages (SOS, quick messages, pins, '
+                    'check-ins) for anyone out of range and delivers them '
+                    'when they come back, for up to 6 hours. Works through '
+                    'the paired LoRa radio too.'
+                    '${c.trip != null && c.settings.trip.baseCamp ? ' Holding ${c.trip!.store.items.length} now.' : ''}',
+                  ),
+                  value: c.settings.trip.baseCamp,
+                  onChanged: c.setBaseCamp,
+                ),
                 const Divider(height: 32),
                 _SectionTitle('Long-range radio (Meshtastic)'),
                 RadioSettings(controller: c),

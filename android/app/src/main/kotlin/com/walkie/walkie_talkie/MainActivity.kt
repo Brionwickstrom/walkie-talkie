@@ -60,6 +60,10 @@ class MainActivity : FlutterActivity() {
                     mapOf("type" to "ringOpen", "from" to from, "id" to id, "channel" to channel),
                 )
             }
+            Notifier.ACTION_SOS_OPEN -> {
+                showOverLockScreen()
+                BgBridge.deliver(this, mapOf("type" to "sosOpen", "from" to from, "id" to id))
+            }
             Notifier.ACTION_OPEN_INBOX -> {
                 BgBridge.deliver(this, mapOf("type" to "openInbox", "key" to (i.getStringExtra("key") ?: "")))
             }

@@ -13,6 +13,10 @@ class Peer {
   /// Last time we heard anything from this peer on each transport.
   final Map<TransportKind, DateTime> lastSeen = {};
 
+  /// Last signal strength (dBm) per transport, where the link reports it
+  /// (Bluetooth, LoRa). Shown on the network map.
+  final Map<TransportKind, int> rssi = {};
+
   /// Last measured round trip per transport (ping/pong).
   final Map<TransportKind, Duration> rtt = {};
 
