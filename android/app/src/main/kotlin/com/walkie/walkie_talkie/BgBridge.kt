@@ -382,7 +382,13 @@ object BgBridge {
                 putExtra(Intent.EXTRA_SUBJECT, title)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            open(ctx, Intent.createChooser(send, title).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+            val chooser = Intent.createChooser(send, title).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            // Don't offer our own "Import to the Trip map" (v1.8.3).
+            chooser.putExtra(
+                Intent.EXTRA_EXCLUDE_COMPONENTS,
+                arrayOf(android.content.ComponentName(ctx, MainActivity::class.java)),
+            )
+            open(ctx, chooser)
             true
         } catch (_: Exception) {
             false

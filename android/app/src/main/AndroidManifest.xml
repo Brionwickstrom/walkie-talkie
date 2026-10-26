@@ -73,6 +73,48 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!-- v1.8.3: "Open with" / "Share to" Walkie Talkie for trails
+                 (GPX, KML, KMZ), offline maps (MBTiles) and park maps
+                 (image, PDF): imported on the Trip tab. -->
+            <intent-filter android:label="Import to the Trip map">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="content"/>
+                <data android:scheme="file"/>
+                <data android:mimeType="application/gpx+xml"/>
+                <data android:mimeType="application/gpx"/>
+                <data android:mimeType="application/vnd.google-earth.kml+xml"/>
+                <data android:mimeType="application/vnd.google-earth.kmz"/>
+                <data android:mimeType="application/x-sqlite3"/>
+                <data android:mimeType="application/vnd.sqlite3"/>
+                <data android:mimeType="application/x-mbtiles"/>
+                <data android:mimeType="application/pdf"/>
+                <data android:mimeType="image/png"/>
+                <data android:mimeType="image/jpeg"/>
+                <data android:mimeType="image/webp"/>
+                <data android:mimeType="application/xml"/>
+                <data android:mimeType="text/xml"/>
+                <data android:mimeType="application/octet-stream"/>
+            </intent-filter>
+            <intent-filter android:label="Import to the Trip map">
+                <action android:name="android.intent.action.SEND"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="application/gpx+xml"/>
+                <data android:mimeType="application/gpx"/>
+                <data android:mimeType="application/vnd.google-earth.kml+xml"/>
+                <data android:mimeType="application/vnd.google-earth.kmz"/>
+                <data android:mimeType="application/x-sqlite3"/>
+                <data android:mimeType="application/vnd.sqlite3"/>
+                <data android:mimeType="application/x-mbtiles"/>
+                <data android:mimeType="application/pdf"/>
+                <data android:mimeType="image/png"/>
+                <data android:mimeType="image/jpeg"/>
+                <data android:mimeType="image/webp"/>
+                <data android:mimeType="application/xml"/>
+                <data android:mimeType="text/xml"/>
+                <data android:mimeType="application/octet-stream"/>
+            </intent-filter>
         </activity>
         <!-- Keeps Wi-Fi / Bluetooth links open after the app is closed -->
         <service

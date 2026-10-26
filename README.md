@@ -331,6 +331,46 @@ decrypt).
 * Private talk to a friend is not saved in the replay history.
 * 1.4 and older phones do not see chats, names, friends or moderation.
 
+## v1.8.3: friends over LoRa, read receipts, battery, map imports
+
+* **Friend chat over the Meshtastic radio.** When a friend can be reached
+  no other way, 1:1 texts, locations, rings and short Codec2 voice clips
+  (8 s max) go over LoRa, still end-to-end encrypted with the per-pair
+  friend key, chunked to fit, sent to the friend's radio node when it is
+  known (broadcast otherwise). Photos wait for a faster link. Messages show
+  "via radio". Friend packets relayed by the phone mesh or LoRa are
+  accepted (checked by key, not by path) and de-duplicated.
+* **Friend chat header.** It now follows the real path:
+  "Connected privately via Wi-Fi / Bluetooth / phone mesh (N hops) / radio
+  (slow)", "… last heard 40 s ago, reconnecting" for 2 min, and only then
+  "Not connected privately". Before, it only counted a private hello heard
+  in the last 15 s on a direct link, so lossy Bluetooth or a re-scan
+  flipped it to "Not connected yet" while messages were being delivered.
+* **LoRa extras.** Check-ins and lost-contact alerts work radio-only;
+  map pins (camp, water, meet-up, custom label) are one ~15-30 byte
+  packet; read receipts (Settings > Send read receipts) batch up to 8 ids
+  in one tiny packet (20 s batching over the radio) and show "seen";
+  phone battery rides in presence hellos, check-ins and lobby beacons and
+  shows on people cards and in Who's where; a very rare Who's where lobby
+  beacon goes over LoRa every 15 min (public channel or just "private" +
+  call sign, kept 45 min); Trip settings > trail summary over the radio:
+  Off / 5 / 10 / 15 min while recording.
+* **Map imports (Trip tab, layers button or Map style > Import).**
+  * GPX, KML and KMZ from AllTrails, CalTopo, Gaia GPS, Google My Maps
+    (file picker, or "Open with" / "Share" to Walkie Talkie): tracks and
+    routes as lines (routes dashed), waypoints as pins. Layer list to show
+    / hide, rename, recolour, delete, show on map.
+  * Share an imported route with the group: compressed (delta + zlib)
+    over the fast links and the phone mesh; over LoRa only a 16-point
+    Douglas-Peucker outline if it stays within 150 m of the real line,
+    otherwise nothing.
+  * MBTiles (raster PNG/JPG) as an offline base map, stored on the phone.
+  * A park map picture or PDF (page 1 drawn as an image) as an overlay:
+    place it by dragging / pinching / twisting it into place, or with 2-3
+    control points (tap the picture, then the map); opacity slider.
+  * Storage: imported layers may use 2 GB (MBTiles up to 1.5 GB each,
+    images 40 MB, PDFs 60 MB, GPX/KML 20 MB); sizes shown per layer.
+
 ## v1.8.2: Who's where
 
 A people/compass button (with a badge counting people on *other* channels)

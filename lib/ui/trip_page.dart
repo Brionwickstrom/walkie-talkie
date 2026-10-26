@@ -9,14 +9,17 @@ import 'package:sensors_plus/sensors_plus.dart';
 
 import '../app/walkie_controller.dart';
 import '../trip/geo.dart';
+import '../trip/imports/map_layers.dart';
 import '../trip/tile_cache.dart';
-import '../trip/tile_provider.dart';
 import '../trip/track.dart';
 import '../trip/trip_controller.dart';
 import '../trip/trip_packet.dart';
 import '../trip/trip_settings.dart';
 import '../trip/weather.dart';
 import 'home_view.dart';
+import 'map_import.dart';
+import 'map_layer_widgets.dart';
+import 'map_layers_page.dart';
 import 'network_map_page.dart';
 import 'offline_maps_page.dart';
 import 'sheets.dart';
@@ -122,7 +125,7 @@ class TripPageState extends State<TripPage> {
       return const Center(child: CircularProgressIndicator());
     }
     return ListenableBuilder(
-      listenable: trip,
+      listenable: Listenable.merge([trip, trip.layers]),
       builder: (context, _) {
         final me = trip.myFix;
         if (_follow && me != null && _mapReady) {
@@ -327,19 +330,20 @@ class TripPageState extends State<TripPage> {
             onLongPress: (_, point) => _addPin(context, trip, gp(point)),
           ),
           children: [
-            TileLayer(
-              key: ValueKey('${src.id}:${src.urlTemplate}'),
-              urlTemplate: src.urlTemplate,
-              subdomains: src.subdomains,
-              maxNativeZoom: src.maxZoom,
-              userAgentPackageName: 'com.walkie.walkie_talkie',
-              tileProvider: CachedTileProvider(trip.tiles, src),
+            ...baseTileLayers(trip),
+            ...importedLayers(
+              trip,
+              onWaypoint: (l, name, at) => _addPin(context, trip, at),
             ),
             PolylineLayer(polylines: lines),
             MarkerLayer(markers: markers),
             SimpleAttributionWidget(
               source: Text(
-                src.attribution,
+                [
+                  src.attribution,
+                  if (trip.baseTiles != null)
+                    trip.layers.tilesOf(trip.baseTiles!.id)?.attribution ?? '',
+                ].where((x) => x.isNotEmpty).join(' · '),
                 style: const TextStyle(fontSize: 10),
               ),
               backgroundColor: Colors.white.withValues(alpha: 0.85),
@@ -369,6 +373,11 @@ class TripPageState extends State<TripPage> {
         icon: Icons.layers,
         tip: 'Map style',
         onTap: () => _styleSheet(context, trip),
+      ),
+      RoundMapButton(
+        icon: Icons.file_open,
+        tip: 'Imported trails and maps',
+        onTap: () => _openLayers(context, trip),
       ),
       RoundMapButton(
         icon: Icons.download_for_offline,
@@ -456,6 +465,29 @@ class TripPageState extends State<TripPage> {
     ),
   );
 
+  void _openLayers(BuildContext context, TripController trip) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => MapLayersPage(
+          trip: trip,
+          onShow: (p) {
+            setState(() => _follow = false);
+            if (_mapReady) {
+              _map.move(ll(p), _map.camera.zoom < 12 ? 14 : _map.camera.zoom);
+            }
+          },
+        ),
+      ),
+    );
+  }
+
+  /// A file shared to the app ("Open with"): import it on this tab.
+  Future<void> importShared(String path, String name) async {
+    final trip = t;
+    if (trip == null || !mounted) return;
+    await importMapFile(context, trip, File(path), name, temporary: true);
+  }
+
   void _openOffline(BuildContext context, TripController trip) {
     GeoBounds? b;
     double? zoom;
@@ -500,6 +532,33 @@ class TripPageState extends State<TripPage> {
                     Navigator.pop(ctx);
                   },
                 ),
+              for (final l in trip.layers.tileSets)
+                ListTile(
+                  leading: Icon(
+                    trip.baseTiles?.id == l.id
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_off,
+                  ),
+                  title: Text(l.name),
+                  subtitle: Text(
+                    'Offline map on this phone · ${l.summary} · ${formatBytes(l.bytes)}',
+                  ),
+                  onTap: () {
+                    trip.update((x) => x.mapSource = 'mbtiles:${l.id}');
+                    Navigator.pop(ctx);
+                  },
+                ),
+              ListTile(
+                leading: const Icon(Icons.file_open),
+                title: const Text('Import a map or trail…'),
+                subtitle: const Text(
+                  'GPX, KML, KMZ, MBTiles, or a park map picture / PDF',
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _openLayers(context, trip);
+                },
+              ),
               ListTile(
                 leading: Icon(
                   trip.settings.mapSource == 'custom'

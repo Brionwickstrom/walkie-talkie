@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -120,6 +121,17 @@ class _HomePageState extends State<HomePage> {
       c.uiRequests.listen((r) {
         if (!mounted) return;
         if (r == 'inbox') _openInbox(context);
+        if (r.startsWith('import:')) {
+          // A trail / map file opened with the app: Trip tab, import it.
+          final j = jsonDecode(r.substring(7)) as Map;
+          setState(() => _tab = 1);
+          WidgetsBinding.instance.addPostFrameCallback(
+            (_) => _tripKey.currentState?.importShared(
+              '${j['path']}',
+              '${j['name']}',
+            ),
+          );
+        }
         if (r == 'sos') {
           final open = c.trip?.sos.unanswered ?? const [];
           if (open.isNotEmpty) _showSos(open.first, force: true);

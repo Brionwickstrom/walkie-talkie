@@ -907,7 +907,10 @@ class TransportManager {
     final bytes = _wire(frame);
     final pr = tripRadioPriority(payload);
     final r = this.radio;
-    final radioUp = radio && r != null && r.status == TransportStatus.running;
+    // Shared map layers (kind 9) are fast-link only, never the radio.
+    final big = payload.isNotEmpty && payload[0] & 0xF == 9;
+    final radioUp =
+        radio && !big && r != null && r.status == TransportStatus.running;
     if (to != null) {
       if (fast) {
         final route = routeTo(to);

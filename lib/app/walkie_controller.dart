@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io' show Directory, File, Platform, exit;
 import 'dart:math';
 import 'dart:typed_data';
@@ -1057,6 +1058,18 @@ class WalkieController extends ChangeNotifier {
         }
       case 'sosOpen':
         _uiRequests.add('sos');
+      case 'importFile':
+        // A trail / map file opened with the app: import on the Trip tab.
+        final path = a['path'] as String? ?? '';
+        if (path.isNotEmpty && trip != null) {
+          _uiRequests.add(
+            'import:${jsonEncode({'path': path, 'name': a['name'] ?? ''})}',
+          );
+        }
+      case 'importFailed':
+        _notice(
+          'Could not open ${a['name'] ?? 'the file'}: ${a['error'] ?? ''}',
+        );
     }
   }
 

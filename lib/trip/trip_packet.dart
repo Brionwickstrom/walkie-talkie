@@ -19,7 +19,8 @@ enum TripKind {
   pin(5),
   pinDelete(6),
   track(7),
-  held(8);
+  held(8),
+  route(9);
 
   const TripKind(this.code);
   final int code;
@@ -137,6 +138,18 @@ sealed class TripMsg {
             count: count,
             summary: flags & 2 != 0,
             points: pts,
+          );
+        case TripKind.route:
+          final routeId = r.u16();
+          final index = r.u8();
+          final count = r.u8();
+          if (count == 0 || index >= count) return null;
+          return RouteMsg(
+            id,
+            routeId: routeId,
+            index: index,
+            count: count,
+            data: r.rest(),
           );
         case TripKind.held:
           final origin = r.u32();
@@ -402,6 +415,35 @@ class TrackMsg extends TripMsg {
     if (cur.isNotEmpty) out.add(cur);
     return out;
   }
+}
+
+/// Part [index] of [count] of an imported route / map layer shared with
+/// the group (v1.8.3): the parts joined are a zlib blob (see
+/// `lib/trip/imports/route_share.dart`). Fast links only; LoRa gets a
+/// thinned [TrackMsg] summary instead.
+class RouteMsg extends TripMsg {
+  const RouteMsg(
+    super.id, {
+    required this.routeId,
+    required this.index,
+    required this.count,
+    required this.data,
+  });
+  final int routeId;
+  final int index;
+  final int count;
+  final Uint8List data;
+
+  /// Blob bytes per part (keeps each frame under about 380 bytes).
+  static const int partBytes = 340;
+  @override
+  TripKind get kind => TripKind.route;
+  @override
+  void _body(_Writer w) => w
+    ..u16(routeId)
+    ..u8(index)
+    ..u8(count)
+    ..bytes(data);
 }
 
 /// A message a base camp phone held for someone who was out of range,

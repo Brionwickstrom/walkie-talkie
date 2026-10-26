@@ -51,7 +51,7 @@ class StoreForward {
     SosMsg() || SosAckMsg() || CannedMsg() => true,
     PinMsg() || PinDeleteMsg() => true,
     TrackMsg() => m.summary,
-    HeldMsg() => false,
+    HeldMsg() || RouteMsg() => false,
   };
 
   /// Messages that replace an older one from the same sender.

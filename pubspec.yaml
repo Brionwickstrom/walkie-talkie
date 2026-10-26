@@ -56,6 +56,12 @@ dependencies:
   flutter_map: ^8.3.2
   latlong2: ^0.10.1
   sensors_plus: ^7.1.1
+  file_picker: ^13.3.0
+  archive: ^4.5.2
+  sqlite3: ^2.9.0
+  sqlite3_flutter_libs: ">=0.5.32 <0.6.0"
+  pdfx: ^2.11.0
+  xml: ^7.1.0
 
 dev_dependencies:
   flutter_test:

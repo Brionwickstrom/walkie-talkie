@@ -9,6 +9,8 @@ import '../app/power_plan.dart';
 import '../core/transport.dart';
 import '../core/transport_manager.dart' show InboundTrip;
 import 'geo.dart';
+import 'imports/map_layers.dart';
+import 'imports/route_share.dart';
 import 'lost_contact.dart';
 import 'sos.dart';
 import 'store_forward.dart';
@@ -122,6 +124,7 @@ class TripController extends ChangeNotifier {
           _event(s.id, '${host.nameOf(s.id)} is back in contact', 'found');
     store = StoreForward(clock: _clock)..enabled = settings.baseCamp;
     tiles = TileCache(Directory('${dir.path}/tiles'), userAgent: userAgent);
+    layers = MapLayers(Directory('${dir.path}/layers'), clock: _clock);
     weather = WeatherCache(
       File('${dir.path}/weather.json'),
       userAgent: userAgent,
@@ -139,6 +142,13 @@ class TripController extends ChangeNotifier {
   late final LostContactMonitor lost;
   late final StoreForward store;
   late final TileCache tiles;
+
+  /// Imported trails, offline MBTiles maps and park map overlays (v1.8.3).
+  late final MapLayers layers;
+  final RouteAssembler _routes = RouteAssembler();
+
+  /// The newest route someone shared being stored (tests wait on it).
+  Future<MapLayer>? lastSharedRoute;
   late final WeatherCache weather;
   final TrackRecorder recorder = TrackRecorder();
   final TrackAssembler _assembler = TrackAssembler();
@@ -183,6 +193,14 @@ class TripController extends ChangeNotifier {
     _ => MapSource.topo,
   };
 
+  /// Selected offline MBTiles base map (`mbtiles:<layer id>`), if any.
+  MapLayer? get baseTiles {
+    final s = settings.mapSource;
+    if (!s.startsWith('mbtiles:')) return null;
+    final l = layers.byId(s.substring(8));
+    return l != null && l.kind == MapLayerKind.tiles ? l : null;
+  }
+
   int _nextId() => _id = (_id + 1) & 0xFFFF;
 
   void _applySettings() {
@@ -211,6 +229,7 @@ class TripController extends ChangeNotifier {
       weather.load(),
       _loadPins(),
       _loadTracks(),
+      layers.load(),
     ]);
     unawaited(tiles.trim());
     await _updateLocationNeed();
@@ -222,6 +241,7 @@ class TripController extends ChangeNotifier {
     _sub?.cancel();
     _timer?.cancel();
     tiles.close();
+    layers.close();
     super.dispose();
   }
 
@@ -712,6 +732,27 @@ class TripController extends ChangeNotifier {
         if (first) {
           _event(origin, '${host.nameOf(origin)} shared a trail', 'track');
         }
+      case RouteMsg():
+        final got = _routes.add(origin, msg, now: now);
+        if (got != null) {
+          // The full route replaces its LoRa summary if one came first.
+          sharedTracks.remove('$origin:${msg.routeId}');
+          final who = host.nameOf(origin);
+          final d = got.data;
+          if (d.name.isEmpty) d.name = 'Route from $who';
+          final added = layers.addTrail(d, color: got.color, from: origin);
+          lastSharedRoute = added;
+          unawaited(
+            added.then(
+              (_) => _event(origin, '$who shared a route: ${d.name}', 'track'),
+              onError: (Object _) => _event(
+                origin,
+                '$who shared a route, but there is no room for imported maps',
+                'track',
+              ),
+            ),
+          );
+        }
       case HeldMsg():
         break; // never nested
     }
@@ -793,6 +834,25 @@ class TripController extends ChangeNotifier {
       'You shared ${t.name.isEmpty ? 'a trail' : t.name}',
       'track',
     );
+  }
+
+  /// Share an imported trail layer: the whole thing, compressed, over fast
+  /// links; over LoRa only a thinned line (16 points within 150 m of the
+  /// real one) or nothing. Returns (fast parts, radio summary sent).
+  ({int parts, bool radio}) shareLayer(MapLayer l) {
+    final d = l.data;
+    if (d == null || l.kind != MapLayerKind.trail || d.isEmpty) {
+      return (parts: 0, radio: false);
+    }
+    final routeId = _nextId();
+    final parts = routeMessages(d, routeId, _nextId, color: l.color) ?? [];
+    for (final m in parts) {
+      _send(m, const TripRoute());
+    }
+    final s = routeRadioSummary(d, routeId, _nextId());
+    if (s != null) _send(s, const TripRoute(fast: false, radio: true));
+    _event(host.localId, 'You shared ${l.name}', 'track');
+    return (parts: parts.length, radio: s != null);
   }
 
   Future<void> deleteTrack(Track t) async {
