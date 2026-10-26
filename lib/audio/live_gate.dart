@@ -15,7 +15,7 @@ import 'dart:typed_data';
 ///  * talkEnd seen during this burst: plays only the [tail] right after
 ///    it; the rest is a mic left on: dropped;
 ///  * no talk signal at all for this burst (talkStart lost or late): plays
-///    for at most [unsignalled], then dropped;
+///    for at most [unsignalled] (30 s), then dropped;
 ///  * an Opus packet identical to one from the same sender in the last
 ///    [repeatWindow] is dropped (a delayed copy over another transport,
 ///    or a re-sent burst);
@@ -25,7 +25,7 @@ class LiveAudioGate {
   LiveAudioGate({
     DateTime Function()? clock,
     this.tail = const Duration(milliseconds: 1000),
-    this.unsignalled = const Duration(seconds: 60),
+    this.unsignalled = const Duration(seconds: 30),
     this.burstGap = const Duration(milliseconds: 1500),
     this.maxStream = const Duration(minutes: 3),
     this.repeatWindow = const Duration(seconds: 30),

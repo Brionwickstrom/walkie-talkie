@@ -343,7 +343,7 @@ off, so 1.5.2 refuses to play it:
 
 * `LiveAudioGate`: live audio plays only while the sender says it is
   talking (talkStart). After talkEnd only a 1 s tail plays; a stream with no
-  talk signal at all plays at most 60 s; non-stop talk is capped at 3 min;
+  talk signal at all plays at most 30 s; non-stop talk is capped at 3 min;
   an Opus packet identical to one from the same sender in the last 30 s is
   dropped (late copy over another transport). Blocked audio isn't kept for
   "Missed" either.
@@ -355,6 +355,22 @@ off, so 1.5.2 refuses to play it:
 * Voice messages now carry their send time (a trailer older apps ignore).
   Received: older than 25 h dropped (still acked); older than 10 min or
   from an older app (no time) filed quietly as played, no notification.
+* The loop also happens with only new phones *playing*: one phone with a
+  mic left on, in the same room, hears every other phone's speaker and
+  sends it back (speaker -> its mic -> their speaker...). A message sent
+  after the update then loops on 1.5.1 phones too; `test/room_loop_test`
+  reproduces that through the real TransportManager (endless on 1.5.1,
+  cut after the 1 s tail on 1.5.2).
+* Settings > Messages > "Auto-play incoming talk" (on by default). When
+  it's off, nothing plays by itself: talk goes to Missed and voice
+  messages wait in Voice messages.
+* Talk keys (headset, volume-down, notification) can't start talking while
+  something plays or for 2 s after. Bluetooth devices send play/pause by
+  themselves when audio starts or stops.
+* Checked: the app runs in a single Flutter engine (`EngineHolder`, shared
+  by the activity and the listening service), so one isolate owns
+  playback. Seen ids are one file (`seen.json`) per messenger, written by
+  that isolate; nothing uses a SharedPreferences cache for them.
 * Settings > Messages: "Playback log" (what played, from whom, via which
   link, and why audio was blocked; also in Details) and "Clear all messages
   and queues".

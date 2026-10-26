@@ -96,9 +96,9 @@ void main() {
       expect(played, lessThanOrEqualTo(2 * 51));
     });
 
-    test('lost talk start: still plays (up to 60 s), then cut', () {
+    test('lost talk start: still plays (up to 30 s), then cut', () {
       expect(feed(1, 5000, talking: false), 250);
-      expect(feed(1, 120 * 1000, talking: false), lessThan(3000));
+      expect(feed(1, 120 * 1000, talking: false), lessThanOrEqualTo(1251));
     });
 
     test('very long non-stop talk is capped at 3 minutes', () {

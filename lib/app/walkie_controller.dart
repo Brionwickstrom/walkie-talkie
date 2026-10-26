@@ -183,6 +183,16 @@ class WalkieController extends ChangeNotifier {
   DateTime? _lastLiveAt;
   bool _liveShown = false;
 
+  /// Something played in the last 2 s (talk keys are ignored then).
+  bool get _playedRecently {
+    if (playingKey != null || playingTake != null || _audio.playingClip) {
+      return true;
+    }
+    final t = _lastLiveAt;
+    return t != null &&
+        DateTime.now().difference(t) < const Duration(seconds: 2);
+  }
+
   /// Live talk played in the last second (the Stop banner shows).
   bool get liveActive {
     final t = _lastLiveAt;
@@ -393,14 +403,23 @@ class WalkieController extends ChangeNotifier {
           );
           return;
         }
+        final auto = settings.autoPlay;
         history?.addPacket(
           scope: scope,
           sender: a.peerId,
           name: nameOf(a.peerId),
           opus: a.opus,
-          heard: live && foreground,
+          heard: live && foreground && auto,
         );
         if (!live) return;
+        if (!auto) {
+          playbackLog.stream(
+            'ch${a.peerId}',
+            'live-held',
+            '$who: auto-play off, saved in Missed',
+          );
+          return;
+        }
         if (isMuted(a.peerId)) return;
         if (announcementMode && a.peerId != adminId) return;
         playbackLog.stream(
@@ -725,6 +744,13 @@ class WalkieController extends ChangeNotifier {
   /// headsets and the notification, for volume-down only in toggle mode)
   /// and the next tap stops it.
   Future<void> onHardwareKey(String src, bool down) async {
+    // Bluetooth devices / car kits send play-pause by themselves when audio
+    // starts or stops; while (or right after) something plays, a talk key
+    // must not start talking, or the mic would send the speaker back out.
+    if (!transmitting && (down || src == 'notif') && _playedRecently) {
+      playbackLog.add('hw-key-ignored', '$src: audio was playing');
+      return;
+    }
     if (src == 'notif') {
       await _hwTalk(!transmitting, latched: true);
       return;
@@ -804,6 +830,14 @@ class WalkieController extends ChangeNotifier {
   Future<void> setHeadsetPtt(bool on) async {
     settings.headsetPtt = on;
     await _saveAndApplyPtt();
+  }
+
+  Future<void> setAutoPlay(bool on) async {
+    settings.autoPlay = on;
+    if (!on) await stopAllAudio();
+    playbackLog.add('setting', 'Auto-play incoming talk ${on ? 'on' : 'off'}');
+    notifyListeners();
+    await settingsStore.save(settings);
   }
 
   Future<void> setToggleTalk(bool on) async {
@@ -1971,11 +2005,20 @@ class WalkieController extends ChangeNotifier {
       return;
     }
     if (transmitting || recording != null || isMuted(id)) return;
+    if (!settings.autoPlay) {
+      playbackLog.stream(
+        'fr$id',
+        'private-held',
+        '${friendName(id)} #$id: auto-play off',
+      );
+      return;
+    }
     playbackLog.stream(
       'fr$id',
       'private',
       '${friendName(id)} #$id via ${f.via.name}',
     );
+    _lastLiveAt = DateTime.now();
     if (_audio.playingClip) {
       _stopReplay();
       _audio.stopClip();

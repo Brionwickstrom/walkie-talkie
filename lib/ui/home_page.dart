@@ -864,6 +864,18 @@ class _HomePageState extends State<HomePage> {
                 ],
                 const Divider(height: 32),
                 _SectionTitle('Messages'),
+                SwitchListTile(
+                  key: const Key('autoPlay'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Auto-play incoming talk'),
+                  subtitle: const Text(
+                    'Off: nothing plays by itself. Talk is saved in Missed '
+                    'and voice messages wait in Voice messages until you '
+                    'tap Play.',
+                  ),
+                  value: c.settings.autoPlay,
+                  onChanged: c.setAutoPlay,
+                ),
                 ListTile(
                   contentPadding: EdgeInsets.zero,
                   leading: const Icon(Icons.receipt_long),

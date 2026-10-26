@@ -44,6 +44,7 @@ class AppSettings {
     this.volumeKeyPtt = false,
     this.headsetPtt = false,
     this.toggleTalk = false,
+    this.autoPlay = true,
     this.notificationTalk = false,
     this.urgentLoud = true,
     Map<int, String>? privateChannels,
@@ -128,6 +129,10 @@ class AppSettings {
 
   /// Tap the talk button to start, tap again to stop.
   bool toggleTalk;
+
+  /// Incoming live talk plays by itself. Off: nothing plays unless tapped
+  /// (talk is kept in Missed; voice messages never auto-play anyway).
+  bool autoPlay;
 
   /// "Talk" button on the listening notification (lock screen).
   bool notificationTalk;
@@ -282,6 +287,7 @@ class SharedPrefsSettingsStore implements SettingsStore {
   static const _kVolPtt = 'vol_ptt';
   static const _kHeadset = 'headset_ptt';
   static const _kToggle = 'toggle_talk';
+  static const _kAutoPlay = 'auto_play';
   static const _kNotifTalk = 'notif_talk';
   static const _kUrgent = 'urgent_loud';
   static const _kFriends = 'friends';
@@ -335,6 +341,7 @@ class SharedPrefsSettingsStore implements SettingsStore {
       volumeKeyPtt: prefs?.getBool(_kVolPtt) ?? false,
       headsetPtt: prefs?.getBool(_kHeadset) ?? false,
       toggleTalk: prefs?.getBool(_kToggle) ?? false,
+      autoPlay: prefs?.getBool(_kAutoPlay) ?? true,
       notificationTalk: prefs?.getBool(_kNotifTalk) ?? false,
       urgentLoud: prefs?.getBool(_kUrgent) ?? true,
     );
@@ -367,6 +374,7 @@ class SharedPrefsSettingsStore implements SettingsStore {
       await prefs.setBool(_kVolPtt, s.volumeKeyPtt);
       await prefs.setBool(_kHeadset, s.headsetPtt);
       await prefs.setBool(_kToggle, s.toggleTalk);
+      await prefs.setBool(_kAutoPlay, s.autoPlay);
       await prefs.setBool(_kNotifTalk, s.notificationTalk);
       await prefs.setBool(_kUrgent, s.urgentLoud);
       await prefs.setString(
