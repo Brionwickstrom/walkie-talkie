@@ -171,6 +171,7 @@ class WalkieController extends ChangeNotifier {
   final List<StreamSubscription<dynamic>> _subs = [];
   final List<Timer> _timers = [];
   AppLifecycleListener? _lifecycle;
+  int _micOrphanTicks = 0;
 
   List<Peer> peers = const [];
   bool transmitting = false;
@@ -462,6 +463,20 @@ class WalkieController extends ChangeNotifier {
     _timers.add(
       Timer.periodic(const Duration(seconds: 5), (_) => _updateServiceText()),
     );
+    // Safety net: the mic must never stay on while we are not talking or
+    // recording (see MicGate for the v1.5.0 bug this guards against).
+    _timers.add(
+      Timer.periodic(const Duration(seconds: 1), (_) {
+        if (_audio.isTransmitting && !transmitting && recording == null) {
+          if (++_micOrphanTicks >= 2) {
+            _micOrphanTicks = 0;
+            unawaited(_audio.forceStopTransmit());
+          }
+        } else {
+          _micOrphanTicks = 0;
+        }
+      }),
+    );
 
     await applyBackgroundSettings();
     await _applyPttConfig();
@@ -594,6 +609,10 @@ class WalkieController extends ChangeNotifier {
       if (settings.stayReachable) unawaited(applyBackgroundSettings());
       unawaited(_applyPttConfig());
     }
+    if (s == AppLifecycleState.detached) {
+      // App swiped away / closed: nothing may keep playing or talking.
+      unawaited(stopAllAudio());
+    }
     if (s == AppLifecycleState.detached &&
         _wasVisible &&
         !settings.stayReachable &&
@@ -615,7 +634,10 @@ class WalkieController extends ChangeNotifier {
   Future<void> _onAction(Map<String, Object?> a) async {
     int n(String k) => (a[k] as num?)?.toInt() ?? 0;
     switch (a['type']) {
+      case 'stopAudio':
+        await stopAllAudio();
       case 'stop':
+        await stopAllAudio();
         serviceRunning = false;
         if (!foreground) {
           // Stop from the notification with the app closed: quit fully so
@@ -951,6 +973,7 @@ class WalkieController extends ChangeNotifier {
 
   /// Plays every unheard transmission on this channel, oldest first.
   Future<void> playAllMissed() async {
+    if (playingAll) return;
     final queue = takes.where((t) => !t.heard).toList().reversed.toList();
     if (queue.isEmpty) {
       _notice('Nothing missed on $channelLabel.');
@@ -1239,6 +1262,24 @@ class WalkieController extends ChangeNotifier {
   void stopPlayback() {
     _audio.stopClip();
     playingKey = null;
+    notifyListeners();
+  }
+
+  /// Something is playing that the Stop button can stop.
+  bool get playingSomething => playingKey != null || playingTake != null;
+
+  /// Stop everything: voice message / replay playback, the "play all
+  /// missed" queue, talking, recording and the mic itself.
+  Future<void> stopAllAudio() async {
+    _stopReplay();
+    _resumeAt.clear();
+    _audio.stopClip();
+    playingKey = null;
+    if (privateTalkTo != null) await talkToFriend(privateTalkTo!, false);
+    if (transmitting) await pushToTalk(false);
+    if (recording != null) await stopRecording(cancel: true);
+    await _audio.forceStopTransmit();
+    await _audio.setFocus(false);
     notifyListeners();
   }
 

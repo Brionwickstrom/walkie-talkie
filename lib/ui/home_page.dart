@@ -209,6 +209,28 @@ class _HomePageState extends State<HomePage> {
           body: SafeArea(
             child: HomeBody(
               banners: [
+                if (c.playingSomething)
+                  Card(
+                    margin: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+                    color: Theme.of(context).colorScheme.tertiaryContainer,
+                    child: ListTile(
+                      dense: true,
+                      leading: const Icon(Icons.volume_up),
+                      title: Text(
+                        c.playingTake != null
+                            ? 'Replaying ${c.playingTake!.name}'
+                                  '${c.playingAll ? ' (all missed)' : ''}'
+                            : 'Playing a voice message',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      trailing: FilledButton.icon(
+                        icon: const Icon(Icons.stop),
+                        label: const Text('Stop'),
+                        onPressed: c.stopAllAudio,
+                      ),
+                    ),
+                  ),
                 for (final r in List.of(c.activeRings))
                   _RingBanner(
                     urgent: r.urgent,

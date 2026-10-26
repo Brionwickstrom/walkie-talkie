@@ -331,6 +331,20 @@ decrypt).
 * Private talk to a friend is not saved in the replay history.
 * 1.4 and older phones do not see chats, names, friends or moderation.
 
+## v1.5.1: endless replay fix
+Root cause: a quick tap on a talk / record button (or the headset key) could
+stop the mic while it was still opening; the stop did nothing and the mic
+then stayed on in the background service until the phone restarted. That
+phone kept sending whatever its speaker played (other people's talk and
+voice messages), so everyone heard the same audio over and over, and two
+phones in that state echoed each other endlessly. Fixes: mic start/stop are
+serialized (`MicGate`), late mic audio after a stop is dropped, a 1 s
+watchdog turns off a mic nobody is using, "Stop audio" on the notifications
+and a Stop banner in the app stop all playback/talk/recording, closing the
+app or "Stop" on the notification stops all audio. Voice messages are also
+remembered by id across restarts (shown/announced once, every copy acked),
+and senders give up on a phone after 30 unanswered attempts.
+
 ## Android <-> iPhone limits (important)
 * **No shared Wi-Fi Direct.** Android's Wi-Fi Direct / Wi-Fi Aware and
   Apple's AWDL / MultipeerConnectivity do not interoperate. Google Nearby

@@ -29,6 +29,10 @@ class FakeNet {
 
   int sent = 0;
 
+  /// Deliver every data packet this many times, as if it arrived over
+  /// Wi-Fi, Bluetooth and the relay at once.
+  int copies = 1;
+
   Future<void> settle() async {
     for (var i = 0; i < 5; i++) {
       await Future<void>.delayed(Duration.zero);
@@ -92,9 +96,12 @@ class FakeNode implements MessengerLink, RingLink {
     if (net.drop(id, peerId, payload)) return true;
     final copy = Uint8List.fromList(payload);
     final to = net.nodes[peerId]!;
-    scheduleMicrotask(
-      () => to._data.add(InboundData(id, channel, copy, TransportKind.lan)),
-    );
+    for (var i = 0; i < net.copies; i++) {
+      final kind = TransportKind.values[i % TransportKind.values.length];
+      scheduleMicrotask(
+        () => to._data.add(InboundData(id, channel, copy, kind)),
+      );
+    }
     return true;
   }
 

@@ -103,6 +103,7 @@ class Messenger {
     this.stallTimeout = const Duration(seconds: 8),
     this.retryDelay = const Duration(seconds: 3),
     this.ackDelay = const Duration(milliseconds: 120),
+    this.maxAttempts = 30,
     Duration ttl = const Duration(hours: 24),
   }) : outbox = Outbox(storage, ttl: ttl),
        inbox = Inbox(storage),
@@ -121,6 +122,31 @@ class Messenger {
   final Duration stallTimeout;
   final Duration retryDelay;
   final Duration ackDelay;
+
+  /// Sending sessions per message and phone before giving up (each one
+  /// only re-sends the chunks not acknowledged yet).
+  final int maxAttempts;
+  final Map<(int, int), int> _attempts = {};
+
+  /// Every message ever received (sender, id), kept across restarts, so a
+  /// message re-sent after a lost ack (or after it was deleted here) is
+  /// acknowledged again but never shown / announced twice.
+  final Set<String> _seen = {};
+  final List<String> _seenOrder = [];
+  static const seenName = 'seen.json';
+  static const seenMax = 3000;
+
+  bool hasSeen(int sender, int msgId) => _seen.contains('${sender}_$msgId');
+
+  Future<void> _markSeen(int sender, int msgId) async {
+    final k = '${sender}_$msgId';
+    if (!_seen.add(k)) return;
+    _seenOrder.add(k);
+    while (_seenOrder.length > seenMax) {
+      _seen.remove(_seenOrder.removeAt(0));
+    }
+    await outbox.storage.writeJson(seenName, _seenOrder);
+  }
 
   final Map<(int, int), TransferSender> _sessions = {};
   final Map<(int, int), DateTime> _retryAt = {};
@@ -156,6 +182,16 @@ class Messenger {
   Future<void> start() async {
     await outbox.load();
     await inbox.load();
+    final seen = await outbox.storage.readJson(seenName);
+    if (seen is List) {
+      for (final k in seen) {
+        if (k is String && _seen.add(k)) _seenOrder.add(k);
+      }
+    }
+    for (final e in inbox.entries) {
+      final k = '${e.sender}_${e.msgId}';
+      if (_seen.add(k)) _seenOrder.add(k);
+    }
     _sub ??= link.data.listen(onData);
     _timer ??= Timer.periodic(tickInterval, (_) => tick());
   }
@@ -299,6 +335,15 @@ class Messenger {
         if (!link.isReachable(p)) continue;
         final retry = _retryAt[key];
         if (retry != null && now.isBefore(retry)) continue;
+        final n = (_attempts[key] ?? 0) + 1;
+        if (n > maxAttempts) {
+          _attempts.remove(key);
+          _retryAt.remove(key);
+          await outbox.giveUp(e.msgId, p);
+          changed = true;
+          continue;
+        }
+        _attempts[key] = n;
         final ble = e.hasBleBody && link.bestLinkTo(p) == TransportKind.ble;
         var body = _bodies[(e.msgId, ble)];
         if (body == null) {
@@ -376,7 +421,8 @@ class Messenger {
     }
     if (pkt is ChunkPacket) {
       final key = (d.peerId, pkt.msgId);
-      if (inbox.contains(d.peerId, pkt.msgId) ||
+      if (hasSeen(d.peerId, pkt.msgId) ||
+          inbox.contains(d.peerId, pkt.msgId) ||
           _chatSeen.contains((d.peerId, pkt.msgId)) ||
           (alreadyHaveChat?.call(d.peerId, pkt.msgId) ?? false)) {
         // Already have it; our final ack was probably lost.
@@ -409,6 +455,10 @@ class Messenger {
         _ackDue.remove(key);
         final body = r.assemble();
         await link.sendData(d.peerId, r.ack().encode());
+        // Another copy (other transport / re-send) may have completed it
+        // while we awaited: only the first one counts.
+        if (hasSeen(d.peerId, pkt.msgId)) return;
+        await _markSeen(d.peerId, pkt.msgId);
         final name = link.nameOf(d.peerId);
         if (VoiceClip.tryDecode(body) == null) {
           final chat = ChatBody.tryDecode(body);
@@ -454,6 +504,8 @@ class Messenger {
   Future<void> _deliveredTo(int msgId, int peer) async {
     final e = outbox.byId(msgId);
     if (e == null) return;
+    _attempts.remove((msgId, peer));
+    _retryAt.remove((msgId, peer));
     if (await outbox.markDelivered(msgId, peer)) {
       if (outbox.byId(msgId) == null) {
         _bodies.removeWhere((k, _) => k.$1 == msgId);

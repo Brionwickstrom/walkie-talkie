@@ -33,6 +33,7 @@ object Notifier {
     const val ACTION_OPEN_INBOX = "com.walkie.walkie_talkie.OPEN_INBOX"
     const val ACTION_OPEN_CHANNEL = "com.walkie.walkie_talkie.OPEN_CHANNEL"
     const val ACTION_TALK = "com.walkie.walkie_talkie.TALK"
+    const val ACTION_STOP_AUDIO = "com.walkie.walkie_talkie.STOP_AUDIO"
 
     private const val RING_MS = 15000L
     private const val URGENT_MS = 60000L
@@ -156,6 +157,7 @@ object Notifier {
         if (talk) {
             b.addAction(0, if (talking) "Stop talking" else "Talk", broadcastIntent(ctx, ACTION_TALK, 3))
         }
+        b.addAction(0, "Stop audio", broadcastIntent(ctx, ACTION_STOP_AUDIO, 4))
         return b.addAction(0, "Stop", broadcastIntent(ctx, ACTION_STOP, 2))
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .build()
@@ -246,6 +248,7 @@ object Notifier {
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setContentIntent(activityIntent(ctx, ACTION_OPEN_INBOX, id) { putExtra("key", key) })
             .addAction(0, "Play", broadcastIntent(ctx, ACTION_PLAY, id) { putExtra("key", key) })
+            .addAction(0, "Stop audio", broadcastIntent(ctx, ACTION_STOP_AUDIO, id + 1))
             .build()
         post(ctx, id, n)
     }

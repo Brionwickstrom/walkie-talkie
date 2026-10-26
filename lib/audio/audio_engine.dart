@@ -8,6 +8,7 @@ import 'package:record/record.dart' hide IosAudioCategory;
 
 import 'agc.dart';
 import 'codec.dart';
+import 'mic_gate.dart';
 import 'opus_voice_codec.dart';
 import 'playout_buffer.dart';
 import 'time_stretch.dart';
@@ -18,9 +19,11 @@ import 'voice_pipeline.dart';
 class AudioEngine {
   final _recorder = AudioRecorder();
   late final VoicePipeline _pipeline;
-  StreamSubscription<Uint8List>? _micSub;
+  late final MicGate _mic = MicGate(
+    open: _openMic,
+    close: () => _recorder.stop(),
+  );
   bool _ready = false;
-  bool _transmitting = false;
   final _playout = PlayoutBuffer(sampleRate: VoiceFormat.sampleRate);
   AudioSession? _session;
   bool _focused = false;
@@ -50,7 +53,7 @@ class AudioEngine {
   /// Frames dropped on playback to keep latency bounded (debug).
   int get playbackDropped => _playout.dropped;
 
-  bool get isTransmitting => _transmitting;
+  bool get isTransmitting => _mic.active;
 
   Future<void> init() async {
     if (_ready) return;
@@ -94,14 +97,20 @@ class AudioEngine {
   Future<bool> hasMicPermission() => _recorder.hasPermission();
 
   /// Start capturing; [onPacket] receives one Opus packet per 20 ms.
-  Future<void> startTransmit(void Function(Uint8List opus) onPacket) async {
-    if (_transmitting) return;
-    _transmitting = true;
-    Stream<Uint8List>? stream;
+  /// Start / stop are serialized (see [MicGate]): a stop that comes while
+  /// the mic is still opening really stops it.
+  Future<void> startTransmit(void Function(Uint8List opus) onPacket) =>
+      _mic.start((bytes) {
+        for (final p in _pipeline.encodeMic(bytes)) {
+          onPacket(p);
+        }
+      });
+
+  Future<Stream<Uint8List>> _openMic() async {
     Object? lastError;
-    while (stream == null && _micBufferIndex < _micBufferBytes.length) {
+    while (_micBufferIndex < _micBufferBytes.length) {
       try {
-        stream = await _recorder.startStream(
+        return await _recorder.startStream(
           RecordConfig(
             encoder: AudioEncoder.pcm16bits,
             sampleRate: VoiceFormat.sampleRate,
@@ -124,27 +133,20 @@ class AudioEngine {
         _micBufferIndex++;
       }
     }
-    if (stream == null) {
-      _transmitting = false;
-      _micBufferIndex = _micBufferBytes.length - 1;
-      throw lastError ?? StateError('mic failed');
-    }
-    _micSub = stream.listen((bytes) {
-      for (final p in _pipeline.encodeMic(bytes)) {
-        onPacket(p);
-      }
-    });
+    _micBufferIndex = _micBufferBytes.length - 1;
+    throw lastError ?? StateError('mic failed');
   }
 
   Future<void> stopTransmit(void Function(Uint8List opus) onPacket) async {
-    if (!_transmitting) return;
-    _transmitting = false;
-    await _recorder.stop();
-    await _micSub?.cancel();
-    _micSub = null;
+    if (!await _mic.stop()) return;
     for (final p in _pipeline.endTransmission()) {
       onPacket(p);
     }
+  }
+
+  /// Turn the mic off no matter who started it (safety net).
+  Future<void> forceStopTransmit() async {
+    if (await _mic.stop()) _pipeline.endTransmission();
   }
 
   void play(int peerId, int seq, Uint8List opus) {
@@ -271,7 +273,7 @@ class AudioEngine {
 
   Future<void> dispose() async {
     stopClip();
-    await _micSub?.cancel();
+    await _mic.stop();
     await _recorder.dispose();
     if (_ready) {
       _pipeline.dispose();

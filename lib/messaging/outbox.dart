@@ -16,8 +16,10 @@ class OutboxEntry {
     this.hasBleBody = false,
     Set<int>? recipients,
     Set<int>? delivered,
+    Set<int>? failed,
   }) : recipients = recipients ?? (toPeer == null ? <int>{} : {toPeer}),
-       delivered = delivered ?? <int>{};
+       delivered = delivered ?? <int>{},
+       failed = failed ?? <int>{};
 
   final int msgId;
 
@@ -40,18 +42,24 @@ class OutboxEntry {
   final Set<int> recipients;
   final Set<int> delivered;
 
+  /// Recipients we gave up on (too many attempts without an answer).
+  final Set<int> failed;
+
   bool get isChannel => toPeer == null;
   String get blobName => 'out_$msgId.wtv';
   String get bleBlobName => 'out_${msgId}_ble.wtv';
 
   bool get done =>
-      recipients.isNotEmpty && recipients.every(delivered.contains);
+      recipients.isNotEmpty &&
+      recipients.every((r) => delivered.contains(r) || failed.contains(r));
 
   /// Channel message nobody has received yet: keep adding phones that
   /// appear on the channel.
-  bool get acceptsNewRecipients => isChannel && delivered.isEmpty;
+  bool get acceptsNewRecipients =>
+      isChannel && delivered.isEmpty && failed.isEmpty;
 
-  Iterable<int> get pending => recipients.where((r) => !delivered.contains(r));
+  Iterable<int> get pending =>
+      recipients.where((r) => !delivered.contains(r) && !failed.contains(r));
 
   Map<String, Object?> toJson() => {
     'id': msgId,
@@ -63,6 +71,7 @@ class OutboxEntry {
     if (hasBleBody) 'ble': 1,
     'r': recipients.toList(),
     'd': delivered.toList(),
+    if (failed.isNotEmpty) 'f': failed.toList(),
   };
 
   static OutboxEntry? fromJson(Object? j) {
@@ -80,6 +89,9 @@ class OutboxEntry {
         hasBleBody: j['ble'] == 1,
         recipients: {for (final x in j['r'] as List) (x as num).toInt()},
         delivered: {for (final x in j['d'] as List) (x as num).toInt()},
+        failed: {
+          for (final x in (j['f'] as List?) ?? const []) (x as num).toInt(),
+        },
       );
     } catch (_) {
       return null;
@@ -131,6 +143,19 @@ class Outbox {
     if (e == null || e.delivered.contains(peer)) return false;
     e.recipients.add(peer);
     e.delivered.add(peer);
+    if (e.done) await _remove(e);
+    await save();
+    return true;
+  }
+
+  /// Stop trying to reach [peer] with this message. Returns true if new.
+  Future<bool> giveUp(int msgId, int peer) async {
+    final e = byId(msgId);
+    if (e == null || e.failed.contains(peer) || e.delivered.contains(peer)) {
+      return false;
+    }
+    e.recipients.add(peer);
+    e.failed.add(peer);
     if (e.done) await _remove(e);
     await save();
     return true;

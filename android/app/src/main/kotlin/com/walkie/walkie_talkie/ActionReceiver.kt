@@ -18,6 +18,9 @@ class ActionReceiver : BroadcastReceiver() {
                 Notifier.stopRing(context, from, id)
                 BgBridge.deliver(context, mapOf("type" to "dismiss", "from" to from, "id" to id))
             }
+            Notifier.ACTION_STOP_AUDIO -> {
+                BgBridge.deliver(context, mapOf("type" to "stopAudio"))
+            }
             Notifier.ACTION_TALK -> {
                 BgBridge.deliver(context, mapOf("type" to "hwKey", "src" to "notif", "down" to true))
             }
