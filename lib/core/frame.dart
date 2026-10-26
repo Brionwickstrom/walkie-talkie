@@ -25,7 +25,12 @@ enum FrameType {
 
   /// Trip tab message (location, SOS, quick message, map pin, trail...),
   /// see `trip/trip_packet.dart`. v1.8.0+; older phones drop it.
-  trip(6);
+  trip(6),
+
+  /// "Who's where" lobby beacon (v1.8.2): call sign + public channel (or
+  /// just "private"), never sealed, never tied to a channel or relay
+  /// room. See `core/lobby.dart`. Older phones drop it.
+  lobby(7);
 
   const FrameType(this.code);
   final int code;
@@ -175,8 +180,12 @@ enum ControlKind {
 /// 15 = v1.5.0-1.5.3 (friends, chat, channel names, moderation),
 /// 16 = v1.5.4 (private reply on the home screen), 17 = v1.6.0 (mesh relay,
 /// Wi-Fi Direct), 18 = v1.8.0 (Trip tab: map, SOS, check-ins, pins,
-/// trails, base camp). Absent on older phones.
-const int featureLevel = 18;
+/// trails, base camp), 19 = v1.8.2 (Who's where lobby beacons). Absent on
+/// older phones.
+const int featureLevel = 19;
+
+/// Phones at this level send / read [FrameType.lobby] beacons.
+const int lobbyFeature = 19;
 
 /// Phones at this level understand [FrameType.trip].
 const int tripFeature = 18;

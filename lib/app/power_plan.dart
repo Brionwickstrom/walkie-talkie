@@ -79,6 +79,21 @@ class PowerPlan {
       ? const Duration(minutes: 15)
       : Duration(seconds: saver ? 90 : 30);
 
+  /// "Who's where" lobby beacon on the local links (Wi-Fi / LAN, Wi-Fi
+  /// Direct, Bluetooth). Never on LoRa.
+  Duration get lobbyLocalInterval => offline
+      ? const Duration(seconds: 60)
+      : Duration(seconds: saver ? 20 : 10);
+
+  /// The internet lobby room: off in offline power save (no internet).
+  bool get lobbyRelay => !offline;
+
+  /// Battery saver: the lobby relay socket only while the app is on screen.
+  bool get lobbyRelayInBackground => !transportSaver;
+
+  /// Lobby beacon into the relay room.
+  Duration get lobbyRelayInterval => Duration(seconds: saver ? 60 : 30);
+
   /// GPS fix interval for the Trip tab.
   Duration gpsInterval({required bool visible, required bool sosActive}) {
     if (sosActive) return const Duration(seconds: 5); // SOS: full speed

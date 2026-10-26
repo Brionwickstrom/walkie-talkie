@@ -274,9 +274,13 @@ class HomeBody extends StatelessWidget {
     this.error,
     this.queued,
     this.recent,
+    this.headerAction,
     required this.actions,
     required this.ptt,
   });
+
+  /// Trailing button on the "N on CH 3" header (Who's where).
+  final Widget? headerAction;
 
   /// The "recent talk" strip (replay), or null when there is none.
   final Widget? recent;
@@ -376,6 +380,7 @@ class HomeBody extends StatelessWidget {
                           size: 18,
                           color: theme.colorScheme.primary,
                         ),
+                      ?headerAction,
                     ],
                   ),
                 ),

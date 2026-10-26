@@ -235,6 +235,7 @@ class MeshRouter {
     this.maxPacketsPerSecond = 100,
     this.maxBytesPerSecond = 12 * 1024,
     this.helloRelayInterval = const Duration(seconds: 3),
+    this.lobbyRelayInterval = const Duration(seconds: 8),
     this.jitterMin = const Duration(milliseconds: 2),
     this.jitterMax = const Duration(milliseconds: 12),
   }) : _clock = clock ?? DateTime.now,
@@ -257,6 +258,10 @@ class MeshRouter {
 
   /// Presence (hello) of one phone is relayed at most this often.
   final Duration helloRelayInterval;
+
+  /// "Who's where" beacons of one phone are relayed at most this often.
+  final Duration lobbyRelayInterval;
+  final Map<int, DateTime> _lobbyRelayed = {};
   final Duration jitterMin;
   final Duration jitterMax;
 
@@ -344,6 +349,7 @@ class MeshRouter {
     });
     _expireSeen(now);
     _helloRelayed.removeWhere((_, t) => now.difference(t) > seenTtl);
+    _lobbyRelayed.removeWhere((_, t) => now.difference(t) > seenTtl);
   }
 
   // ----------------------------------------------------------- seen cache
@@ -486,6 +492,12 @@ class MeshRouter {
         }
       }
     }
+    if (inner.type == FrameType.lobby) {
+      final last = _lobbyRelayed[origin];
+      if (last != null && now.difference(last) < lobbyRelayInterval) {
+        return null;
+      }
+    }
     final targets = relayTargets(origin: origin, prev: prev, to: to);
     if (targets.isEmpty) {
       suppressed++;
@@ -507,6 +519,7 @@ class MeshRouter {
         inner.control?.kind == ControlKind.hello) {
       _helloRelayed[origin] = now;
     }
+    if (inner.type == FrameType.lobby) _lobbyRelayed[origin] = now;
     relayed++;
     return MeshRelay(
       out,

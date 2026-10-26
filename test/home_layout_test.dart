@@ -14,6 +14,7 @@ import 'package:walkie_talkie/ui/chat_view.dart';
 import 'package:walkie_talkie/ui/friends_page.dart';
 import 'package:walkie_talkie/ui/history_page.dart';
 import 'package:walkie_talkie/ui/home_view.dart';
+import 'package:walkie_talkie/ui/whos_where_page.dart';
 
 const people = [
   PersonView(
@@ -185,6 +186,7 @@ Widget app({
       onMessage: (_) {},
       onVolume: (_) {},
       onEditMe: () {},
+      headerAction: WhosWhereButton(count: 5, onPressed: () {}),
       recent: peers.isEmpty
           ? null
           : RecentStrip(
@@ -428,6 +430,9 @@ void main() {
     expect(tester.takeException(), isNull);
     // You + 3 on our channel (Iceman elsewhere, Bandit left).
     expect(find.text('4 on CH 1'), findsOneWidget);
+    // Who's where entry point with its "elsewhere" badge.
+    expect(find.byKey(const Key('whosWhereButton')), findsOneWidget);
+    expect(find.byTooltip("Who's where"), findsOneWidget);
     expect(find.text('You'), findsOneWidget);
     expect(find.text('Lord of the Pings'), findsOneWidget);
     expect(find.text('Rubber Duck'), findsOneWidget);

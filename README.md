@@ -331,6 +331,43 @@ decrypt).
 * Private talk to a friend is not saved in the replay history.
 * 1.4 and older phones do not see chats, names, friends or moderation.
 
+## v1.8.2: Who's where
+
+A people/compass button (with a badge counting people on *other* channels)
+on the "N on CH x" header of the Talk screen opens **Who's where**: everyone
+this phone can see, grouped by channel. Tap a channel's **Go** to switch
+there, tap a person for details (the full person card for people in the
+people list).
+
+* **What it shows.** Public channels: number, name/emoji and the people on
+  it with their path icons (Wi-Fi, Wi-Fi Direct, Bluetooth, internet, "N
+  hops" through the phone mesh). Everyone on a private channel is listed
+  only under one **Private** group with their call sign: no channel number,
+  name, emoji or key tag. Your own channel is first (marked private if it
+  is; only you see that). Friends show with a star and the name you gave
+  them; friends online but not in the lobby go under **Friends**.
+* **How it is discovered** (`core/lobby.dart`, `app/whos_where.dart`):
+  normal presence stays inside a channel (separate relay rooms, sealed
+  hellos on private channels), so v1.8.2 adds a small public **lobby
+  beacon** (frame type 7, ~30-70 bytes): call sign/name + public channel
+  (+ its name/emoji), or just "private" + the call sign. It goes out every
+  10 s on the local links (20 s battery saver, 60 s offline power save;
+  the phone mesh passes it on, at most once per phone per 8 s) and, while
+  online, every 30 s (60 s saver) in a shared relay room `ch=lobby` on each
+  configured relay. Only lobby frames are read from that room. Never over
+  LoRa. Entries expire after 3x the sender's interval (min 25 s); inbound
+  beacons are rate limited (20/s, one per phone per path per 2 s) and
+  capped at 256 phones.
+* **Settings > Show me in Who's where** (on by default): off sends no lobby
+  beacon and adds `hw: 0` to hellos so v1.8.2 phones do not list you under
+  other channels (you still show on your own channel as before).
+* **Power save.** Offline power save: no relay lobby, local beacons every
+  60 s. Battery saver: relay lobby only while the app is on screen.
+* **Older phones** (before 1.8.2) send no lobby beacon: they show only when
+  nearby on a public channel (their plain hellos) or on your channel.
+* **Relay server:** no change needed (the existing relay accepts any room
+  name; `lobby` is just another room, max 64 phones per room).
+
 ## v1.8.0: Trip tab (map, SOS, check-ins, trails, weather)
 
 A new **Trip** tab (bottom bar: Talk / Trip) works online and offline. Every

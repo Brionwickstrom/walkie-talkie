@@ -7,6 +7,7 @@ import '../app/power_plan.dart';
 import '../lora/lora_transport.dart';
 
 import 'channel_crypto.dart';
+import 'lobby.dart';
 import 'frame.dart';
 import 'mesh.dart';
 import 'peer.dart';
@@ -66,6 +67,24 @@ class InboundTrip {
 }
 
 /// A ring / beep / ring-ack control message from a peer.
+/// A "Who's where" lobby beacon (see core/lobby.dart).
+class InboundLobby {
+  InboundLobby(
+    this.peerId,
+    this.beacon,
+    this.transport, {
+    this.hops = 1,
+    this.rssi,
+  });
+  final int peerId;
+  final LobbyBeacon beacon;
+  final TransportKind transport;
+
+  /// Radio hops (1 = heard directly, 2+ = passed on by the phone mesh).
+  final int hops;
+  final int? rssi;
+}
+
 class InboundControl {
   InboundControl(this.peerId, this.channel, this.message, this.transport);
   final int peerId;
@@ -216,6 +235,7 @@ class TransportManager {
   final _data = StreamController<InboundData>.broadcast();
   final _controls = StreamController<InboundControl>.broadcast();
   final _trips = StreamController<InboundTrip>.broadcast();
+  final _lobby = StreamController<InboundLobby>.broadcast();
   final _peerChanges = StreamController<List<Peer>>.broadcast();
   final _transportChanges = StreamController<void>.broadcast();
 
@@ -258,6 +278,10 @@ class TransportManager {
 
   /// Trip messages (location, SOS, pins...).
   Stream<InboundTrip> get trips => _trips.stream;
+
+  /// "Who's where" beacons heard on the local links / phone mesh. They
+  /// never create a [Peer] (people list) entry.
+  Stream<InboundLobby> get lobby => _lobby.stream;
   Stream<List<Peer>> get peerChanges => _peerChanges.stream;
   Stream<void> get transportChanges => _transportChanges.stream;
 
@@ -385,6 +409,7 @@ class TransportManager {
     await _data.close();
     await _controls.close();
     await _trips.close();
+    await _lobby.close();
     await _peerChanges.close();
     await _transportChanges.close();
   }
@@ -437,6 +462,24 @@ class TransportManager {
           )
           .map((t) => _safeSend(t, bytes, null)),
     );
+  }
+
+  /// "Who's where" beacon ([bytes] from [LobbyBeacon.encode]) on the
+  /// local links only: Wi-Fi / LAN, Wi-Fi Direct, Bluetooth. Never the
+  /// internet relay (the lobby room is separate) and never LoRa. Phones
+  /// heard only through the mesh get it via a mesh neighbour.
+  Future<void> sendLobbyLocal(Uint8List bytes) async {
+    final local = _transports
+        .where(
+          (t) =>
+              isOffGrid(t.kind) &&
+              !t.lowBandwidth &&
+              t.status == TransportStatus.running,
+        )
+        .toList();
+    if (local.isEmpty) return;
+    mesh.markSeen(meshPacketId(bytes));
+    await Future.wait(local.map((t) => _safeSend(t, bytes, null)));
   }
 
   /// Broadcast presence on every running transport.
@@ -573,6 +616,8 @@ class TransportManager {
   /// frames or per-second hellos.
   bool radioAllowed(Frame f, {bool presence = false}) {
     switch (f.type) {
+      case FrameType.lobby:
+        return false; // Who's where never goes over the radio
       case FrameType.data:
         return true;
       case FrameType.control:
@@ -1119,6 +1164,26 @@ class TransportManager {
     if (f.senderId == localNodeId) return; // our own broadcast echoed back
     if (blocked.contains(f.senderId)) return;
 
+    // Lobby beacons are public on purpose and never sealed: hand them to
+    // Who's where before the channel / key checks, without touching the
+    // people list. LoRa never carries them.
+    if (f.type == FrameType.lobby) {
+      if (inbound.transport == TransportKind.lora) return;
+      final b = LobbyBeacon.tryDecode(f);
+      if (b != null && !_lobby.isClosed) {
+        _lobby.add(
+          InboundLobby(
+            f.senderId,
+            b,
+            inbound.transport,
+            hops: hops,
+            rssi: inbound.rssi,
+          ),
+        );
+      }
+      return;
+    }
+
     // Private channels: only frames that decrypt with our key count. Plain
     // frames are ignored while private, sealed ones while public, so phones
     // without the passcode never show up, ring or play audio (and vice
@@ -1311,7 +1376,8 @@ class TransportManager {
           }
         case FrameType.sealed:
         case FrameType.mesh:
-          break; // never nested
+        case FrameType.lobby:
+          break; // never nested / handled above
       }
     }
     if (changed || before == null) _emitPeers();

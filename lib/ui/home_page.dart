@@ -20,6 +20,7 @@ import 'radio_settings.dart';
 import 'sheets.dart';
 import 'trip_page.dart';
 import 'trip_widgets.dart';
+import 'whos_where_page.dart';
 import '../app/power_plan.dart';
 import '../trip/sos.dart';
 
@@ -449,6 +450,10 @@ class _HomePageState extends State<HomePage> {
                             onPlayMissed: c.playAllMissed,
                             onOpenHistory: () => _openHistory(context),
                           ),
+                    headerAction: WhosWhereButton(
+                      count: c.whosWhereElsewhereCount,
+                      onPressed: () => _openWhosWhere(context),
+                    ),
                     actions: ChannelActions(
                       onRingAll: () => c.ring(),
                       onBeepAll: () => c.ring(beep: true),
@@ -459,6 +464,20 @@ class _HomePageState extends State<HomePage> {
                 ),
         );
       },
+    );
+  }
+
+  void _openWhosWhere(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => WhosWherePage(
+          controller: c,
+          onOpenPerson: (ctx, id) {
+            final p = _people().where((v) => v.id == id && !v.left);
+            if (p.isNotEmpty) _openPersonSheet(ctx, p.first);
+          },
+        ),
+      ),
     );
   }
 
@@ -940,6 +959,21 @@ class _HomePageState extends State<HomePage> {
                     ],
                   ),
                 ],
+                const Divider(height: 32),
+                SwitchListTile(
+                  key: const Key('showInWhosWhere'),
+                  contentPadding: EdgeInsets.zero,
+                  secondary: const Icon(Icons.travel_explore),
+                  title: const Text("Show me in Who's where"),
+                  subtitle: const Text(
+                    'Phones on other channels (nearby or online) can see '
+                    'your name and which public channel you are on. On a '
+                    'private channel they only see "Private" and your call '
+                    'sign, never the channel number or name.',
+                  ),
+                  value: c.settings.showInWhosWhere,
+                  onChanged: c.setShowInWhosWhere,
+                ),
                 const Divider(height: 32),
                 _SectionTitle('Off-grid (no internet)'),
                 SwitchListTile(

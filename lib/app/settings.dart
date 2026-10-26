@@ -48,6 +48,7 @@ class AppSettings {
     this.toggleTalk = false,
     this.autoPlay = true,
     this.relayForOthers = true,
+    this.showInWhosWhere = true,
     this.wifiDirect = true,
     this.notificationTalk = false,
     this.urgentLoud = true,
@@ -150,6 +151,11 @@ class AppSettings {
   /// Pass other phones' packets on when there is no internet (mesh relay,
   /// v1.6.0). Uses some extra battery while relaying.
   bool relayForOthers;
+
+  /// "Show me in Who's where" (v1.8.2): send lobby beacons so phones on
+  /// other channels see this one. A private channel is never revealed
+  /// either way (only "Private" and the call sign).
+  bool showInWhosWhere;
 
   /// Android: form a Wi-Fi Direct group with nearby app phones when there
   /// is no shared network.
@@ -318,6 +324,7 @@ class SharedPrefsSettingsStore implements SettingsStore {
   static const _kToggle = 'toggle_talk';
   static const _kAutoPlay = 'auto_play';
   static const _kRelayOthers = 'relay_for_others';
+  static const _kWhosWhere = 'show_whos_where';
   static const _kWifiDirect = 'wifi_direct';
   static const _kNotifTalk = 'notif_talk';
   static const _kUrgent = 'urgent_loud';
@@ -378,6 +385,7 @@ class SharedPrefsSettingsStore implements SettingsStore {
       toggleTalk: prefs?.getBool(_kToggle) ?? false,
       autoPlay: prefs?.getBool(_kAutoPlay) ?? true,
       relayForOthers: prefs?.getBool(_kRelayOthers) ?? true,
+      showInWhosWhere: prefs?.getBool(_kWhosWhere) ?? true,
       wifiDirect: prefs?.getBool(_kWifiDirect) ?? true,
       notificationTalk: prefs?.getBool(_kNotifTalk) ?? false,
       urgentLoud: prefs?.getBool(_kUrgent) ?? true,
@@ -417,6 +425,7 @@ class SharedPrefsSettingsStore implements SettingsStore {
       await prefs.setBool(_kToggle, s.toggleTalk);
       await prefs.setBool(_kAutoPlay, s.autoPlay);
       await prefs.setBool(_kRelayOthers, s.relayForOthers);
+      await prefs.setBool(_kWhosWhere, s.showInWhosWhere);
       await prefs.setBool(_kWifiDirect, s.wifiDirect);
       await prefs.setBool(_kNotifTalk, s.notificationTalk);
       await prefs.setBool(_kUrgent, s.urgentLoud);

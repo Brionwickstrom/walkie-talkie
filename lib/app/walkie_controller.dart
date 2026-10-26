@@ -21,6 +21,7 @@ import '../chat/chat_store.dart';
 import '../chat/photo.dart';
 import '../core/channel_crypto.dart';
 import '../core/frame.dart';
+import '../core/lobby.dart';
 import '../core/pair_key.dart';
 import '../core/peer.dart';
 import '../core/transport.dart';
@@ -53,6 +54,7 @@ import 'config.dart';
 import 'playback_log.dart';
 import 'private_reply.dart';
 import 'settings.dart';
+import 'whos_where.dart';
 
 /// A friend request waiting for an answer.
 class FriendRequest {
@@ -164,6 +166,109 @@ class WalkieController extends ChangeNotifier {
     );
     friendLinks.setFriends(settings.friends);
     manager.sealedHandler = friendLinks.handle;
+    whosWhere = WhosWhere(
+      localId: nodeId,
+      sendLocal: manager.sendLobbyLocal,
+      beacon: _lobbyBeacon,
+      relayFactory: _lobbyRelayFactory(relays),
+      plan: powerPlan,
+    );
+    whosWhere.addListener(notifyListeners);
+  }
+
+  /// Who's where (v1.8.2): lobby beacons in / out.
+  late final WhosWhere whosWhere;
+
+  /// The relay lobby room on every configured relay (null = none).
+  static Transport Function()? _lobbyRelayFactory(List<Uri> relays) =>
+      relays.isEmpty
+      ? null
+      : () => MultiRelayTransport(
+          serverUris: relays,
+          factory: (u) => RelayTransport(
+            serverUri: u,
+            connector: RelayConnector.platform(),
+            room: LobbyBeacon.relayRoom,
+          ),
+        );
+
+  /// Our lobby beacon, or null with "Show me in Who's where" off. On a
+  /// private channel only the call sign (never a custom name or anything
+  /// about the channel).
+  LobbyBeacon? _lobbyBeacon(Duration every) {
+    if (!settings.showInWhosWhere) return null;
+    if (isPrivate) {
+      return LobbyBeacon.private(callSign: settings.defaultName, every: every);
+    }
+    final n = channelName;
+    return LobbyBeacon.public(
+      name: name,
+      channel: channel,
+      every: every,
+      channelName: n?.name,
+      channelEmoji: n?.emoji,
+    );
+  }
+
+  /// Everyone this phone can see, grouped by channel (Who's where).
+  List<WhoGroup> get whosWhereGroups {
+    final now = DateTime.now();
+    final n = channelName;
+    return buildWhosWhere(
+      myId: nodeId,
+      myName: name,
+      myChannel: channel,
+      myScope: scope,
+      iAmPrivate: isPrivate,
+      myChannelName: n?.name,
+      myChannelEmoji: n?.emoji,
+      seen: [
+        for (final p in peers)
+          WhoSeen(
+            id: p.id,
+            name: p.displayName,
+            scope: p.channel,
+            links: manager.liveLinksOf(p, now).toSet(),
+            hops: p.meshHops,
+            lastHeard: _lastHeard(p, now),
+            talking: p.talking,
+            info: p.info,
+            feature: p.feature,
+          ),
+      ],
+      lobby: whosWhere.entries,
+      friends: {for (final f in friends) f.id: f.name},
+      onlineFriends: {
+        for (final f in friends)
+          if (friendOnline(f.id)) f.id,
+      },
+      knownNames: {
+        for (final e in settings.channelNames.entries)
+          if (!TransportManager.isPrivateScope(e.key) && !e.value.isEmpty)
+            e.key: (name: e.value.name, emoji: e.value.emoji),
+      },
+      now: now,
+    );
+  }
+
+  static Duration? _lastHeard(Peer p, DateTime now) {
+    DateTime? last;
+    for (final t in [...p.lastSeen.values, ?p.meshSeen]) {
+      if (last == null || t.isAfter(last)) last = t;
+    }
+    return last == null ? null : now.difference(last);
+  }
+
+  /// People on other channels (badge on the Talk screen).
+  int get whosWhereElsewhereCount => whosWhereElsewhere(whosWhereGroups);
+
+  /// Settings > "Show me in Who's where".
+  Future<void> setShowInWhosWhere(bool on) async {
+    settings.showInWhosWhere = on;
+    notifyListeners();
+    await settingsStore.save(settings);
+    await manager.sendHello();
+    if (on) whosWhere.announceSoon();
   }
 
   /// Loads the saved id/name/channel/relay (creating a stable id on first
@@ -533,6 +638,13 @@ class WalkieController extends ChangeNotifier {
     await manager.setPowerSaver(settings.powerSaver);
     await manager.setOfflineSaver(settings.offlineSaver);
     await manager.start();
+    _subs.add(manager.lobby.listen(whosWhere.onLobby));
+    await whosWhere.setForeground(foreground);
+    await whosWhere.setPlan(powerPlan);
+    unawaited(whosWhere.start());
+    _timers.add(
+      Timer.periodic(const Duration(seconds: 1), (_) => whosWhere.tick()),
+    );
     _subs.add(radioDevice.changes.listen((_) => notifyListeners()));
     radioDevice.start();
     _subs.add(
@@ -781,6 +893,7 @@ class WalkieController extends ChangeNotifier {
   void _onLifecycle(AppLifecycleState s) {
     final wasForeground = foreground;
     foreground = s == AppLifecycleState.resumed;
+    unawaited(whosWhere.setForeground(foreground));
     if (s != AppLifecycleState.detached) _wasVisible = true;
     if (foreground && !wasForeground) {
       for (final id in _talkingPrev) {
@@ -1040,6 +1153,7 @@ class WalkieController extends ChangeNotifier {
     await settingsStore.save(settings);
     await manager.setPowerSaver(on);
     friendLinks.setPowerSaver(on);
+    await whosWhere.setPlan(powerPlan);
     await trip?.onPowerChanged();
   }
 
@@ -1064,6 +1178,7 @@ class WalkieController extends ChangeNotifier {
     await settingsStore.save(settings);
     await manager.setOfflineSaver(on);
     friendLinks.setOfflineSaver(on);
+    await whosWhere.setPlan(powerPlan);
     await trip?.setOfflineSaver(on);
     if (on) {
       for (final conv in _live.keys.toList()) {
@@ -1789,6 +1904,7 @@ class WalkieController extends ChangeNotifier {
         'ce': n.emoji,
         'ct': n.updated,
       },
+      if (!settings.showInWhosWhere) 'hw': 0,
       if (isPrivate && settings.channelAdmins[scope] == nodeId) 'adm': 1,
       if (isPrivate &&
           settings.channelAdmins[scope] == nodeId &&
@@ -1863,6 +1979,7 @@ class WalkieController extends ChangeNotifier {
     );
     await settingsStore.save(settings);
     await manager.sendHello();
+    whosWhere.announceSoon();
     _updateServiceText();
     notifyListeners();
   }
@@ -2685,6 +2802,7 @@ class WalkieController extends ChangeNotifier {
     }
     if (token != _channelToken) return; // a newer switch won
     await manager.setChannel(ch, key: key);
+    whosWhere.announceSoon();
     _left.clear(); // a private switch forgets everyone; not "left"
 
     settings.channel = ch;
@@ -2734,6 +2852,7 @@ class WalkieController extends ChangeNotifier {
     name = settings.name;
     manager.localName = name;
     manager.sendHello();
+    whosWhere.announceSoon();
     unawaited(settingsStore.save(settings));
     notifyListeners();
   }
@@ -2745,6 +2864,7 @@ class WalkieController extends ChangeNotifier {
     settings.relayUrl = t.isEmpty ? null : t;
     unawaited(settingsStore.save(settings));
     await _relay.setServerUris(relayUrisFor(settings));
+    await whosWhere.setRelayFactory(_lobbyRelayFactory(relayUrisFor(settings)));
     notifyListeners();
   }
 
@@ -2780,6 +2900,8 @@ class WalkieController extends ChangeNotifier {
     _lifecycle?.dispose();
     messenger?.dispose();
     ringer.dispose();
+    whosWhere.removeListener(notifyListeners);
+    whosWhere.dispose();
     manager.dispose();
     radioDevice.dispose();
     _audio.dispose();
