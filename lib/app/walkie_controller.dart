@@ -13,6 +13,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../audio/audio_engine.dart';
 import 'link_settings.dart';
+import 'link_settings.dart' as link_settings;
 import 'people_refresh.dart';
 import 'power_plan.dart';
 import '../audio/codec.dart';
@@ -242,6 +243,24 @@ class WalkieController extends ChangeNotifier {
 
   /// The phone's cellular side (v1.8.6), null when unknown (iOS).
   CellInfo? cellInfo;
+
+  /// Why nobody shows up over the internet (v1.8.7).
+  AloneReason get aloneReason {
+    final net = internetStatus;
+    String? detail;
+    for (final r in _relay.relays) {
+      detail ??= r.statusDetail;
+    }
+    return link_settings.aloneReason(
+      offlineSaver: settings.offlineSaver,
+      hasRelay: _relay.relays.isNotEmpty,
+      internet: net.status,
+      internetDetail: net.status == TransportStatus.running ? null : detail,
+      cell: cellStatus,
+      channelLabel: labelFor(scope),
+      isPrivate: isPrivate,
+    );
+  }
 
   /// The Cell icon (v1.8.6).
   CellState get cellStatus {

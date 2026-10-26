@@ -362,3 +362,73 @@ LinkInfo describeCell(CellState s, CellInfo? i, {bool ios = false}) {
     secondSetting: ios ? null : PhoneSetting.mobileNetwork,
   );
 }
+
+// ------------------------------------------- "why can't I see anyone?"
+
+/// Why the internet path cannot find anyone, shown under an empty people
+/// list (v1.8.7). Null = the relay is fine (then the other phone is not on
+/// it, or is on another channel / passcode).
+class AloneReason {
+  const AloneReason(this.text, {this.fix});
+  final String text;
+
+  /// What a "Fix" button opens, if anything.
+  final PhoneSetting? fix;
+}
+
+AloneReason aloneReason({
+  required bool offlineSaver,
+  required bool hasRelay,
+  required TransportStatus internet,
+  String? internetDetail,
+  required CellState cell,
+  required String channelLabel,
+  bool isPrivate = false,
+}) {
+  if (offlineSaver) {
+    return const AloneReason(
+      'Offline power save is on, so the internet relay is off. Only phones '
+      'nearby (Wi-Fi, Bluetooth, radio) can be found. Turn it off to reach '
+      'people far away.',
+    );
+  }
+  if (!hasRelay) {
+    return const AloneReason(
+      'The internet relay is turned off in Settings, so only phones nearby '
+      'can be found.',
+    );
+  }
+  if (internet == TransportStatus.starting) {
+    return const AloneReason(
+      'Connecting to the internet relay. If it was asleep this can take up '
+      'to a minute.',
+    );
+  }
+  if (internet != TransportStatus.running) {
+    final why = (internetDetail ?? '').trim();
+    return AloneReason(
+      switch (cell) {
+        CellState.off =>
+          'Not connected to the internet relay: no Wi-Fi and no mobile '
+              'service${why.isEmpty ? '' : ' ($why)'}.',
+        CellState.blocked =>
+          'Not connected to the internet relay over mobile data'
+              '${why.isEmpty ? '' : ' ($why)'}. Mobile data may be off or '
+              'restricted for this app: allow Mobile data and Background '
+              'data in App info.',
+        _ =>
+          'Not connected to the internet relay'
+              '${why.isEmpty ? '' : ' ($why)'}.',
+      },
+      fix: cell == CellState.off
+          ? PhoneSetting.mobileNetwork
+          : PhoneSetting.appInfo,
+    );
+  }
+  return AloneReason(
+    'Connected to the internet relay on $channelLabel. The other phone must '
+    'be online with the app open, on the same channel'
+    '${isPrivate ? ' and the same passcode' : ''}, and not in Offline power '
+    'save. Pull down to ask again.',
+  );
+}

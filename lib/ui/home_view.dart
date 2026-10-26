@@ -320,6 +320,8 @@ class HomeBody extends StatelessWidget {
     this.cell,
     this.cellLevel,
     this.onCellTap,
+    this.alone,
+    this.onAloneFix,
     required this.actions,
     required this.ptt,
   });
@@ -338,6 +340,10 @@ class HomeBody extends StatelessWidget {
   final CellState? cell;
   final int? cellLevel;
   final VoidCallback? onCellTap;
+
+  /// Why nobody shows up over the internet (empty list only, v1.8.7).
+  final AloneReason? alone;
+  final ValueChanged<PhoneSetting>? onAloneFix;
 
   /// Trailing button on the "N on CH 3" header (Who's where).
   final Widget? headerAction;
@@ -483,6 +489,34 @@ class HomeBody extends StatelessWidget {
                             textAlign: TextAlign.center,
                             style: theme.textTheme.bodySmall,
                           ),
+                          if (alone != null) ...[
+                            const SizedBox(height: 10),
+                            Card(
+                              key: const Key('alone-reason'),
+                              child: Padding(
+                                padding: const EdgeInsets.all(10),
+                                child: Column(
+                                  children: [
+                                    Text(
+                                      alone!.text,
+                                      textAlign: TextAlign.center,
+                                      style: theme.textTheme.bodyMedium,
+                                    ),
+                                    if (alone!.fix != null &&
+                                        onAloneFix != null)
+                                      TextButton(
+                                        key: const Key('alone-fix'),
+                                        onPressed: () =>
+                                            onAloneFix!(alone!.fix!),
+                                        child: const Text(
+                                          'Open phone settings',
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                     ),

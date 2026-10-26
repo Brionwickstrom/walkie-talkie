@@ -412,6 +412,8 @@ class _HomePageState extends State<HomePage> {
                     cell: c.cellStatus,
                     cellLevel: c.cellInfo?.level,
                     onCellTap: () => _openCellSheet(context),
+                    alone: c.aloneReason,
+                    onAloneFix: c.openPhoneSettings,
                     notice: c.announcementMode && !c.isAdmin
                         ? Card(
                             margin: const EdgeInsets.fromLTRB(8, 4, 8, 0),
