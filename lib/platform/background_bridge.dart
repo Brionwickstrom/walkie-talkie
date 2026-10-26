@@ -247,6 +247,15 @@ class BackgroundBridge {
 
   Future<void> openAppSettings() => _call<void>('openAppSettings');
 
+  /// v1.8.5: open a phone settings screen: "app" (App info: Mobile data,
+  /// Background data, Battery), "wifi", "bluetooth" or "location".
+  Future<bool> openSystemSettings(String which) async =>
+      await _call<bool>('openSystemSettings', {'which': which}) ?? false;
+
+  /// v1.8.5: the phone's network: "wifi", "cell", "other", "none"; null
+  /// when unknown (not Android).
+  Future<String?> netKind() => _call<String>('netKind');
+
   Future<bool> canUseFullScreen() async =>
       await _call<bool>('canFullScreen') ?? true;
 

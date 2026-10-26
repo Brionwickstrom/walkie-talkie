@@ -331,7 +331,7 @@ decrypt).
 * Private talk to a friend is not saved in the replay history.
 * 1.4 and older phones do not see chats, names, friends or moderation.
 
-## v1.8.5: pull to refresh (who's here?)
+## v1.8.5: pull to refresh (who's here?) and connection settings
 
 * **Pull down** on the Talk screen people list or on Who's where, or tap the
   small **refresh** button next to the list header, to ask everyone "who's
@@ -358,6 +358,21 @@ decrypt).
   still get the probe.
 * Older versions ignore the probe (it is not a valid lobby beacon), so they
   just show up on their normal schedule.
+* **Connection icons open their settings.** Tap a connection icon at the
+  top left (or the "Internet: ..." line) to see that connection's status
+  (Connected / Off / Not working / Bluetooth permission missing) and one
+  button: Internet -> this app's App info page (Android
+  `ACTION_APPLICATION_DETAILS_SETTINGS`: Mobile data, Background data,
+  Unrestricted data, Battery); Wi-Fi and Wi-Fi Direct -> Wi-Fi settings;
+  Bluetooth -> Bluetooth settings, or "Allow Bluetooth" first when the
+  Nearby devices permission is missing; LoRa radio -> the in-app radio
+  pairing. Nothing opens until you tap the button. On iOS the button opens
+  the app's page in Settings.
+* **"Allow mobile data"** appears next to the internet status when the
+  phone is on mobile data, a relay is set and it cannot be reached (not in
+  Offline power save); it opens the internet sheet above.
+* **Settings > Battery: "Phone settings for this app (mobile data,
+  battery)"** opens App info directly.
 
 ## v1.8.4: map search (find trail maps online, search offline)
 

@@ -183,6 +183,52 @@ object BgBridge {
                 )
                 result.success(null)
             }
+            "openSystemSettings" -> {
+                // v1.8.5: the connection icons open the matching phone
+                // settings. Falls back to this app's App info page.
+                val app = Intent(
+                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:${ctx.packageName}"),
+                )
+                val which = call.argument<String>("which") ?: "app"
+                val intent = when (which) {
+                    "wifi" -> Intent(Settings.ACTION_WIFI_SETTINGS)
+                    "bluetooth" -> Intent(Settings.ACTION_BLUETOOTH_SETTINGS)
+                    "location" -> Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)
+                    else -> app
+                }
+                val ok = try {
+                    open(ctx, intent)
+                    true
+                } catch (_: Exception) {
+                    try {
+                        open(ctx, app)
+                        true
+                    } catch (_: Exception) {
+                        false
+                    }
+                }
+                result.success(ok)
+            }
+            "netKind" -> {
+                // v1.8.5: what the phone's default network is right now:
+                // "wifi", "cell", "other" or "none".
+                val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE)
+                    as android.net.ConnectivityManager
+                val caps = try {
+                    cm.getNetworkCapabilities(cm.activeNetwork)
+                } catch (_: Exception) {
+                    null
+                }
+                result.success(
+                    when {
+                        caps == null -> "none"
+                        caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+                        caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) -> "cell"
+                        else -> "other"
+                    },
+                )
+            }
             "canFullScreen" -> {
                 val nm = ctx.getSystemService(NotificationManager::class.java)
                 result.success(

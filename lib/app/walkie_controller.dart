@@ -12,6 +12,7 @@ import 'package:cryptography/cryptography.dart' show SimpleKeyPair;
 import 'package:permission_handler/permission_handler.dart';
 
 import '../audio/audio_engine.dart';
+import 'link_settings.dart';
 import 'people_refresh.dart';
 import 'power_plan.dart';
 import '../audio/codec.dart';
@@ -224,6 +225,66 @@ class WalkieController extends ChangeNotifier {
   /// Someone else refreshed: say we are here right now.
   Future<void> _replyPresence({required bool radio}) =>
       radio ? manager.sendRadioHello() : manager.sendHello();
+
+  // ------------------------------------------- connection settings (v1.8.5)
+
+  /// The phone's network: "wifi", "cell", "other", "none" (null = unknown).
+  String? phoneNet;
+
+  Future<void> refreshPhoneNet() async {
+    final n = await bridge.netKind();
+    if (n == phoneNet) return;
+    phoneNet = n;
+    notifyListeners();
+  }
+
+  /// "Allow mobile data" next to the internet status.
+  bool get mobileDataHint => showMobileDataHint(
+    internet: internetStatus.status,
+    netKind: phoneNet,
+    hasRelay: _relay.relays.isNotEmpty,
+    offlineSaver: settings.offlineSaver,
+  );
+
+  /// Bluetooth permission ("Nearby devices") not granted.
+  Future<bool> bluetoothPermissionMissing() async {
+    try {
+      if (Platform.isAndroid) {
+        return !await Permission.bluetoothScan.isGranted ||
+            !await Permission.bluetoothConnect.isGranted;
+      }
+      if (Platform.isIOS) return !await Permission.bluetooth.isGranted;
+    } catch (_) {}
+    return false;
+  }
+
+  /// Ask for the Bluetooth permission; true when granted. Permanently
+  /// denied: opens App info instead.
+  Future<bool> requestBluetoothPermission() async {
+    try {
+      final perms = Platform.isAndroid
+          ? [Permission.bluetoothScan, Permission.bluetoothConnect]
+          : [Permission.bluetooth];
+      final r = await perms.request();
+      if (r.values.every((s) => s.isGranted)) return true;
+      if (r.values.any((s) => s.isPermanentlyDenied)) {
+        await openPhoneSettings(PhoneSetting.appInfo);
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  /// Open a phone settings screen (Android); elsewhere this app's settings.
+  Future<void> openPhoneSettings(PhoneSetting s) async {
+    if (s == PhoneSetting.radioPairing) return; // in-app screen (UI)
+    if (bridge.supported) {
+      await bridge.openSystemSettings(s.wire);
+      return;
+    }
+    try {
+      await openAppSettings();
+    } catch (_) {}
+  }
 
   /// A LoRa radio is connected (the "Also ask over radio" option).
   bool get radioConnected => manager.radio?.status == TransportStatus.running;
@@ -746,6 +807,15 @@ class WalkieController extends ChangeNotifier {
     _timers.add(
       Timer.periodic(const Duration(seconds: 1), (_) => whosWhere.tick()),
     );
+    if (bridge.supported) {
+      unawaited(refreshPhoneNet());
+      _timers.add(
+        Timer.periodic(
+          const Duration(seconds: 5),
+          (_) => unawaited(refreshPhoneNet()),
+        ),
+      );
+    }
     _subs.add(radioDevice.changes.listen((_) => notifyListeners()));
     radioDevice.start();
     _subs.add(

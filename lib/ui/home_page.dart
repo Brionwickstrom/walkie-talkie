@@ -16,6 +16,7 @@ import 'chat_page.dart';
 import 'friends_page.dart';
 import 'history_page.dart';
 import 'home_view.dart';
+import 'link_sheet.dart';
 import 'inbox_page.dart';
 import 'radio_settings.dart';
 import 'sheets.dart';
@@ -23,6 +24,10 @@ import 'trip_page.dart';
 import 'trip_widgets.dart';
 import 'whos_where_page.dart';
 import '../app/power_plan.dart';
+import '../app/link_settings.dart';
+
+import 'dart:io' show Platform;
+
 import '../trip/sos.dart';
 
 class HomePage extends StatefulWidget {
@@ -402,6 +407,8 @@ class _HomePageState extends State<HomePage> {
                     onRefresh: ({required bool radio}) =>
                         c.refreshPeople(radio: radio),
                     radioAvailable: () => c.radioConnected,
+                    onLinkTap: (k) => _openLinkSheet(context, k),
+                    mobileDataHint: c.mobileDataHint,
                     notice: c.announcementMode && !c.isAdmin
                         ? Card(
                             margin: const EdgeInsets.fromLTRB(8, 4, 8, 0),
@@ -865,6 +872,61 @@ class _HomePageState extends State<HomePage> {
     if (c.recording != null) await c.stopRecording();
   }
 
+  /// Connection icon tapped (v1.8.5): its status and a button to the
+  /// matching phone settings (or the in-app radio pairing).
+  Future<void> _openLinkSheet(BuildContext context, TransportKind k) async {
+    Transport? t;
+    for (final x in c.transports) {
+      if (x.kind == k) t = x;
+    }
+    final status = k == TransportKind.internet
+        ? c.internetStatus.status
+        : t?.status ?? TransportStatus.stopped;
+    final btMissing = k == TransportKind.ble
+        ? await c.bluetoothPermissionMissing()
+        : false;
+    if (k == TransportKind.internet) await c.refreshPhoneNet();
+    if (!context.mounted) return;
+    final info = describeLink(
+      k,
+      status,
+      detail: t?.statusDetail,
+      netKind: c.phoneNet,
+      permissionMissing: btMissing,
+      offlineSaver: c.settings.offlineSaver,
+      ios: Platform.isIOS,
+    );
+    await showAppSheet<void>(
+      context: context,
+      builder: (ctx) => LinkSheetView(
+        kind: k,
+        info: info,
+        onAction: () async {
+          Navigator.pop(ctx);
+          if (info.setting == PhoneSetting.radioPairing) {
+            await showAppSheet<void>(
+              context: context,
+              isScrollControlled: true,
+              builder: (ctx2) => SafeArea(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(16),
+                  child: RadioSettings(controller: c),
+                ),
+              ),
+            );
+            return;
+          }
+          if (info.permissionMissing) {
+            final ok = await c.requestBluetoothPermission();
+            if (ok) await c.openPhoneSettings(PhoneSetting.bluetooth);
+            return;
+          }
+          await c.openPhoneSettings(info.setting);
+        },
+      ),
+    );
+  }
+
   Future<void> _openSettings(BuildContext context) async {
     final nameCtl = TextEditingController(text: c.settings.customName ?? '');
     final relayCtl = TextEditingController(text: c.relayOverride);
@@ -1252,6 +1314,23 @@ class _HomePageState extends State<HomePage> {
                       : 'Normal: fastest. Phones show up within a few '
                             'seconds. Switch to Saver to use less battery.',
                   style: Theme.of(ctx).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 6),
+                ListTile(
+                  key: const Key('phone-settings-tile'),
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.app_settings_alt),
+                  title: const Text(
+                    'Phone settings for this app (mobile data, battery)',
+                  ),
+                  subtitle: const Text(
+                    'Opens App info. Under Mobile data, turn on Mobile data '
+                    'and Background data (and Unrestricted data if Data '
+                    'saver is on) so the internet relay works without '
+                    'Wi-Fi. Battery: set it to Unrestricted.',
+                  ),
+                  trailing: const Icon(Icons.open_in_new),
+                  onTap: () => c.openPhoneSettings(PhoneSetting.appInfo),
                 ),
                 const Divider(height: 32),
                 Row(

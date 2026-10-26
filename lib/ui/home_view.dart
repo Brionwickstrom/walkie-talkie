@@ -283,6 +283,8 @@ class HomeBody extends StatelessWidget {
     this.headerAction,
     this.onRefresh,
     this.radioAvailable,
+    this.onLinkTap,
+    this.mobileDataHint = false,
     required this.actions,
     required this.ptt,
   });
@@ -292,6 +294,10 @@ class HomeBody extends StatelessWidget {
 
   /// Offer "Also ask over radio (slow)" after a refresh.
   final bool Function()? radioAvailable;
+
+  /// Connection icon tapped (v1.8.5).
+  final ValueChanged<TransportKind>? onLinkTap;
+  final bool mobileDataHint;
 
   /// Trailing button on the "N on CH 3" header (Who's where).
   final Widget? headerAction;
@@ -339,6 +345,8 @@ class HomeBody extends StatelessWidget {
             internet: internet,
             showDetails: showDetails,
             onToggleDetails: onToggleDetails,
+            onLinkTap: onLinkTap,
+            mobileDataHint: mobileDataHint,
           ),
           if (showDetails && details.isNotEmpty)
             ConstrainedBox(
@@ -467,11 +475,20 @@ class StatusRow extends StatelessWidget {
     required this.internet,
     required this.showDetails,
     required this.onToggleDetails,
+    this.onLinkTap,
+    this.mobileDataHint = false,
   });
   final List<(TransportKind, TransportStatus)> links;
   final ({TransportStatus status, String text}) internet;
   final bool showDetails;
   final ValueChanged<bool> onToggleDetails;
+
+  /// Tap on a connection icon (or the internet line): the connection
+  /// sheet with its status and a settings button (v1.8.5).
+  final ValueChanged<TransportKind>? onLinkTap;
+
+  /// Show "Allow mobile data" (on mobile data, relay unreachable).
+  final bool mobileDataHint;
 
   @override
   Widget build(BuildContext context) {
@@ -487,30 +504,52 @@ class StatusRow extends StatelessWidget {
           for (final (k, s) in links)
             Tooltip(
               message: '${transportName(k)}: ${s.name}',
-              child: Padding(
-                padding: const EdgeInsets.only(right: 6),
-                child: Icon(
-                  transportIcon(k),
-                  size: 18,
-                  color: s == TransportStatus.running
-                      ? Colors.green
-                      : Colors.grey,
+              child: InkWell(
+                key: Key('link-${k.name}'),
+                customBorder: const CircleBorder(),
+                onTap: onLinkTap == null ? null : () => onLinkTap!(k),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(3, 4, 3, 4),
+                  child: Icon(
+                    transportIcon(k),
+                    size: 18,
+                    color: s == TransportStatus.running
+                        ? Colors.green
+                        : Colors.grey,
+                  ),
                 ),
               ),
             ),
           const SizedBox(width: 4),
           Expanded(
-            child: Text(
-              internet.text,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: netColor,
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
+            child: InkWell(
+              key: const Key('internet-status'),
+              onTap: onLinkTap == null
+                  ? null
+                  : () => onLinkTap!(TransportKind.internet),
+              child: Text(
+                internet.text,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: netColor,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
           ),
+          if (mobileDataHint && onLinkTap != null)
+            TextButton.icon(
+              key: const Key('allow-mobile-data'),
+              style: TextButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+              ),
+              icon: const Icon(Icons.signal_cellular_alt, size: 16),
+              label: const Text('Allow mobile data'),
+              onPressed: () => onLinkTap!(TransportKind.internet),
+            ),
           TextButton(
             onPressed: () => onToggleDetails(!showDetails),
             child: Row(
