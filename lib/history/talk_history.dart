@@ -232,6 +232,38 @@ class TalkHistory {
     _emit();
   }
 
+  /// Mark every take on every channel heard (and close open ones).
+  void markEverythingHeard() {
+    for (final t in _open.values) {
+      t.heard = true;
+    }
+    var any = false;
+    for (final t in _takes) {
+      if (!t.heard) {
+        t.heard = true;
+        any = true;
+      }
+    }
+    if (!any) return;
+    _save(_writeIndex);
+    _emit();
+  }
+
+  /// Delete every take on every channel.
+  Future<void> clearAll() async {
+    _open.clear();
+    final gone = List.of(_takes);
+    _takes.clear();
+    _save(() async {
+      for (final t in gone) {
+        await storage.deleteBlob(t.blobName);
+      }
+      await _writeIndex();
+    });
+    _emit();
+    await _saving;
+  }
+
   Future<void> delete(TalkTake t) async {
     _takes.remove(t);
     _save(() async {

@@ -136,6 +136,10 @@ class Messenger {
   static const seenName = 'seen.json';
   static const seenMax = 3000;
 
+  /// Received messages recorded longer ago than this are dropped (they can
+  /// only be stale re-sends; the outbox keeps messages for 24 h).
+  static const maxMessageAge = Duration(hours: 25);
+
   bool hasSeen(int sender, int msgId) => _seen.contains('${sender}_$msgId');
 
   Future<void> _markSeen(int sender, int msgId) async {
@@ -226,7 +230,9 @@ class Messenger {
       durationMs: clip.durationMs,
       recipients: toPeer == null ? link.reachablePeersOn(channel) : {toPeer},
     );
-    final body = clip.encode();
+    // The send time rides along (ignored by older apps) so receivers can
+    // tell a fresh message from a stale one.
+    final body = clip.encode(sentAt: entry.createdAt);
     _bodies[(entry.msgId, false)] = body;
     await outbox.add(entry, body);
     _changed();
@@ -460,7 +466,8 @@ class Messenger {
         if (hasSeen(d.peerId, pkt.msgId)) return;
         await _markSeen(d.peerId, pkt.msgId);
         final name = link.nameOf(d.peerId);
-        if (VoiceClip.tryDecode(body) == null) {
+        final clip = VoiceClip.tryDecode(body);
+        if (clip == null) {
           final chat = ChatBody.tryDecode(body);
           if (chat == null) return;
           _chatSeen.add((d.peerId, pkt.msgId));
@@ -479,7 +486,12 @@ class Messenger {
           }
           return;
         }
+        final sentAt = clip.sentAt;
+        if (sentAt != null && now.difference(sentAt) > maxMessageAge) {
+          return; // acknowledged above, but far too old to keep
+        }
         final e = InboxEntry(
+          sentAt: sentAt,
           sender: d.peerId,
           msgId: pkt.msgId,
           senderName: name,
@@ -499,6 +511,31 @@ class Messenger {
         _ackDue.putIfAbsent(key, () => now);
       }
     }
+  }
+
+  /// Drop everything queued: nothing in the outbox is sent again, partial
+  /// transfers are forgotten, every received message counts as seen (so a
+  /// re-send from an older phone is acknowledged but never shown again)
+  /// and is marked played, or deleted with [deleteInbox].
+  Future<void> clearAll({bool deleteInbox = false}) async {
+    for (final e in List.of(outbox.entries)) {
+      await outbox.cancel(e.msgId);
+    }
+    _sessions.clear();
+    _bodies.clear();
+    _retryAt.clear();
+    _attempts.clear();
+    _rx.clear();
+    _ackDue.clear();
+    for (final e in List.of(inbox.entries)) {
+      await _markSeen(e.sender, e.msgId);
+    }
+    if (deleteInbox) {
+      await inbox.clear();
+    } else {
+      await inbox.markAllPlayed();
+    }
+    _changed();
   }
 
   Future<void> _deliveredTo(int msgId, int peer) async {

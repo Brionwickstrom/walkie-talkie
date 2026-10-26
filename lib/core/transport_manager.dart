@@ -9,8 +9,9 @@ import 'transport.dart';
 
 /// Audio received from a peer, ready for the decoder.
 class ReceivedAudio {
-  ReceivedAudio(this.peerId, this.seq, this.opus);
+  ReceivedAudio(this.peerId, this.seq, this.opus, [this.transport]);
   final int peerId;
+  final TransportKind? transport;
   final int seq;
   final Uint8List opus;
 }
@@ -676,7 +677,9 @@ class TransportManager {
           }
         case FrameType.audio:
           if (frameScope == scope) {
-            _audio.add(ReceivedAudio(f.senderId, f.seq, f.payload));
+            _audio.add(
+              ReceivedAudio(f.senderId, f.seq, f.payload, inbound.transport),
+            );
           }
         case FrameType.data:
           if (!_data.isClosed) {

@@ -331,6 +331,41 @@ decrypt).
 * Private talk to a friend is not saved in the replay history.
 * 1.4 and older phones do not see chats, names, friends or moderation.
 
+## v1.5.2: loops from older phones, clean slate
+
+Still looping on 1.5.1 with every other phone on 1.5.0 or older: voice
+messages never play by themselves (no build ever auto-played them), so the
+loop was live audio. An older phone with its mic stuck on (the v1.5.0 race)
+re-broadcasts everything its speaker plays; with two of them, an old message
+bounces between them forever, AGC keeping it loud, and every phone in the
+channel played that stream. A 1.5.1 phone can't turn the other phones' mics
+off, so 1.5.2 refuses to play it:
+
+* `LiveAudioGate`: live audio plays only while the sender says it is
+  talking (talkStart). After talkEnd only a 1 s tail plays; a stream with no
+  talk signal at all plays at most 60 s; non-stop talk is capped at 3 min;
+  an Opus packet identical to one from the same sender in the last 30 s is
+  dropped (late copy over another transport). Blocked audio isn't kept for
+  "Missed" either.
+* Stop silences every live stream (channel and 1:1) until that phone talks
+  again, and also stops voice messages, replays and "Play all missed".
+* First launch of 1.5.2: the outbox (voice and chat queues) is cleared, so
+  this phone never re-sends an old message; every received message is marked
+  played and seen; every missed-talk take is marked heard.
+* Voice messages now carry their send time (a trailer older apps ignore).
+  Received: older than 25 h dropped (still acked); older than 10 min or
+  from an older app (no time) filed quietly as played, no notification.
+* Settings > Messages: "Playback log" (what played, from whom, via which
+  link, and why audio was blocked; also in Details) and "Clear all messages
+  and queues".
+* Checked and not loop sources: flutter_pcm_sound (Android blocks on its
+  queue, iOS fills silence on underrun, neither repeats a buffer), loss
+  concealment (max 3 frames, never re-decodes a packet), one Flutter engine
+  shared by the service and the UI (one player). "Play all missed" builds
+  its queue once and marks each take heard as it starts. A notification
+  "Play" plays that message once and never restarts it if it's already
+  playing.
+
 ## v1.5.1: endless replay fix
 Root cause: a quick tap on a talk / record button (or the headset key) could
 stop the mic while it was still opening; the stop did nothing and the mic

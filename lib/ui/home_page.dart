@@ -220,7 +220,9 @@ class _HomePageState extends State<HomePage> {
                         c.playingTake != null
                             ? 'Replaying ${c.playingTake!.name}'
                                   '${c.playingAll ? ' (all missed)' : ''}'
-                            : 'Playing a voice message',
+                            : c.playingKey != null
+                            ? 'Playing a voice message'
+                            : 'Playing live talk',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -581,6 +583,8 @@ class _HomePageState extends State<HomePage> {
           '${t.status != TransportStatus.running && t.statusDetail != null ? ' · ${t.statusDetail}' : ''}',
     if (c.playbackDropped > 0)
       'speaker: dropped ${c.playbackDropped} late frames',
+    if (c.playbackLog.events.isNotEmpty) 'Playback log (newest first):',
+    for (final e in c.playbackLog.events.take(30)) e.line,
   ];
 
   String _queuedLabel() {
@@ -858,6 +862,51 @@ class _HomePageState extends State<HomePage> {
                       ),
                     ),
                 ],
+                const Divider(height: 32),
+                _SectionTitle('Messages'),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.receipt_long),
+                  title: const Text('Playback log'),
+                  subtitle: const Text(
+                    'What played, from whom, and why. Screenshot this if '
+                    'something keeps repeating.',
+                  ),
+                  onTap: () => showPlaybackLog(ctx, c),
+                ),
+                ListTile(
+                  key: const Key('clearAll'),
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.delete_sweep),
+                  title: const Text('Clear all messages and queues'),
+                  subtitle: const Text(
+                    'Stops all audio, deletes voice messages and missed '
+                    'talk, and cancels everything waiting to be sent.',
+                  ),
+                  onTap: () async {
+                    final ok = await showDialog<bool>(
+                      context: ctx,
+                      builder: (d) => AlertDialog(
+                        title: const Text('Clear all messages and queues?'),
+                        content: const Text(
+                          'Voice messages, missed talk and anything still '
+                          'waiting to be sent are deleted. Chats are kept.',
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(d, false),
+                            child: const Text('Cancel'),
+                          ),
+                          FilledButton(
+                            onPressed: () => Navigator.pop(d, true),
+                            child: const Text('Clear'),
+                          ),
+                        ],
+                      ),
+                    );
+                    if (ok == true) await c.clearAllMessages();
+                  },
+                ),
                 const Divider(height: 32),
                 _SectionTitle('Battery'),
                 SegmentedButton<bool>(
@@ -1590,3 +1639,28 @@ Future<void> showPrivacySheet(BuildContext context, WalkieController c) async {
     ),
   );
 }
+
+/// Full playback log in a dialog (screenshot-friendly).
+Future<void> showPlaybackLog(
+  BuildContext context,
+  WalkieController c,
+) => showDialog<void>(
+  context: context,
+  builder: (d) => AlertDialog(
+    title: const Text('Playback log'),
+    content: SizedBox(
+      width: double.maxFinite,
+      child: c.playbackLog.events.isEmpty
+          ? const Text('Nothing played yet since the app started.')
+          : SingleChildScrollView(
+              child: SelectableText(
+                c.playbackLog.text,
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
+              ),
+            ),
+    ),
+    actions: [
+      TextButton(onPressed: () => Navigator.pop(d), child: const Text('Close')),
+    ],
+  ),
+);

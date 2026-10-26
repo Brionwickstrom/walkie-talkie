@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:io' show Directory, Platform, exit;
+import 'dart:io' show Directory, File, Platform, exit;
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
@@ -9,6 +9,7 @@ import 'package:cryptography/cryptography.dart' show SimpleKeyPair;
 import 'package:permission_handler/permission_handler.dart';
 
 import '../audio/audio_engine.dart';
+import '../audio/live_gate.dart';
 import '../chat/chat_body.dart';
 import '../chat/chat_store.dart';
 import '../chat/photo.dart';
@@ -35,6 +36,7 @@ import '../transports/relay_socket.dart';
 import '../transports/relay_transport.dart';
 import 'call_signs.dart';
 import 'config.dart';
+import 'playback_log.dart';
 import 'settings.dart';
 
 /// A friend request waiting for an answer.
@@ -172,6 +174,21 @@ class WalkieController extends ChangeNotifier {
   final List<Timer> _timers = [];
   AppLifecycleListener? _lifecycle;
   int _micOrphanTicks = 0;
+
+  /// Which live audio may play (see [LiveAudioGate]).
+  final liveGate = LiveAudioGate();
+
+  /// What triggered each playback (Settings > Details).
+  final playbackLog = PlaybackLog();
+  DateTime? _lastLiveAt;
+  bool _liveShown = false;
+
+  /// Live talk played in the last second (the Stop banner shows).
+  bool get liveActive {
+    final t = _lastLiveAt;
+    return t != null &&
+        DateTime.now().difference(t) < const Duration(milliseconds: 1000);
+  }
 
   List<Peer> peers = const [];
   bool transmitting = false;
@@ -362,6 +379,20 @@ class WalkieController extends ChangeNotifier {
     _subs.add(
       manager.audio.listen((a) {
         final live = !transmitting && recording == null;
+        final who = '${nameOf(a.peerId)} #${a.peerId}';
+        final via = a.transport?.name ?? '?';
+        final talking = manager.peer(a.peerId)?.talking ?? false;
+        final why = liveGate.admit(a.peerId, a.opus, talking: talking);
+        if (why != null) {
+          // A mic left on (older app), a repeat, or stopped by the user:
+          // not played and not kept for "Missed" either.
+          playbackLog.stream(
+            'ch${a.peerId}',
+            'live-blocked',
+            '$who via $via: $why',
+          );
+          return;
+        }
         history?.addPacket(
           scope: scope,
           sender: a.peerId,
@@ -372,6 +403,14 @@ class WalkieController extends ChangeNotifier {
         if (!live) return;
         if (isMuted(a.peerId)) return;
         if (announcementMode && a.peerId != adminId) return;
+        playbackLog.stream(
+          'ch${a.peerId}',
+          'live',
+          '$who via $via${talking ? '' : ' (talk end / start pending)'}',
+        );
+        final wasLive = liveActive;
+        _lastLiveAt = DateTime.now();
+        if (!wasLive) notifyListeners();
         if (_audio.playingClip) {
           _stopReplay();
           _audio.stopClip();
@@ -452,6 +491,7 @@ class WalkieController extends ChangeNotifier {
       friendMessenger = m;
       _wireMessenger(m, friend: true);
     } catch (_) {}
+    await _migrate152();
 
     // Rings / beeps.
     ringer.start();
@@ -467,6 +507,10 @@ class WalkieController extends ChangeNotifier {
     // recording (see MicGate for the v1.5.0 bug this guards against).
     _timers.add(
       Timer.periodic(const Duration(seconds: 1), (_) {
+        if (_liveShown != liveActive) {
+          _liveShown = liveActive;
+          notifyListeners();
+        }
         if (_audio.isTransmitting && !transmitting && recording == null) {
           if (++_micOrphanTicks >= 2) {
             _micOrphanTicks = 0;
@@ -662,7 +706,7 @@ class WalkieController extends ChangeNotifier {
         final key = a['key'] as String? ?? '';
         final e =
             messenger?.inbox.byKey(key) ?? friendMessenger?.inbox.byKey(key);
-        if (e != null) await playMessage(e);
+        if (e != null) await playMessage(e, trigger: 'notification');
       case 'openInbox':
         _uiRequests.add('inbox');
       case 'hwKey':
@@ -863,6 +907,7 @@ class WalkieController extends ChangeNotifier {
         if (p.talking) p.id,
     };
     for (final p in list) {
+      liveGate.talkChanged(p.id, p.talking);
       if (!p.talking) {
         _audio.peerStopped(p.id);
         // Talk ended: close the recorded transmission now (silence also
@@ -1017,6 +1062,11 @@ class WalkieController extends ChangeNotifier {
       return false;
     }
     final token = ++_replayToken;
+    playbackLog.add(
+      'history',
+      '${t.mine ? 'you' : '${t.name} #${t.sender}'} take ${t.id}: '
+          '${playingAll ? 'play all missed' : 'play (tap)'}',
+    );
     playingKey = null;
     playingTake = t;
     final from = _resumeAt.remove(t.id) ?? 0;
@@ -1225,12 +1275,35 @@ class WalkieController extends ChangeNotifier {
     );
   }
 
+  /// Voice messages recorded longer ago than this arrive quietly.
+  static const staleMessage = Duration(minutes: 10);
+
   void _onVoiceMessage(InboxEntry e) {
     final name = e.senderName.isEmpty ? nameOf(e.sender) : e.senderName;
     if (isMuted(e.sender)) {
       notifyListeners();
       return;
     }
+    // Apps older than 1.5.2 send no time with a message and may keep
+    // re-sending old ones, and anything older than 10 min is stale: keep it
+    // in Voice messages, marked played, without a notification.
+    final sent = e.sentAt;
+    final age = sent == null ? null : DateTime.now().difference(sent);
+    if (sent == null || age! > staleMessage) {
+      playbackLog.add(
+        'voice-msg-quiet',
+        '$name #${e.sender} id ${e.msgId}: '
+            '${sent == null ? 'older app (no time)' : '${age!.inMinutes} min old'}'
+            ', filed without notification',
+      );
+      unawaited(_messengerFor(e)?.markPlayed(e));
+      notifyListeners();
+      return;
+    }
+    playbackLog.add(
+      'voice-msg',
+      '$name #${e.sender} id ${e.msgId}: arrived, notification only',
+    );
     if (foreground) {
       _notice('Voice message from $name (${formatDuration(e.durationMs)})');
     }
@@ -1243,9 +1316,15 @@ class WalkieController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> playMessage(InboxEntry e) async {
+  Future<void> playMessage(InboxEntry e, {String trigger = 'tap'}) async {
     final m = _messengerFor(e);
     if (m == null || transmitting || recording != null) return;
+    if (playingKey == e.key) return; // already playing: never restart it
+    playbackLog.add(
+      'voice-msg',
+      '${e.senderName.isEmpty ? nameOf(e.sender) : e.senderName} '
+          '#${e.sender} id ${e.msgId}: play ($trigger)',
+    );
     final body = await m.bodyOf(e);
     final clip = body == null ? null : VoiceClip.tryDecode(body);
     if (clip == null) {
@@ -1269,11 +1348,16 @@ class WalkieController extends ChangeNotifier {
   }
 
   /// Something is playing that the Stop button can stop.
-  bool get playingSomething => playingKey != null || playingTake != null;
+  bool get playingSomething =>
+      playingKey != null || playingTake != null || liveActive;
 
   /// Stop everything: voice message / replay playback, the "play all
   /// missed" queue, talking, recording and the mic itself.
   Future<void> stopAllAudio() async {
+    // Live streams stay silent until that phone starts talking again.
+    liveGate.silenceAll();
+    _lastLiveAt = null;
+    playbackLog.add('stop', 'Stop: everything stopped and silenced');
     _stopReplay();
     _resumeAt.clear();
     _audio.stopClip();
@@ -1284,6 +1368,35 @@ class WalkieController extends ChangeNotifier {
     await _audio.forceStopTransmit();
     await _audio.setFocus(false);
     notifyListeners();
+  }
+
+  /// Settings > "Clear all messages and queues": nothing queued is sent or
+  /// played again; voice messages and missed talk are deleted.
+  Future<void> clearAllMessages() async {
+    await stopAllAudio();
+    await messenger?.clearAll(deleteInbox: true);
+    await friendMessenger?.clearAll(deleteInbox: true);
+    await history?.clearAll();
+    playbackLog.add('cleared', 'All messages, queues and missed talk cleared');
+    _notice('All voice messages, queues and missed talk cleared.');
+    notifyListeners();
+  }
+
+  /// One time after updating to 1.5.2: drop every queued message (so this
+  /// phone never re-sends an old one) and count everything received or
+  /// recorded so far as played / seen (so nothing old plays or pops up).
+  Future<void> _migrate152() async {
+    try {
+      final marker = File(
+        '${(await _messageDir()).parent.path}/migrated_1_5_2',
+      );
+      if (await marker.exists()) return;
+      await messenger?.clearAll();
+      await friendMessenger?.clearAll();
+      history?.markEverythingHeard();
+      await marker.writeAsString(DateTime.now().toIso8601String());
+      playbackLog.add('cleared', '1.5.2 update: old queues cleared');
+    } catch (_) {}
   }
 
   Future<void> deleteMessage(InboxEntry e) async {
@@ -1848,7 +1961,21 @@ class WalkieController extends ChangeNotifier {
   void _onFriendFrame(FriendInbound f) {
     if (f.frame.type != FrameType.audio) return;
     final id = f.friendId;
+    final why = liveGate.admit(-1 - id, f.frame.payload, talking: null);
+    if (why != null) {
+      playbackLog.stream(
+        'fr$id',
+        'private-blocked',
+        '${friendName(id)} #$id via ${f.via.name}: $why',
+      );
+      return;
+    }
     if (transmitting || recording != null || isMuted(id)) return;
+    playbackLog.stream(
+      'fr$id',
+      'private',
+      '${friendName(id)} #$id via ${f.via.name}',
+    );
     if (_audio.playingClip) {
       _stopReplay();
       _audio.stopClip();

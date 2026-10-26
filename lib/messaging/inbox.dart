@@ -13,6 +13,7 @@ class InboxEntry {
     required this.receivedAt,
     required this.durationMs,
     this.played = false,
+    this.sentAt,
   });
 
   final int sender;
@@ -23,6 +24,10 @@ class InboxEntry {
   final DateTime receivedAt;
   final int durationMs;
   bool played;
+
+  /// When the sender recorded it (1.5.2+ senders); null from older apps,
+  /// whose messages carry no time.
+  final DateTime? sentAt;
 
   String get key => '${sender}_$msgId';
   String get blobName => 'in_$key.wtv';
@@ -39,6 +44,7 @@ class InboxEntry {
     'at': receivedAt.millisecondsSinceEpoch,
     'dur': durationMs,
     'p': played,
+    if (sentAt != null) 'sa': sentAt!.millisecondsSinceEpoch,
   };
 
   static InboxEntry? fromJson(Object? j) {
@@ -55,6 +61,9 @@ class InboxEntry {
         ),
         durationMs: (j['dur'] as num).toInt(),
         played: j['p'] == true,
+        sentAt: j['sa'] is num
+            ? DateTime.fromMillisecondsSinceEpoch((j['sa'] as num).toInt())
+            : null,
       );
     } catch (_) {
       return null;
@@ -111,6 +120,28 @@ class Inbox {
   Future<void> markPlayed(InboxEntry e) async {
     if (e.played) return;
     e.played = true;
+    await save();
+  }
+
+  /// Mark every message played (one save).
+  Future<void> markAllPlayed() async {
+    var any = false;
+    for (final e in entries) {
+      if (!e.played) {
+        e.played = true;
+        any = true;
+      }
+    }
+    if (any) await save();
+  }
+
+  /// Delete every message.
+  Future<void> clear() async {
+    final gone = List.of(entries);
+    entries.clear();
+    for (final e in gone) {
+      await storage.deleteBlob(e.blobName);
+    }
     await save();
   }
 
