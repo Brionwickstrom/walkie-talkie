@@ -233,9 +233,29 @@ class WalkieController extends ChangeNotifier {
 
   Future<void> refreshPhoneNet() async {
     final n = await bridge.netKind();
-    if (n == phoneNet) return;
+    final cell = CellInfo.fromMap(await bridge.cellInfo());
+    if (n == phoneNet && cell == cellInfo) return;
     phoneNet = n;
+    cellInfo = cell;
     notifyListeners();
+  }
+
+  /// The phone's cellular side (v1.8.6), null when unknown (iOS).
+  CellInfo? cellInfo;
+
+  /// The Cell icon (v1.8.6).
+  CellState get cellStatus {
+    final up = _relay.relays
+        .where((r) => r.status == TransportStatus.running)
+        .toList();
+    return cellState(
+      info: cellInfo,
+      relayUp: up.isNotEmpty,
+      relayNet: up.isEmpty ? null : up.first.network,
+      phoneNet: phoneNet,
+      hasRelay: _relay.relays.isNotEmpty,
+      offlineSaver: settings.offlineSaver,
+    );
   }
 
   /// "Allow mobile data" next to the internet status.

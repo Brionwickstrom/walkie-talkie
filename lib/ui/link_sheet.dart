@@ -13,10 +13,18 @@ class LinkSheetView extends StatelessWidget {
     required this.kind,
     required this.info,
     required this.onAction,
+    this.icon,
+    this.onSecond,
   });
   final TransportKind kind;
   final LinkInfo info;
   final VoidCallback onAction;
+
+  /// Icon instead of the transport's (Cell icon, v1.8.6).
+  final IconData? icon;
+
+  /// [LinkInfo.secondButton] tapped.
+  final VoidCallback? onSecond;
 
   @override
   Widget build(BuildContext context) {
@@ -34,7 +42,7 @@ class LinkSheetView extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(transportIcon(kind), color: color),
+              Icon(icon ?? transportIcon(kind), color: color),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
@@ -67,6 +75,15 @@ class LinkSheetView extends StatelessWidget {
             label: Text(info.button),
             onPressed: onAction,
           ),
+          if (info.secondButton != null && onSecond != null) ...[
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              key: const Key('link-second-settings'),
+              icon: const Icon(Icons.signal_cellular_alt),
+              label: Text(info.secondButton!),
+              onPressed: onSecond,
+            ),
+          ],
         ],
       ),
     );

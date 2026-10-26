@@ -256,6 +256,11 @@ class BackgroundBridge {
   /// when unknown (not Android).
   Future<String?> netKind() => _call<String>('netKind');
 
+  /// v1.8.6: cellular state for the Cell icon (no extra permission); null
+  /// off Android.
+  Future<Map<Object?, Object?>?> cellInfo() =>
+      _call<Map<Object?, Object?>>('cellInfo');
+
   Future<bool> canUseFullScreen() async =>
       await _call<bool>('canFullScreen') ?? true;
 

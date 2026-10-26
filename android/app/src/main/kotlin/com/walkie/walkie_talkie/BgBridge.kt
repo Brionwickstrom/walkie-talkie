@@ -192,6 +192,7 @@ object BgBridge {
                 )
                 val which = call.argument<String>("which") ?: "app"
                 val intent = when (which) {
+                    "mobile" -> Intent(Settings.ACTION_DATA_ROAMING_SETTINGS)
                     "wifi" -> Intent(Settings.ACTION_WIFI_SETTINGS)
                     "bluetooth" -> Intent(Settings.ACTION_BLUETOOTH_SETTINGS)
                     "location" -> Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)
@@ -201,6 +202,13 @@ object BgBridge {
                     open(ctx, intent)
                     true
                 } catch (_: Exception) {
+                    if (which == "mobile") {
+                        try {
+                            open(ctx, Intent(Settings.ACTION_WIRELESS_SETTINGS))
+                            result.success(true)
+                            return
+                        } catch (_: Exception) {}
+                    }
                     try {
                         open(ctx, app)
                         true
@@ -210,6 +218,7 @@ object BgBridge {
                 }
                 result.success(ok)
             }
+            "cellInfo" -> result.success(cellInfo(ctx))
             "netKind" -> {
                 // v1.8.5: what the phone's default network is right now:
                 // "wifi", "cell", "other" or "none".
@@ -460,6 +469,95 @@ object BgBridge {
                 false
             }
         }
+    }
+
+    /**
+     * v1.8.6: cellular state for the Cell icon, with no new permission:
+     * cellular data networks from ConnectivityManager, signal level and
+     * radio technology from TelephonyManager.getSignalStrength() (API 28+,
+     * no permission; the technology comes from the CellSignalStrength
+     * classes on API 29+, never from getDataNetworkType, which needs
+     * READ_PHONE_STATE), SIM state, airplane mode and Data Saver.
+     */
+    private fun cellInfo(ctx: Context): Map<String, Any?> {
+        val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE)
+            as android.net.ConnectivityManager
+        var dataUp = false
+        var validated = false
+        try {
+            @Suppress("DEPRECATION")
+            for (n in cm.allNetworks) {
+                val c = cm.getNetworkCapabilities(n) ?: continue
+                if (!c.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR)) continue
+                if (!c.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)) continue
+                dataUp = true
+                if (c.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+                    validated = true
+                }
+            }
+        } catch (_: Exception) {}
+        val defaultCell = try {
+            cm.getNetworkCapabilities(cm.activeNetwork)
+                ?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) == true
+        } catch (_: Exception) {
+            false
+        }
+        val tm = ctx.getSystemService(Context.TELEPHONY_SERVICE) as? android.telephony.TelephonyManager
+        val simReady = try {
+            tm?.simState == android.telephony.TelephonyManager.SIM_STATE_READY
+        } catch (_: Exception) {
+            false
+        }
+        var level: Int? = null
+        var type: String? = null
+        var service = false
+        if (Build.VERSION.SDK_INT >= 28) {
+            try {
+                val ss = tm?.signalStrength
+                if (ss != null) {
+                    level = ss.level
+                    if (Build.VERSION.SDK_INT >= 29) {
+                        val list = ss.cellSignalStrengths
+                        service = list.isNotEmpty()
+                        type = when {
+                            list.any { it is android.telephony.CellSignalStrengthNr } -> "5G"
+                            list.any { it is android.telephony.CellSignalStrengthLte } -> "LTE"
+                            list.any {
+                                it is android.telephony.CellSignalStrengthWcdma ||
+                                    it is android.telephony.CellSignalStrengthTdscdma ||
+                                    it is android.telephony.CellSignalStrengthCdma
+                            } -> "3G"
+                            list.any { it is android.telephony.CellSignalStrengthGsm } -> "2G"
+                            else -> null
+                        }
+                    } else {
+                        service = ss.level > 0
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+        val airplane = try {
+            Settings.Global.getInt(ctx.contentResolver, Settings.Global.AIRPLANE_MODE_ON, 0) == 1
+        } catch (_: Exception) {
+            false
+        }
+        val dataSaver = try {
+            cm.restrictBackgroundStatus ==
+                android.net.ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED
+        } catch (_: Exception) {
+            false
+        }
+        return mapOf(
+            "dataUp" to dataUp,
+            "validated" to validated,
+            "defaultCell" to defaultCell,
+            "sim" to simReady,
+            "service" to (service || dataUp),
+            "level" to (if (service || dataUp) level else null),
+            "type" to type,
+            "airplane" to airplane,
+            "dataSaver" to dataSaver,
+        )
     }
 
     private fun open(ctx: Context, intent: Intent) {

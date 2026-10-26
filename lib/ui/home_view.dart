@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../app/link_settings.dart';
 import '../app/people_refresh.dart';
 import '../core/transport.dart';
 import 'people_refresh_view.dart';
@@ -80,6 +81,37 @@ String transportName(TransportKind k) => switch (k) {
   TransportKind.ble => 'Bluetooth',
   TransportKind.internet => 'Internet',
   TransportKind.lora => 'LoRa radio',
+};
+
+/// The Cell / mobile data icon (v1.8.6): bars when the level is known.
+IconData cellIcon(CellState s, int? level) => switch (s) {
+  CellState.off || CellState.saver => Icons.signal_cellular_off,
+  CellState.blocked => Icons.signal_cellular_connected_no_internet_4_bar,
+  CellState.unknown => Icons.signal_cellular_alt,
+  _ => switch (level) {
+    0 => Icons.signal_cellular_0_bar,
+    1 => Icons.signal_cellular_alt_1_bar,
+    2 => Icons.signal_cellular_alt_2_bar,
+    _ => Icons.signal_cellular_alt,
+  },
+};
+
+/// Green = the relay is on mobile data, blue = available, amber =
+/// blocked, grey = off / Offline power save / unknown (like other icons).
+Color cellColor(CellState s) => switch (s) {
+  CellState.active => Colors.green,
+  CellState.available => Colors.blueGrey,
+  CellState.blocked => Colors.orange,
+  _ => Colors.grey,
+};
+
+String cellTooltip(CellState s) => switch (s) {
+  CellState.active => 'Mobile data: in use',
+  CellState.available => 'Mobile data: available',
+  CellState.blocked => 'Mobile data: not reaching the relay',
+  CellState.off => 'Mobile data: no service',
+  CellState.saver => 'Mobile data: off (Offline power save)',
+  CellState.unknown => 'Mobile data',
 };
 
 /// Stable, pleasant color per phone id.
@@ -285,6 +317,9 @@ class HomeBody extends StatelessWidget {
     this.radioAvailable,
     this.onLinkTap,
     this.mobileDataHint = false,
+    this.cell,
+    this.cellLevel,
+    this.onCellTap,
     required this.actions,
     required this.ptt,
   });
@@ -298,6 +333,11 @@ class HomeBody extends StatelessWidget {
   /// Connection icon tapped (v1.8.5).
   final ValueChanged<TransportKind>? onLinkTap;
   final bool mobileDataHint;
+
+  /// The Cell icon (v1.8.6).
+  final CellState? cell;
+  final int? cellLevel;
+  final VoidCallback? onCellTap;
 
   /// Trailing button on the "N on CH 3" header (Who's where).
   final Widget? headerAction;
@@ -347,6 +387,9 @@ class HomeBody extends StatelessWidget {
             onToggleDetails: onToggleDetails,
             onLinkTap: onLinkTap,
             mobileDataHint: mobileDataHint,
+            cell: cell,
+            cellLevel: cellLevel,
+            onCellTap: onCellTap,
           ),
           if (showDetails && details.isNotEmpty)
             ConstrainedBox(
@@ -477,8 +520,16 @@ class StatusRow extends StatelessWidget {
     required this.onToggleDetails,
     this.onLinkTap,
     this.mobileDataHint = false,
+    this.cell,
+    this.cellLevel,
+    this.onCellTap,
   });
   final List<(TransportKind, TransportStatus)> links;
+
+  /// The Cell / mobile data icon (v1.8.6), null = not shown.
+  final CellState? cell;
+  final int? cellLevel;
+  final VoidCallback? onCellTap;
   final ({TransportStatus status, String text}) internet;
   final bool showDetails;
   final ValueChanged<bool> onToggleDetails;
@@ -489,6 +540,22 @@ class StatusRow extends StatelessWidget {
 
   /// Show "Allow mobile data" (on mobile data, relay unreachable).
   final bool mobileDataHint;
+
+  Widget _cellIcon() {
+    final c = cell!;
+    return Tooltip(
+      message: cellTooltip(c),
+      child: InkWell(
+        key: const Key('link-cell'),
+        customBorder: const CircleBorder(),
+        onTap: onCellTap,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(3, 4, 3, 4),
+          child: Icon(cellIcon(c, cellLevel), size: 18, color: cellColor(c)),
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -501,7 +568,7 @@ class StatusRow extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(12, 4, 0, 0),
       child: Row(
         children: [
-          for (final (k, s) in links)
+          for (final (k, s) in links) ...[
             Tooltip(
               message: '${transportName(k)}: ${s.name}',
               child: InkWell(
@@ -520,6 +587,10 @@ class StatusRow extends StatelessWidget {
                 ),
               ),
             ),
+            if (k == TransportKind.internet && cell != null) _cellIcon(),
+          ],
+          if (cell != null && !links.any((l) => l.$1 == TransportKind.internet))
+            _cellIcon(),
           const SizedBox(width: 4),
           Expanded(
             child: InkWell(

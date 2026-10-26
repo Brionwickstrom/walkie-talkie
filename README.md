@@ -331,6 +331,32 @@ decrypt).
 * Private talk to a friend is not saved in the replay history.
 * 1.4 and older phones do not see chats, names, friends or moderation.
 
+## v1.8.6: Cell / mobile data icon
+
+* A **Cell** icon now sits next to the Internet icon in the connection icons
+  at the top left. It shows:
+  * **green bars:** the internet relay is connected over mobile data;
+  * **blue-grey bars:** mobile data is available but the app is on Wi-Fi
+    (or no relay is set);
+  * **orange "no internet" bars:** there is cell service and no Wi-Fi, but
+    the relay cannot be reached. Mobile data is probably off or restricted
+    for this app (or the relay itself is down);
+  * **grey crossed-out icon:** no service, no SIM, airplane mode, or Offline
+    power save, like the other icons.
+* Bars come from Android's signal level (0-4) and the technology (5G / LTE /
+  3G / 2G) from the cell signal types, via
+  `TelephonyManager.getSignalStrength()` (Android 9+, details on 10+). That
+  needs no new permission. The app never asks for READ_PHONE_STATE. Cellular
+  data networks, airplane mode and Data Saver come from ConnectivityManager.
+  The app checks every 5 s and again when you open the sheet.
+* Tapping the icon opens the same status sheet as the other connection
+  icons. **Open phone settings** goes to this app's App info page (Mobile
+  data, Background data, Unrestricted data). **Mobile network settings**
+  opens the phone's mobile network page (`ACTION_DATA_ROAMING_SETTINGS`,
+  falling back to `ACTION_WIRELESS_SETTINGS`).
+* iOS shows a basic grey icon. Its button opens the app's settings page.
+* The Internet icon is unchanged.
+
 ## v1.8.5: pull to refresh (who's here?) and connection settings
 
 * **Pull down** on the Talk screen people list or on Who's where, or tap the

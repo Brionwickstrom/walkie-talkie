@@ -409,6 +409,9 @@ class _HomePageState extends State<HomePage> {
                     radioAvailable: () => c.radioConnected,
                     onLinkTap: (k) => _openLinkSheet(context, k),
                     mobileDataHint: c.mobileDataHint,
+                    cell: c.cellStatus,
+                    cellLevel: c.cellInfo?.level,
+                    onCellTap: () => _openCellSheet(context),
                     notice: c.announcementMode && !c.isAdmin
                         ? Card(
                             margin: const EdgeInsets.fromLTRB(8, 4, 8, 0),
@@ -923,6 +926,32 @@ class _HomePageState extends State<HomePage> {
           }
           await c.openPhoneSettings(info.setting);
         },
+      ),
+    );
+  }
+
+  /// Cell / mobile data icon tapped (v1.8.6).
+  Future<void> _openCellSheet(BuildContext context) async {
+    await c.refreshPhoneNet();
+    if (!context.mounted) return;
+    final state = c.cellStatus;
+    final info = describeCell(state, c.cellInfo, ios: Platform.isIOS);
+    await showAppSheet<void>(
+      context: context,
+      builder: (ctx) => LinkSheetView(
+        kind: TransportKind.internet,
+        icon: cellIcon(state, c.cellInfo?.level),
+        info: info,
+        onAction: () {
+          Navigator.pop(ctx);
+          c.openPhoneSettings(info.setting);
+        },
+        onSecond: info.secondSetting == null
+            ? null
+            : () {
+                Navigator.pop(ctx);
+                c.openPhoneSettings(info.secondSetting!);
+              },
       ),
     );
   }
