@@ -8,6 +8,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import '../app/config.dart';
 import '../app/passcodes.dart';
 import '../app/walkie_controller.dart';
+import '../core/link_policy.dart';
 import '../core/peer.dart';
 import '../core/transport.dart';
 import '../platform/platform_caps.dart';
@@ -355,6 +356,7 @@ class _HomePageState extends State<HomePage> {
                 (t.kind, t.status),
           ],
           internet: c.internetStatus,
+          bestPath: c.connectionSummary.text,
           showDetails: c.settings.showDiagnostics,
           onToggleDetails: c.setShowDiagnostics,
           details: _detailLines(),
@@ -1513,6 +1515,37 @@ class _HomePageState extends State<HomePage> {
                             'over Bluetooth.'
                       : 'Normal: fastest. Phones show up within a few '
                             'seconds. Switch to Saver to use less battery.',
+                  style: Theme.of(ctx).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 12),
+                // v1.9.8: how hard the app works to keep the fastest link.
+                Text(
+                  'Connection speed',
+                  style: Theme.of(ctx).textTheme.titleSmall,
+                ),
+                const SizedBox(height: 6),
+                SegmentedButton<ConnectionSpeed>(
+                  key: const Key('connection-speed'),
+                  showSelectedIcon: false,
+                  segments: const [
+                    ButtonSegment(
+                      value: ConnectionSpeed.maxSpeed,
+                      label: Text(
+                        'Max speed (more battery)',
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                    ButtonSegment(
+                      value: ConnectionSpeed.balanced,
+                      label: Text('Balanced', textAlign: TextAlign.center),
+                    ),
+                  ],
+                  selected: {c.settings.connectionSpeed},
+                  onSelectionChanged: (v) => c.setConnectionSpeed(v.first),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  LinkPolicy.estimate(c.settings.connectionSpeed),
                   style: Theme.of(ctx).textTheme.bodySmall,
                 ),
                 const SizedBox(height: 6),

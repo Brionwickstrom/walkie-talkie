@@ -376,6 +376,13 @@ void main() {
       await a.start(localNodeId: 1, channel: 0x10000 | 0x1a2b);
       await b.start(localNodeId: 2, channel: 0x10000 | 0x1a2b);
       expect(a.status, TransportStatus.running);
+      // v1.9.8: start() returns once the first relay is up; the other one
+      // finishes connecting in the background.
+      final end = DateTime.now().add(const Duration(seconds: 5));
+      while ((s1.clientCount('p1a2b') < 2 || s2.clientCount('p1a2b') < 2) &&
+          DateTime.now().isBefore(end)) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
       expect(s1.clientCount('p1a2b'), 2);
       expect(s2.clientCount('p1a2b'), 2);
       final got = <int>[];

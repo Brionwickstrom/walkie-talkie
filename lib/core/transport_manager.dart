@@ -9,6 +9,7 @@ import '../lora/meshtastic_proto.dart' show loraPayloadBudget;
 import '../lora/meshtastic_channels.dart' show MeshChannelRef;
 
 import 'channel_crypto.dart';
+import 'link_policy.dart';
 import 'lobby.dart';
 import 'frame.dart';
 import 'gateway_protocol.dart';
@@ -226,7 +227,109 @@ class TransportManager {
   /// from the control counter to avoid clashing in v1.1.0 receivers.
   int _audioSeq = 0x8000;
   bool _running = false;
+  bool _started = false;
   bool _talking = false;
+
+  // ------------------------------------------ resilience (v1.9.8)
+
+  /// "Max speed (more battery)" (default) or "Balanced" (Settings).
+  ConnectionSpeed get speed => _speed;
+  ConnectionSpeed _speed = ConnectionSpeed.maxSpeed;
+
+  /// What the app is doing (set by the app: on screen, background); the
+  /// manager itself goes to [ProbeActivity.active] while anyone talks or
+  /// an urgent ring / SOS went out in the last [urgentActiveFor].
+  ProbeActivity _activity = ProbeActivity.foreground;
+  DateTime? _urgentAt;
+  static const urgentActiveFor = Duration(seconds: 60);
+
+  ProbeActivity get activity {
+    if (_talking || _peers.values.any((p) => p.talking)) {
+      return ProbeActivity.active;
+    }
+    final u = _urgentAt;
+    if (u != null && _clock().difference(u) < urgentActiveFor) {
+      return ProbeActivity.active;
+    }
+    return _activity;
+  }
+
+  ProbeActivity? _appliedActivity;
+  ConnectionSpeed? _appliedSpeed;
+
+  /// Current interval for checking idle links ([LinkPolicy.probeInterval]).
+  Duration get probeInterval => LinkPolicy.probeInterval(_speed, activity);
+
+  DateTime? _lastPings;
+  Timer? _missTimer;
+
+  /// Frames sent again on another link after a miss (tests / Details).
+  int resent = 0;
+
+  /// Times a link to some phone started failing (tests / Details).
+  int degradedEvents = 0;
+
+  /// Network changes handled (tests / Details).
+  int networkChanges = 0;
+
+  /// Recently sent frames, for resending on another link after a miss.
+  final List<_RecentSend> _recent = [];
+
+  /// Set "Max speed" / "Balanced".
+  void setSpeed(ConnectionSpeed s) {
+    if (s == _speed) return;
+    _speed = s;
+    _applyProbePlan();
+  }
+
+  /// The app moved on / off screen.
+  void setActivity(ProbeActivity a) {
+    if (a == _activity) return;
+    _activity = a;
+    _applyProbePlan();
+  }
+
+  /// Push the probe / reconnect intervals for the current activity to the
+  /// transports (only when they change).
+  void _applyProbePlan() {
+    final a = activity;
+    if (a == _appliedActivity && _speed == _appliedSpeed) return;
+    final wasActive = _appliedActivity == ProbeActivity.active;
+    _appliedActivity = a;
+    _appliedSpeed = _speed;
+    final probe = LinkPolicy.probeInterval(_speed, a);
+    final cap = LinkPolicy.reconnectCap(_speed, a);
+    for (final t in _transports) {
+      try {
+        t.setProbePlan(probe: probe, reconnectCap: cap);
+      } catch (_) {}
+    }
+    // Something started (talk, ring): check every link right now instead
+    // of at the next tick.
+    if (_started && a == ProbeActivity.active && !wasActive && !_slow) {
+      unawaited(sendPings(force: true));
+    }
+  }
+
+  /// Android said the network changed (Wi-Fi or mobile data up / down,
+  /// v1.9.8): reconnect now instead of waiting for a probe. Presence goes
+  /// out on every link at once, every link to every phone is pinged (a
+  /// link that died with the old network misses within a second and its
+  /// traffic moves), and the local links look for phones again. The relays
+  /// open new sockets on their own (make-before-break, see RelayTransport).
+  Future<void> onNetworkChanged() async {
+    if (!_running) return;
+    networkChanges++;
+    for (final t in _transports) {
+      if (t.lowBandwidth || t.kind == TransportKind.internet) continue;
+      if (t.kind == TransportKind.ble) continue; // not tied to a network
+      try {
+        t.kickDiscovery();
+      } catch (_) {}
+    }
+    await sendHello();
+    await sendPings(force: true);
+  }
 
   /// Phones blocked by the user: everything from them is dropped.
   final Set<int> blocked = {};
@@ -347,8 +450,20 @@ class TransportManager {
     _running = true;
     for (final t in _transports) {
       _subs.add(t.frames.listen(_onInbound));
-      _subs.add(t.statusChanges.listen((_) => _transportChanges.add(null)));
+      var last = t.status;
+      _subs.add(
+        t.statusChanges.listen((st) {
+          _transportChanges.add(null);
+          final became = st == TransportStatus.running && last != st;
+          last = st;
+          // v1.9.8: first success wins. A link that just came up (a relay
+          // connected, Wi-Fi joined) is announced at once, so phones start
+          // using it now instead of at the next hello tick.
+          if (became && _started && _running) _onLinkUp(t);
+        }),
+      );
     }
+    _applyProbePlan();
     // Start transports independently: one failing (e.g. Bluetooth off) must
     // not prevent the others from working.
     await Future.wait(
@@ -367,8 +482,32 @@ class TransportManager {
       const Duration(milliseconds: 500),
       (_) => prune(),
     );
+    _missTimer = Timer.periodic(
+      const Duration(milliseconds: 250),
+      (_) => checkMisses(),
+    );
     await sendHello();
     await sendBeacon();
+    _started = true;
+  }
+
+  void _onLinkUp(Transport t) {
+    if (t.lowBandwidth) return;
+    unawaited(() async {
+      await _safeSend(
+        t,
+        _wire(
+          Frame.control(
+            senderId: localNodeId,
+            channel: _wireChannel,
+            seq: _nextSeq(),
+            message: _helloMessage(),
+          ),
+        ),
+        null,
+      );
+      if (!_slow) await sendPings(force: true);
+    }());
   }
 
   void _startHelloTimer() {
@@ -377,7 +516,8 @@ class TransportManager {
       await sendHello();
       _maybeRadioHello();
       _maybeGatewayTick();
-      if (!_slow) await sendPings();
+      _applyProbePlan();
+      if (!_slow) await _maybePings();
       final now = _clock();
       final last = _lastBeacon;
       if (last == null ||
@@ -439,7 +579,9 @@ class TransportManager {
   Future<void> stop() async {
     if (!_running) return;
     _running = false;
+    _started = false;
     _helloTimer?.cancel();
+    _missTimer?.cancel();
     _radioHelloSoon?.cancel();
     _gatewayHelloSoon?.cancel();
     _pruneTimer?.cancel();
@@ -644,27 +786,43 @@ class TransportManager {
     return _transportOf(k)?.pathTo(p.id);
   }
 
-  /// Broadcast presence on every running transport.
-  Future<void> sendHello() => _broadcastControl(
-    ControlMessage(
-      ControlKind.hello,
-      name: localName,
-      interval: _slow ? currentHelloInterval.inMilliseconds : null,
-      x: helloExtras?.call() ?? const {},
-      lanAddrs: [
-        for (final t in _transports)
-          if (t.status == TransportStatus.running) ...t.localAddresses,
-      ],
-    ),
+  ControlMessage _helloMessage() => ControlMessage(
+    ControlKind.hello,
+    name: localName,
+    interval: _slow ? currentHelloInterval.inMilliseconds : null,
+    x: helloExtras?.call() ?? const {},
+    lanAddrs: [
+      for (final t in _transports)
+        if (t.status == TransportStatus.running) ...t.localAddresses,
+    ],
   );
 
-  /// Ping every peer on every usable link (for round-trip display). Cheap:
-  /// ~40 bytes per link per [helloInterval].
-  Future<void> sendPings() async {
+  Future<void> _maybePings() async {
+    final last = _lastPings;
+    if (last != null &&
+        _clock().difference(last) <
+            LinkPolicy.peerPingInterval(_speed, activity) -
+                const Duration(milliseconds: 100)) {
+      return;
+    }
+    await sendPings();
+  }
+
+  /// Broadcast presence on every running transport.
+  Future<void> sendHello() => _broadcastControl(_helloMessage());
+
+  /// Ping every peer on every usable link: round trip for the ranking and
+  /// the status line, and (v1.9.8) failure detection: a ping not answered
+  /// within [LinkPolicy.missDeadline] marks that link failing (see
+  /// [checkMisses]). Cheap: ~40 bytes per link. Rides on the hello tick,
+  /// at most every [LinkPolicy.peerPingInterval] (see [_maybePings]).
+  Future<void> sendPings({bool force = true}) async {
     final now = _clock();
+    _lastPings = now;
     final futures = <Future<void>>[];
     for (final p in _peers.values) {
       for (final kind in fastLinks(p, now)) {
+        p.pingOut.putIfAbsent(kind, () => now);
         final bytes = _wire(
           Frame.control(
             senderId: localNodeId,
@@ -716,17 +874,45 @@ class TransportManager {
   List<TransportKind> routeTo(int peerId) {
     final p = _peers[peerId];
     if (p == null) return const [];
-    final now = _clock();
-    final links = fastLinks(p, now);
-    if (links.isEmpty) return const [];
-    final bestSeen = p.lastSeen[links.first];
-    if (links.length > 1 &&
-        bestSeen != null &&
-        now.difference(bestSeen) > staleAfter) {
-      return [links[0], links[1]];
-    }
-    return [links.first];
+    return _route(p, _clock());
   }
+
+  /// The links a frame to [p] goes out on (v1.9.8): the best one while it
+  /// is healthy; while it misses pings or has gone quiet for [staleAfter],
+  /// also every next one down to the first healthy link (at most 3), so
+  /// the backup carries the traffic at once and the best one can still
+  /// recover (make-before-break).
+  List<TransportKind> _route(Peer p, DateTime now) {
+    final fast = fastLinks(p, now);
+    if (fast.isEmpty) return const [];
+    // Ranked as if nothing failed: a failing link that would be best still
+    // gets a copy (it may only be lossy, and recovers without a gap) until
+    // it misses [LinkPolicy.missesForDown] checks in a row.
+    final links = LinkPolicy.rank(fast, rtt: (k) => p.rtt[k]);
+    bool down(TransportKind k) =>
+        (p.misses[k] ?? 0) >= LinkPolicy.missesForDown;
+    bool healthy(TransportKind k) {
+      if (isDegraded(p, k)) return false;
+      final seen = p.lastSeen[k];
+      return seen == null || now.difference(seen) <= staleAfter;
+    }
+
+    final out = <TransportKind>[];
+    for (final k in links) {
+      if (down(k) && fast.length > 1) continue;
+      out.add(k);
+      if (healthy(k) || out.length >= 3) break;
+    }
+    if (out.isEmpty) out.add(fast.first);
+    // A failing best link: the healthy backup goes first.
+    if (out.length > 1 && isDegraded(p, out.first) && healthy(out.last)) {
+      out.insert(0, out.removeLast());
+    }
+    return out;
+  }
+
+  /// The link to [p] on [k] missed a ping (v1.9.8, see [checkMisses]).
+  bool isDegraded(Peer p, TransportKind k) => (p.misses[k] ?? 0) >= 1;
 
   /// Best usable link to [peerId], or null if it is not reachable now. A
   /// peer reachable only through the mesh reports [TransportKind.ble] (the
@@ -1240,6 +1426,11 @@ class TransportManager {
   /// Unicast [frame] to one peer over its best link(s). False if the peer
   /// is not reachable right now.
   Future<bool> sendFrameTo(int peerId, Frame frame) async {
+    _noteActivity(frame);
+    if (isUrgentFrame(frame)) {
+      await _sendEverywhere(frame, to: peerId);
+      return isReachable(peerId) || hasGateway;
+    }
     final route = routeTo(peerId);
     if (route.isEmpty) {
       if (meshReachable(peerId)) {
@@ -1261,6 +1452,9 @@ class TransportManager {
       return false;
     }
     final bytes = _wire(frame);
+    _remember(frame, bytes, {
+      for (final k in route) k: {peerId},
+    });
     await Future.wait(
       route.map((k) => _safeSend(_transportOf(k)!, bytes, {peerId})),
     );
@@ -1354,10 +1548,42 @@ class TransportManager {
     final big = payload.isNotEmpty && payload[0] & 0xF == 9;
     final radioUp =
         radio && !big && r != null && r.status == TransportStatus.running;
+    // v1.9.8: SOS (and SOS answers) on every path at once. Floods already
+    // do; one addressed to a phone goes on every running fast link too.
+    final sos = pr == LoraPriority.sos;
+    if (sos) {
+      urgentSends++;
+      _urgentAt = _clock();
+      _applyProbePlan();
+    }
     if (to != null) {
+      if (fast && sos) {
+        final all = _transports
+            .where(
+              (t) => t.status == TransportStatus.running && !t.lowBandwidth,
+            )
+            .toList();
+        mesh.markSeen(meshPacketId(bytes));
+        if (hasMeshNeighbours) {
+          final m = mesh.originate(bytes, to: to);
+          if (m != null) _sendMesh(m);
+        }
+        await Future.wait(all.map((t) => _safeSend(t, bytes, {to})));
+        var ok = all.isNotEmpty;
+        if (radioUp && r.sendRadio(bytes, peerIds: {to}, priority: pr)) {
+          ok = true;
+        }
+        if (radio && !big && hasGateway && _sendGateway(bytes, pr, to: to)) {
+          ok = true;
+        }
+        return ok && isReachable(to) ? {to} : const {};
+      }
       if (fast) {
         final route = routeTo(to);
         if (route.isNotEmpty) {
+          _remember(frame, bytes, {
+            for (final k in route) k: {to},
+          });
           await Future.wait(
             route.map((k) => _safeSend(_transportOf(k)!, bytes, {to})),
           );
@@ -1401,6 +1627,7 @@ class TransportManager {
     }
     if (fast) {
       final routes = routeForChannel();
+      _remember(frame, bytes, routes);
       if (_hasMeshOnlyPeers()) {
         final direct = <int>{for (final s in routes.values) ...s};
         final m = mesh.originate(bytes, skip: direct);
@@ -1460,22 +1687,272 @@ class TransportManager {
     final routes = <TransportKind, Set<int>>{};
     for (final p in _peers.values) {
       if (p.channel != scope) continue;
-      final links = fastLinks(p, now);
-      if (links.isEmpty) continue;
-      routes.putIfAbsent(links.first, () => <int>{}).add(p.id);
-      final bestSeen = p.lastSeen[links.first];
-      if (links.length > 1 &&
-          bestSeen != null &&
-          now.difference(bestSeen) > staleAfter) {
-        routes.putIfAbsent(links[1], () => <int>{}).add(p.id);
+      for (final k in _route(p, now)) {
+        routes.putIfAbsent(k, () => <int>{}).add(p.id);
       }
     }
     return routes;
   }
 
+  // -------------------------------------- failover (v1.9.8)
+
+  /// Frames worth sending again on another link when the one they went
+  /// out on fails: chat / voice clip chunks and acks, rings, beeps, ring
+  /// answers, rekeys, Trip messages. Never live audio (it just continues
+  /// on the new path), presence or pings.
+  static bool _resendable(Frame f) {
+    switch (f.type) {
+      case FrameType.data:
+      case FrameType.trip:
+        return true;
+      case FrameType.control:
+        final k = f.control?.kind;
+        return k == ControlKind.ring ||
+            k == ControlKind.beep ||
+            k == ControlKind.ringAck ||
+            k == ControlKind.rekey ||
+            k == ControlKind.rekeyAck;
+      default:
+        return false;
+    }
+  }
+
+  void _remember(Frame f, Uint8List bytes, Map<TransportKind, Set<int>> to) {
+    if (!_resendable(f) || to.isEmpty) return;
+    final now = _clock();
+    _recent.removeWhere((r) => now.difference(r.at) > LinkPolicy.resendWindow);
+    _recent.add(
+      _RecentSend(now, bytes, {
+        for (final e in to.entries) e.key: {...e.value},
+      }),
+    );
+    if (_recent.length > 200) _recent.removeAt(0);
+  }
+
+  /// Run every 250 ms: a ping not answered within
+  /// [LinkPolicy.missDeadline] is a miss. On the first miss the link
+  /// counts as failing: routing sends on the next best link at once and
+  /// what went out on the failing link in the last
+  /// [LinkPolicy.resendWindow] is sent again there (receivers drop the
+  /// copies by sender + sequence). Public for tests.
+  void checkMisses() {
+    if (!_running) return;
+    final now = _clock();
+    var changed = false;
+    for (final p in _peers.values) {
+      final out = Map.of(p.pingOut);
+      for (final e in out.entries) {
+        final k = e.key;
+        if (now.difference(e.value) <= LinkPolicy.missDeadline(p.rtt[k])) {
+          continue;
+        }
+        // Window over: the next ping opens a new one.
+        p.pingOut.remove(k);
+        final m = (p.misses[k] ?? 0) + 1;
+        p.misses[k] = m;
+        if (m == 1) {
+          degradedEvents++;
+          changed = true;
+          _failover(p, k, now);
+        }
+        if (m == LinkPolicy.missesForDown) changed = true;
+      }
+    }
+    if (changed) {
+      for (final p in _peers.values) {
+        p.activeLink = _bestLink(p, now);
+      }
+      _emitPeers();
+    }
+  }
+
+  void _failover(Peer p, TransportKind failed, DateTime now) {
+    final route = [
+      for (final k in _route(p, now))
+        if (k != failed) k,
+    ];
+    if (route.isEmpty) return;
+    for (final r in _recent) {
+      if (now.difference(r.at) > LinkPolicy.resendWindow) continue;
+      final onFailed = r.to[failed]?.contains(p.id) ?? false;
+      if (!onFailed) continue;
+      final elsewhere = r.to.entries.any(
+        (e) => e.key != failed && e.value.contains(p.id),
+      );
+      if (elsewhere) continue;
+      final k = route.first;
+      final t = _transportOf(k);
+      if (t == null) continue;
+      resent++;
+      r.to.putIfAbsent(k, () => <int>{}).add(p.id);
+      unawaited(_safeSend(t, r.bytes, {p.id}));
+    }
+  }
+
+  // -------------------------------------------- status line (v1.9.8)
+
+  static String _plainLabel(TransportKind k) => switch (k) {
+    TransportKind.internet => 'Internet',
+    TransportKind.lan => 'Wi-Fi',
+    TransportKind.wifiDirect => 'Wi-Fi Direct',
+    TransportKind.ble => 'Bluetooth',
+    TransportKind.lora => 'LoRa radio',
+  };
+
+  /// The best path right now and how many others are ready, e.g.
+  /// "Direct 42 ms · 3 backups ready" (see [ConnectionSummary]).
+  ConnectionSummary connectionSummary() {
+    final now = _clock();
+    // Paths that work right now, best first: (label, kind, round trip).
+    final paths = <(String, TransportKind, Duration?)>[];
+    final seen = <String>{};
+    void add(String label, TransportKind k, Duration? rtt) {
+      if (seen.add(label)) paths.add((label, k, rtt));
+    }
+
+    // 1. What phones on our channel are reached over, fastest first.
+    final used = <(String, TransportKind, Duration?)>[];
+    for (final p in _peers.values) {
+      if (p.channel != scope) continue;
+      for (final k in fastLinks(p, now)) {
+        final t = _transportOf(k)!;
+        final label = k == TransportKind.internet
+            ? (t.pathTo(p.id) ?? t.pathLabel ?? 'Internet')
+            : _plainLabel(k);
+        used.add((label, k, isDegraded(p, k) ? null : p.rtt[k]));
+      }
+    }
+    final ranked = LinkPolicy.rank(
+      {for (final u in used) u.$2},
+      rtt: (k) {
+        Duration? best;
+        for (final u in used) {
+          if (u.$2 == k && u.$3 != null && (best == null || u.$3! < best)) {
+            best = u.$3;
+          }
+        }
+        return best;
+      },
+    );
+    for (final k in ranked) {
+      final mine = used.where((u) => u.$2 == k).toList()
+        ..sort((a, b) {
+          final ra = a.$3, rb = b.$3;
+          if (ra == null) return rb == null ? 0 : 1;
+          if (rb == null) return -1;
+          return ra.compareTo(rb);
+        });
+      for (final u in mine) {
+        add(u.$1, u.$2, u.$3);
+      }
+    }
+    // 2. Links that are up and ready even with nobody on them yet.
+    for (final t in _transports) {
+      if (t.status != TransportStatus.running) continue;
+      if (t.kind == TransportKind.internet) {
+        final rp = t.readyPaths;
+        if (rp.isEmpty) add('Internet', t.kind, t.probeRtt);
+        for (final (label, rtt) in rp) {
+          add(label, t.kind, rtt);
+        }
+      } else if (t.kind == TransportKind.lora) {
+        add('LoRa radio', t.kind, null);
+      }
+    }
+    if (hasGateway) add('Home gateway (LoRa)', TransportKind.lora, null);
+    if (paths.isEmpty) {
+      return ConnectionSummary(
+        best: null,
+        bestRtt: null,
+        backups: 0,
+        checkEvery: probeInterval,
+      );
+    }
+    final best = paths.first;
+    return ConnectionSummary(
+      best: best.$1,
+      bestRtt: best.$3,
+      backups: paths.length - 1,
+      checkEvery: probeInterval,
+      failing: _peers.values.any(
+        (p) => p.channel == scope && p.misses.values.any((m) => m > 0),
+      ),
+    );
+  }
+
+  /// Urgent: an urgent ring or an SOS (start, repeat, answer). These go
+  /// out on every path at once (v1.9.8).
+  static bool isUrgentFrame(Frame f) {
+    if (f.type == FrameType.control) {
+      final m = f.control;
+      return m != null && m.kind == ControlKind.ring && m.urgent;
+    }
+    if (f.type == FrameType.trip) {
+      return tripRadioPriority(f.payload) == LoraPriority.sos;
+    }
+    return false;
+  }
+
+  /// Urgent frames sent on every path (tests / Details).
+  int urgentSends = 0;
+
+  /// Send [frame] on every running fast link (to [to], or everyone), the
+  /// phone mesh, the LoRa radio (through its ring repeat limits and
+  /// airtime queue, at urgent priority) and the LoRa gateways, all at
+  /// once. Returns the phones it was handed to.
+  Future<Set<int>> _sendEverywhere(Frame frame, {int? to}) async {
+    urgentSends++;
+    _urgentAt = _clock();
+    _applyProbePlan();
+    final bytes = _wire(frame);
+    final targets = to != null ? {to} : reachablePeersOn(scope);
+    final fast = _transports
+        .where((t) => t.status == TransportStatus.running && !t.lowBandwidth)
+        .toList();
+    mesh.markSeen(meshPacketId(bytes));
+    if (hasMeshNeighbours) {
+      final m = mesh.originate(bytes, to: to ?? 0);
+      if (m != null) _sendMesh(m);
+    }
+    if (radioAllowed(frame)) {
+      final pr = _radioPriority(frame);
+      final r = radio;
+      if (r != null && r.status == TransportStatus.running) {
+        r.sendRadio(bytes, peerIds: to == null ? null : {to}, priority: pr);
+      }
+      if (hasGateway) _sendGateway(bytes, pr, to: to);
+    }
+    await Future.wait(
+      fast.map((t) => _safeSend(t, bytes, to == null ? null : {to})),
+    );
+    return targets;
+  }
+
+  /// Rings, beeps and SOS make the app check links at the fastest rate
+  /// for [urgentActiveFor].
+  void _noteActivity(Frame f) {
+    final k = f.type == FrameType.control ? f.control?.kind : null;
+    final ring =
+        k == ControlKind.ring ||
+        k == ControlKind.beep ||
+        k == ControlKind.ringAck;
+    final sos =
+        f.type == FrameType.trip &&
+        tripRadioPriority(f.payload) == LoraPriority.sos;
+    if (!ring && !sos) return;
+    _urgentAt = _clock();
+    _applyProbePlan();
+  }
+
   Future<void> _sendToChannel(Frame frame) async {
+    _noteActivity(frame);
+    if (isUrgentFrame(frame)) {
+      await _sendEverywhere(frame);
+      return;
+    }
     final bytes = _wire(frame);
     final routes = routeForChannel();
+    _remember(frame, bytes, routes);
     // Phones on our channel heard only through the mesh: also hand the
     // packet to mesh neighbours that are not getting the direct copy. The
     // direct sends above are unchanged and never wait for this.
@@ -1548,8 +2025,16 @@ class TransportManager {
       if (!t.canReach(p.id)) continue;
       ts.add(t);
     }
+    // v1.9.8: tiers (internet, Wi-Fi, nearby, LoRa), measured round trip
+    // inside a tier, failing links last, and a clearly faster link first
+    // (see LinkPolicy.rank). A transport with a custom priority (tests,
+    // friend rooms) keeps the old order among equals.
     ts.sort((a, b) => b.priority.compareTo(a.priority));
-    return [for (final t in ts) t.kind];
+    return LinkPolicy.rank(
+      [for (final t in ts) t.kind],
+      rtt: (k) => p.rtt[k],
+      degraded: (k) => isDegraded(p, k),
+    );
   }
 
   /// Links heard recently (each with its own timeout), any state: for the
@@ -1804,6 +2289,7 @@ class TransportManager {
     var changed = before != peer.activeLink || meshChanged;
 
     if (!duplicate) {
+      _noteActivity(f);
       switch (f.type) {
         case FrameType.control:
           final msg = f.control;
@@ -1887,6 +2373,12 @@ class TransportManager {
                   final rtt = now.millisecondsSinceEpoch - msg.time!;
                   if (rtt >= 0 && rtt < 30000) {
                     peer.rtt[inbound.transport] = Duration(milliseconds: rtt);
+                    changed = true;
+                  }
+                  // v1.9.8: answered, so the link works (again).
+                  peer.pingOut.remove(inbound.transport);
+                  if ((peer.misses.remove(inbound.transport) ?? 0) > 0) {
+                    peer.activeLink = _bestLink(peer, now);
                     changed = true;
                   }
                 }
@@ -1991,6 +2483,8 @@ class TransportManager {
         return now.difference(t) > lt;
       });
       p.rtt.removeWhere((k, _) => !p.lastSeen.containsKey(k));
+      p.pingOut.removeWhere((k, _) => !p.lastSeen.containsKey(k));
+      p.misses.removeWhere((k, _) => !p.lastSeen.containsKey(k));
       final best = _bestLink(p, now);
       if (best != p.activeLink) {
         p.activeLink = best;
@@ -2036,6 +2530,51 @@ class TransportManager {
   void _emitPeers() {
     if (!_peerChanges.isClosed) _peerChanges.add(peers);
   }
+}
+
+/// The status line (v1.9.8): "Direct 42 ms · 3 backups ready".
+class ConnectionSummary {
+  const ConnectionSummary({
+    required this.best,
+    required this.bestRtt,
+    required this.backups,
+    required this.checkEvery,
+    this.failing = false,
+  });
+
+  /// "Direct", "Home relay", "Wi-Fi", "Bluetooth", ... null = nothing up.
+  final String? best;
+  final Duration? bestRtt;
+
+  /// Other paths that are up and ready to take over.
+  final int backups;
+  final Duration checkEvery;
+
+  /// Some link to a phone just missed a check (backups are carrying it).
+  final bool failing;
+
+  String get text {
+    final b = best;
+    if (b == null) {
+      return 'Looking for a connection · checking every '
+          '${checkEvery.inSeconds} s';
+    }
+    final ms = bestRtt == null ? '' : ' ${bestRtt!.inMilliseconds} ms';
+    final ready = switch (backups) {
+      0 => 'no backup yet',
+      1 => '1 backup ready',
+      _ => '$backups backups ready',
+    };
+    return '$b$ms · $ready';
+  }
+}
+
+/// A frame we sent recently and where it went (v1.9.8 failover).
+class _RecentSend {
+  _RecentSend(this.at, this.bytes, this.to);
+  final DateTime at;
+  final Uint8List bytes;
+  final Map<TransportKind, Set<int>> to;
 }
 
 /// Remembers the last [size] sequence numbers seen from one sender.

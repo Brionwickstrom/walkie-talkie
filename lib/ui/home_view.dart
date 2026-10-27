@@ -309,6 +309,7 @@ class HomeBody extends StatelessWidget {
     this.banners = const [],
     required this.links,
     required this.internet,
+    this.bestPath,
     required this.showDetails,
     required this.onToggleDetails,
     this.details = const [],
@@ -372,6 +373,10 @@ class HomeBody extends StatelessWidget {
   final List<Widget> banners;
   final List<(TransportKind, TransportStatus)> links;
   final ({TransportStatus status, String text}) internet;
+
+  /// v1.9.8: "Direct 42 ms · 3 backups ready" (best path right now and
+  /// how many others are ready to take over), null = not shown.
+  final String? bestPath;
   final bool showDetails;
   final ValueChanged<bool> onToggleDetails;
   final List<String> details;
@@ -418,6 +423,29 @@ class HomeBody extends StatelessWidget {
             cellLevel: cellLevel,
             onCellTap: onCellTap,
           ),
+          if (bestPath != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 2),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.swap_horiz,
+                    size: 15,
+                    color: theme.colorScheme.outline,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      bestPath!,
+                      key: const Key('best-path'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           if (showDetails && details.isNotEmpty)
             ConstrainedBox(
               constraints: const BoxConstraints(maxHeight: 120),

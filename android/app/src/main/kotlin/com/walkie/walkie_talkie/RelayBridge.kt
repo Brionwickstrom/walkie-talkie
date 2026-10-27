@@ -217,7 +217,7 @@ class RelayBridge(private val context: Context) {
 
     private fun changed() {
         main.removeCallbacks(notify)
-        main.postDelayed(notify, 700)
+        main.postDelayed(notify, 250) // v1.9.8: was 700 ms
     }
 
     @Synchronized

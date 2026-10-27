@@ -20,6 +20,13 @@ class Peer {
   /// Last measured round trip per transport (ping/pong).
   final Map<TransportKind, Duration> rtt = {};
 
+  /// v1.9.8: when the oldest unanswered ping on each link went out.
+  final Map<TransportKind, DateTime> pingOut = {};
+
+  /// v1.9.8: pings missed in a row per link (1+ = failing: traffic moves
+  /// to the next best link at once). Cleared by the next pong.
+  final Map<TransportKind, int> misses = {};
+
   /// LAN endpoints the peer advertised in its hello ("ip:port").
   List<String> lanAddrs = const [];
 

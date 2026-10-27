@@ -120,6 +120,29 @@ abstract class Transport {
   /// Wi-Fi Direct). Implies [setPowerSaver].
   void setOfflineSaver(bool on) {}
 
+  /// v1.9.8: how often to check this link while idle ([probe]: relay
+  /// keep-alive pings) and the longest wait between reconnect attempts
+  /// ([reconnectCap]), from [LinkPolicy] for the app's current activity and
+  /// the "Max speed" / "Balanced" setting. Links without such timers
+  /// ignore it.
+  void setProbePlan({
+    required Duration probe,
+    required Duration reconnectCap,
+  }) {}
+
+  /// Best measured round trip on this link right now (relay ping/pong),
+  /// null when unknown. For the status line.
+  Duration? get probeRtt => null;
+
+  /// Which part of this link is the fastest right now ("Home relay",
+  /// "Backup relay"), for the status line; null = [TransportKind.label].
+  String? get pathLabel => null;
+
+  /// Sub-paths of this link that are up right now, fastest first, with
+  /// their round trip when measured (the internet: each connected relay).
+  /// Empty = just this link as a whole.
+  List<(String, Duration?)> get readyPaths => const [];
+
   /// Pull-to-refresh (v1.8.5): look for phones right now, once (a subnet
   /// sweep, a Wi-Fi Direct discovery burst, a Bluetooth scan burst, a
   /// relay reconnect when it is down). Cheap and bounded; the normal

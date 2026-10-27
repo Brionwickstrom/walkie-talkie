@@ -195,15 +195,13 @@ void main() {
         expect(m.activeLabel, 'Backup relay');
         expect(m.summary.status, TransportStatus.running);
         expect(m.summary.text, contains('Backup relay; home relay'));
+        expect(m.relays.first.maxBackoff, m.homeRetryWhileOnBackup);
+        // v1.9.8: home recovery is re-checked within seconds (was 2.5 min).
         expect(
-          m.relays.first.maxBackoff,
-          MultiRelayTransport.homeRetryWhileOnBackup,
-        );
-        expect(
-          MultiRelayTransport.homeRetryWhileOnBackup,
+          m.homeRetryWhileOnBackup,
           allOf(
-            greaterThanOrEqualTo(const Duration(minutes: 2)),
-            lessThanOrEqualTo(const Duration(minutes: 3)),
+            greaterThanOrEqualTo(const Duration(seconds: 5)),
+            lessThanOrEqualTo(const Duration(seconds: 30)),
           ),
         );
         // Quick retry happened (2 attempts), then normal backoff.
@@ -218,12 +216,12 @@ void main() {
       },
     );
 
-    test('nothing up: home retry cap back to the normal 30 s', () async {
+    test('nothing up: home retry cap back to the normal (short) one', () async {
       final n = _Net()..down.addAll(['home.test', 'backup.test']);
       final m = _multi(n);
       await m.start(localNodeId: 1, channel: 1);
       await _until(() => m.status == TransportStatus.error);
-      expect(m.relays.first.maxBackoff, MultiRelayTransport.homeRetryAlone);
+      expect(m.relays.first.maxBackoff, m.homeRetryAlone);
       expect(m.activeRole, isNull);
       expect(m.summary.text, startsWith('Internet: offline'));
       await m.dispose();

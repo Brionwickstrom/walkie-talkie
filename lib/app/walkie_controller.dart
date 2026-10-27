@@ -32,6 +32,7 @@ import '../audio/live_gate.dart';
 import '../chat/chat_body.dart';
 import '../chat/chat_store.dart';
 import '../chat/photo.dart';
+import '../core/link_policy.dart';
 import '../core/channel_crypto.dart';
 import '../core/frame.dart';
 import '../core/gateway_protocol.dart' show GatewayInfo;
@@ -665,6 +666,10 @@ class WalkieController extends ChangeNotifier {
       internetStatus.text,
       'Relay: ${[for (final r in _relay.relays) '${_relay.labelOf(r)} ${r.serverUri?.host} ${r.status.name}${r.lastError != null && r.status != TransportStatus.running ? ' (${r.lastError})' : ''}'].join(', ')}',
       'Relay in use: ${relayInUse ?? 'none'}',
+      'Fastest path: ${connectionSummary.text} · ${settings.connectionSpeed.name}, '
+          '${manager.activity.name}, check every ${manager.probeInterval.inSeconds} s · '
+          'switches ${manager.degradedEvents}, resent ${manager.resent}, '
+          'urgent ${manager.urgentSends}, network changes ${manager.networkChanges}',
       'Direct links: ${_relay.direct?.debugInfo ?? 'off'}'
           '${directPeers.isNotEmpty ? ' (${directPeers.map((id) => id.toRadixString(16)).join(', ')})' : ''}',
       for (final t in manager.transports)
@@ -1358,7 +1363,19 @@ class WalkieController extends ChangeNotifier {
     );
     await manager.setPowerSaver(settings.powerSaver);
     await manager.setOfflineSaver(settings.offlineSaver);
+    // v1.9.8: connection speed plan and network-change reconnects.
+    manager.setSpeed(settings.connectionSpeed);
+    manager.setActivity(
+      foreground ? ProbeActivity.foreground : ProbeActivity.idle,
+    );
     await manager.start();
+    _subs.add(
+      networkChanges.listen((net) {
+        if (settings.offlineSaver) return;
+        debugLog.add('net', 'network changed ($net): reconnecting now');
+        unawaited(manager.onNetworkChanged());
+      }),
+    );
     _subs.add(manager.lobby.listen(whosWhere.onLobby));
     _subs.add(manager.probes.listen(whosWhere.onProbe));
     await whosWhere.setForeground(foreground);
@@ -1681,6 +1698,9 @@ class WalkieController extends ChangeNotifier {
       debugLog.add('app', foreground ? 'on screen' : 'background (${s.name})');
     }
     unawaited(whosWhere.setForeground(foreground));
+    manager.setActivity(
+      foreground ? ProbeActivity.foreground : ProbeActivity.idle,
+    );
     if (s != AppLifecycleState.detached) _wasVisible = true;
     if (foreground && !wasForeground) {
       for (final id in _talkingPrev) {
@@ -2037,6 +2057,23 @@ class WalkieController extends ChangeNotifier {
     await whosWhere.setPlan(powerPlan);
     await trip?.onPowerChanged();
   }
+
+  /// v1.9.8: "Max speed (more battery)" or "Balanced".
+  Future<void> setConnectionSpeed(ConnectionSpeed s) async {
+    if (settings.connectionSpeed == s) return;
+    settings.connectionSpeed = s;
+    debugLog.add('net', 'Connection speed: ${s.name}');
+    notifyListeners();
+    await settingsStore.save(settings);
+    manager.setSpeed(s);
+  }
+
+  /// Android network callbacks (Wi-Fi / mobile data up or down) or the
+  /// desktop adapter watch; tests may replace it.
+  Stream<String> networkChanges = RelayConnector.platform().networkChanges;
+
+  /// The status line (v1.9.8): "Direct 42 ms · 3 backups ready".
+  ConnectionSummary get connectionSummary => manager.connectionSummary();
 
   /// Offline power save on (the app theme listens: dim + dark).
   late final ValueNotifier<bool> offlineUi = ValueNotifier(

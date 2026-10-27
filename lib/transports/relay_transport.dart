@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import '../core/frame.dart';
+import '../core/link_policy.dart';
 import '../core/listeners.dart';
 import '../core/transport.dart';
 import 'direct_links.dart';
@@ -29,7 +30,7 @@ class RelayTransport extends Transport {
   RelayTransport({
     this._serverUri,
     RelayConnector? connector,
-    this.minBackoff = const Duration(seconds: 2),
+    this.minBackoff = LinkPolicy.reconnectMin,
     this.maxBackoff = const Duration(seconds: 30),
     this.connectTimeout = const Duration(seconds: 75),
     this.pingInterval = const Duration(seconds: 25),
@@ -222,31 +223,7 @@ class RelayTransport extends Transport {
         await ws.close();
         return;
       }
-      _ws = ws;
-      _connects++;
-      _connectedAt = DateTime.now();
-      _lastRx = DateTime.now();
-      _lastError = null;
-      _quickUsed = false;
-      _sub = ws.messages.listen((data) {
-        _lastRx = DateTime.now();
-        if (data is Uint8List) {
-          final f = Frame.tryDecode(data);
-          if (f != null && !_framesCtl.isClosed) {
-            _framesCtl.add(InboundFrame(f, TransportKind.internet));
-          }
-        }
-        // Text: "pong" only refreshes liveness; relay 1.4.0 rosters.
-        if (data is String && roster) {
-          final r = RelayRoster.tryParse(data);
-          if (r != null) {
-            lastRoster = r;
-            if (!_rosterCtl.isClosed) _rosterCtl.add(r);
-          }
-        }
-      }, onDone: () => _onLost(ws, ws.closeReason ?? 'connection closed'));
-      _startPing();
-      _setStatus(TransportStatus.running);
+      _attach(ws);
     } catch (e) {
       if (attempt == _attempt) {
         _lastError = '$e';
@@ -271,11 +248,133 @@ class RelayTransport extends Transport {
     }
   }
 
+  /// Make [ws] the open socket (a fresh connect, or a replacement after a
+  /// network change: then the old one is closed once this one is up).
+  void _attach(RelaySocket ws) {
+    final old = _ws;
+    final oldSub = _sub;
+    _ws = ws;
+    _connects++;
+    _connectedAt = DateTime.now();
+    _lastRx = DateTime.now();
+    _lastError = null;
+    _quickUsed = false;
+    _pingSentAt = null;
+    _pongMisses = 0;
+    _pongTimer?.cancel();
+    _sub = ws.messages.listen((data) {
+      _lastRx = DateTime.now();
+      if (data is Uint8List) {
+        final f = Frame.tryDecode(data);
+        if (f != null && !_framesCtl.isClosed) {
+          _framesCtl.add(InboundFrame(f, TransportKind.internet));
+        }
+      }
+      if (data is String) {
+        if (identical(ws, _ws) && data.trim() == 'pong') _onPong();
+        // Relay 1.4.0 rosters.
+        if (roster) {
+          final r = RelayRoster.tryParse(data);
+          if (r != null) {
+            lastRoster = r;
+            if (!_rosterCtl.isClosed) _rosterCtl.add(r);
+          }
+        }
+      }
+    }, onDone: () => _onLost(ws, ws.closeReason ?? 'connection closed'));
+    if (old != null) {
+      unawaited(oldSub?.cancel());
+      unawaited(old.close());
+    }
+    _startPing();
+    _setStatus(TransportStatus.running);
+    // Measure the round trip right away (status line, ranking).
+    _keepAlive();
+  }
+
   bool _saver = false;
+
+  // ------------------------------------------- probing (v1.9.8)
+
+  /// Ping interval from the app's [LinkPolicy] plan (null = [pingInterval]).
+  Duration? _probe;
+  DateTime? _pingSentAt;
+  int _pongMisses = 0;
+  Timer? _pongTimer;
+  Duration? _pongRtt;
+
+  /// Last "ping" -> "pong" round trip on the open socket.
+  @override
+  Duration? get probeRtt => _ws == null ? null : _pongRtt;
+
+  /// The relay missed its last pong deadline (socket may be dying).
+  bool get degraded => _ws != null && _pongMisses > 0;
+
+  /// Sockets replaced because pongs stopped (tests / Details).
+  int pongReconnects = 0;
 
   /// Battery saver pings half as often (our hellos still keep the server
   /// side busy; a dead socket is noticed a bit later).
-  Duration get currentPingInterval => _saver ? pingInterval * 2 : pingInterval;
+  Duration get currentPingInterval {
+    final base = _probe ?? pingInterval;
+    return _saver ? base * 2 : base;
+  }
+
+  @override
+  void setProbePlan({required Duration probe, required Duration reconnectCap}) {
+    final changed = probe != _probe;
+    _probe = probe;
+    maxBackoff = reconnectCap;
+    if (_backoff > maxBackoff) _backoff = maxBackoff;
+    if (changed && _ping != null) _startPing();
+    // Waiting out a long retry from an older, slower plan: retry sooner.
+    final at = _retryAt;
+    if (_retry != null &&
+        _ws == null &&
+        _retryDelay == null &&
+        at != null &&
+        at.difference(DateTime.now()) > maxBackoff) {
+      _retry?.cancel();
+      _retryAt = DateTime.now().add(maxBackoff);
+      _retry = Timer(maxBackoff, () {
+        _retry = null;
+        if (_wanted && _ws == null) _connect();
+      });
+    }
+  }
+
+  DateTime? _retryAt;
+
+  void _onPong() {
+    final sent = _pingSentAt;
+    if (sent != null) {
+      _pongRtt = DateTime.now().difference(sent);
+    }
+    _pingSentAt = null;
+    _pongTimer?.cancel();
+    final wasDegraded = _pongMisses > 0;
+    _pongMisses = 0;
+    if (wasDegraded && !_statusCtl.isClosed) _statusCtl.add(_status);
+  }
+
+  /// No pong within [LinkPolicy.relayPongDeadline]: a miss. After
+  /// [LinkPolicy.relayMissesForReconnect] in a row the socket is replaced
+  /// right away (the other relays and direct links carry the traffic
+  /// meanwhile).
+  void _onPongDeadline(RelaySocket ws) {
+    if (!identical(ws, _ws) || _pingSentAt == null) return;
+    _pingSentAt = null;
+    _pongMisses++;
+    if (!_statusCtl.isClosed) _statusCtl.add(_status);
+    if (_pongMisses >= LinkPolicy.relayMissesForReconnect) {
+      pongReconnects++;
+      _backoff = Duration.zero;
+      _onLost(ws, 'no answer from relay');
+      return;
+    }
+    // Check again now instead of a whole interval later.
+    _keepAlive();
+  }
 
   @override
   void setPowerSaver(bool on) {
@@ -289,17 +388,41 @@ class RelayTransport extends Transport {
     _ping = Timer.periodic(currentPingInterval, (_) => _keepAlive());
   }
 
-  void _keepAlive() {
+  void _keepAlive({bool force = false}) {
     final ws = _ws;
     if (ws == null) return;
+    if (_pingSentAt != null) {
+      // Waiting for a pong: its deadline decides. [force] (app back on
+      // screen) pings once more without moving the deadline.
+      if (force) {
+        try {
+          ws.sendText('ping');
+        } catch (e) {
+          _onLost(ws, '$e');
+        }
+      }
+      return;
+    }
     // No pong (or anything) for 2.5 ping periods: the socket is dead
-    // (network switched, NAT timed out). Reconnect.
-    if (DateTime.now().difference(_lastRx) > currentPingInterval * 2.5) {
+    // (network switched, NAT timed out). Reconnect. v1.9.8: never sooner
+    // than the pong deadlines would (short probe intervals).
+    final quiet = currentPingInterval * 2.5;
+    final pongs =
+        LinkPolicy.relayPongDeadline(_pongRtt) *
+            LinkPolicy.relayMissesForReconnect +
+        currentPingInterval;
+    if (DateTime.now().difference(_lastRx) > (quiet > pongs ? quiet : pongs)) {
       _onLost(ws, 'no answer from relay');
       return;
     }
     try {
+      _pingSentAt = DateTime.now();
       ws.sendText('ping');
+      _pongTimer?.cancel();
+      _pongTimer = Timer(
+        LinkPolicy.relayPongDeadline(_pongRtt),
+        () => _onPongDeadline(ws),
+      );
     } catch (e) {
       _onLost(ws, '$e');
     }
@@ -309,6 +432,9 @@ class RelayTransport extends Transport {
     if (!identical(which, _ws)) return;
     _ping?.cancel();
     _ping = null;
+    _pongTimer?.cancel();
+    _pingSentAt = null;
+    _pongMisses = 0;
     final sub = _sub;
     _sub = null;
     _ws = null;
@@ -332,13 +458,55 @@ class RelayTransport extends Transport {
     if (!_wanted) return;
     // The phone switched networks (left Wi-Fi, mobile data back, ...). The
     // old socket is probably dead or on the wrong network: replace it now
-    // instead of waiting for pings to time out.
-    unawaited(() async {
-      await _disconnect();
-      _backoff = Duration.zero;
-      _quickUsed = false;
-      await _connect();
-    }());
+    // instead of waiting for pings to time out. v1.9.8: make-before-break.
+    // The old socket keeps carrying traffic (if it still can) until the
+    // new one is open; nothing waits for it to time out.
+    networkReplacements++;
+    _backoff = Duration.zero;
+    _quickUsed = false;
+    if (_ws == null) {
+      _retry?.cancel();
+      _retry = null;
+      _retryDelay = null;
+      _attempt++; // abandon a connect started on the old network
+      _connecting = false;
+      unawaited(_connect());
+      return;
+    }
+    unawaited(_replace());
+  }
+
+  /// Network changes handled (tests / Details).
+  int networkReplacements = 0;
+  int _replaceAttempt = 0;
+
+  Future<void> _replace() async {
+    final base = _serverUri;
+    if (base == null || !_wanted) return;
+    final mine = ++_replaceAttempt;
+    final attempt = _attempt;
+    try {
+      final ws = await connector.connect(
+        room != null
+            ? base.replace(
+                queryParameters: {
+                  ...base.queryParameters,
+                  'ch': room!,
+                  'id': _localNodeId.toRadixString(16),
+                },
+              )
+            : channelUri(base, _channel, _localNodeId, roster: roster),
+        timeout: connectTimeout,
+      );
+      if (mine != _replaceAttempt || attempt != _attempt || !_wanted) {
+        await ws.close();
+        return;
+      }
+      _attach(ws);
+    } catch (e) {
+      // The old socket (if alive) keeps going; pings decide.
+      if (mine == _replaceAttempt && _ws != null) _keepAlive();
+    }
   }
 
   void _scheduleRetry() {
@@ -348,6 +516,7 @@ class RelayTransport extends Transport {
     _backoff = _backoff == Duration.zero
         ? minBackoff
         : (_backoff * 2 > maxBackoff ? maxBackoff : _backoff * 2);
+    _retryAt = DateTime.now().add(_backoff);
     _retry = Timer(_backoff, () {
       _retry = null;
       if (_wanted && _ws == null) _connect();
@@ -359,6 +528,10 @@ class RelayTransport extends Transport {
     _retry = null;
     _ping?.cancel();
     _ping = null;
+    _pongTimer?.cancel();
+    _pingSentAt = null;
+    _pongMisses = 0;
+    _replaceAttempt++;
     _retryDelay = null;
     _attempt++; // abandon an in-flight connect
     _connecting = false;
@@ -392,7 +565,7 @@ class RelayTransport extends Transport {
       await reconnectNow();
       return;
     }
-    _keepAlive();
+    _keepAlive(force: true);
   }
 
   @override
@@ -512,11 +685,78 @@ class MultiRelayTransport extends Transport {
   /// Short: the home relay is always on (no cold start).
   static const homeConnectTimeout = Duration(milliseconds: 4500);
 
-  /// Home retry cap while a backup relay is connected.
-  static const homeRetryWhileOnBackup = Duration(seconds: 150);
+  /// Home retry cap while a backup relay is connected (v1.9.8: was
+  /// 2.5 min). Follows the app's probe plan: twice the reconnect cap
+  /// (10 s with Max speed on screen, 30 s in the background).
+  Duration homeRetryWhileOnBackup = const Duration(seconds: 10);
 
   /// Home retry cap while nothing is connected (same as one relay).
-  static const homeRetryAlone = Duration(seconds: 30);
+  Duration homeRetryAlone = const Duration(seconds: 5);
+
+  Duration? _probe;
+  Duration? _cap;
+
+  @override
+  void setProbePlan({required Duration probe, required Duration reconnectCap}) {
+    _probe = probe;
+    _cap = reconnectCap;
+    homeRetryAlone = reconnectCap;
+    homeRetryWhileOnBackup = reconnectCap * 2;
+    for (final r in _relays) {
+      r.setProbePlan(probe: probe, reconnectCap: reconnectCap);
+    }
+    _tuneHomeRetry();
+  }
+
+  /// Fastest measured relay round trip right now (or a direct link's).
+  @override
+  Duration? get probeRtt {
+    Duration? best;
+    for (final r in _relays) {
+      final t = r.status == TransportStatus.running ? r.probeRtt : null;
+      if (t != null && (best == null || t < best)) best = t;
+    }
+    return best;
+  }
+
+  /// The connected relay with the lowest round trip (healthy first), for
+  /// the status line: (label, round trip).
+  (String, Duration?)? get fastestRelay {
+    RelayTransport? best;
+    for (final r in _relays) {
+      if (r.status != TransportStatus.running) continue;
+      if (best == null) {
+        best = r;
+        continue;
+      }
+      if (best.degraded && !r.degraded) {
+        best = r;
+        continue;
+      }
+      if (r.degraded && !best.degraded) continue;
+      final a = r.probeRtt, b = best.probeRtt;
+      if (a != null && (b == null || a < b)) best = r;
+    }
+    return best == null ? null : (labelOf(best), best.probeRtt);
+  }
+
+  @override
+  String? get pathLabel => fastestRelay?.$1;
+
+  @override
+  List<(String, Duration?)> get readyPaths {
+    final f = fastestRelay;
+    return [
+      ?f,
+      for (final r in _relays)
+        if (r.status == TransportStatus.running && labelOf(r) != f?.$1)
+          (labelOf(r), r.probeRtt),
+    ];
+  }
+
+  /// Connected relays.
+  int get relaysUp =>
+      _relays.where((r) => r.status == TransportStatus.running).length;
 
   /// Tune the first relay as the fast home relay when there are several.
   final bool failover;
@@ -581,6 +821,10 @@ class MultiRelayTransport extends Transport {
   void _build(List<Uri> uris) {
     for (final u in uris) {
       final r = _factory(u)..setPowerSaver(_saver);
+      final pr = _probe, cap = _cap;
+      if (pr != null && cap != null) {
+        r.setProbePlan(probe: pr, reconnectCap: cap);
+      }
       if (failover && uris.length > 1 && _relays.isEmpty) {
         r.connectTimeout = homeConnectTimeout;
         r.quickRetry = true;
@@ -825,10 +1069,39 @@ class MultiRelayTransport extends Transport {
     _localNodeId = localNodeId;
     _channel = channel;
     _wanted = true;
-    await direct?.start(localNodeId: localNodeId);
-    await Future.wait(
-      _relays.map((r) => r.start(localNodeId: localNodeId, channel: channel)),
-    );
+    // v1.9.8: race them: direct links and every relay start at once and
+    // whichever is up first carries the traffic (nothing waits for a slow
+    // or sleeping relay).
+    final all = Future.wait([
+      if (direct != null) direct!.start(localNodeId: localNodeId),
+      ..._relays.map(
+        (r) => r.start(localNodeId: localNodeId, channel: channel),
+      ),
+    ]);
+    // Return as soon as the first relay is up (or every start finished):
+    // the caller never waits out a sleeping backup's connect.
+    final first = Completer<void>();
+    final subs = [
+      for (final r in _relays)
+        r.statusChanges.listen((st) {
+          if (st == TransportStatus.running && !first.isCompleted) {
+            first.complete();
+          }
+        }),
+    ];
+    if (_relays.any((r) => r.status == TransportStatus.running)) {
+      first.complete();
+    }
+    try {
+      await Future.any([all, first.future]);
+    } finally {
+      for (final s in subs) {
+        unawaited(s.cancel());
+      }
+    }
+    // The rest keep connecting in the background; errors are reported by
+    // each relay's own status.
+    unawaited(all.then((_) {}, onError: (_) {}));
     if (!_statusCtl.isClosed) _statusCtl.add(status);
   }
 

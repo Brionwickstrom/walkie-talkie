@@ -361,8 +361,8 @@ void main() {
     },
   );
 
-  test('transport priority: Wi-Fi, then Wi-Fi Direct, then Bluetooth, then '
-      'internet', () async {
+  test('transport priority (v1.9.8): internet, then Wi-Fi, then Wi-Fi '
+      'Direct / Bluetooth', () async {
     final lan = FakeTransport(TransportKind.lan);
     final wd = FakeTransport(TransportKind.wifiDirect);
     final ble = FakeTransport(TransportKind.ble);
@@ -374,15 +374,14 @@ void main() {
       helloInterval: const Duration(hours: 1),
     );
     await m.start();
-    final h = hello(b, 1);
-    net.deliver(h);
-    expect(m.bestLinkTo(b), TransportKind.internet);
-    ble.deliver(hello(b, 2));
+    ble.deliver(hello(b, 1));
     expect(m.bestLinkTo(b), TransportKind.ble);
-    wd.deliver(hello(b, 3));
+    wd.deliver(hello(b, 2));
     expect(m.bestLinkTo(b), TransportKind.wifiDirect);
-    lan.deliver(hello(b, 4));
+    lan.deliver(hello(b, 3));
     expect(m.bestLinkTo(b), TransportKind.lan);
+    net.deliver(hello(b, 4));
+    expect(m.bestLinkTo(b), TransportKind.internet);
     await m.dispose();
   });
 

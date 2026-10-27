@@ -59,19 +59,22 @@ void main() {
     expect(m.peers.single.activeLink, TransportKind.ble);
   });
 
-  test('prefers LAN over BLE over internet for the same peer', () async {
-    net.deliver(hello(bob, 0));
-    expect(m.peers.single.activeLink, TransportKind.internet);
-    ble.deliver(hello(bob, 1));
-    expect(m.peers.single.activeLink, TransportKind.ble);
-    lan.deliver(hello(bob, 2));
-    expect(m.peers.single.activeLink, TransportKind.lan);
+  test(
+    'v1.9.8 order: internet, then LAN, then BLE for the same peer',
+    () async {
+      ble.deliver(hello(bob, 0));
+      expect(m.peers.single.activeLink, TransportKind.ble);
+      lan.deliver(hello(bob, 1));
+      expect(m.peers.single.activeLink, TransportKind.lan);
+      net.deliver(hello(bob, 2));
+      expect(m.peers.single.activeLink, TransportKind.internet);
 
-    await m.sendAudio(Uint8List.fromList([9]));
-    expect(lan.sent.single.peerIds, {bob});
-    expect(ble.sent, isEmpty);
-    expect(net.sent, isEmpty);
-  });
+      await m.sendAudio(Uint8List.fromList([9]));
+      expect(net.sent.single.peerIds, {bob});
+      expect(ble.sent, isEmpty);
+      expect(lan.sent, isEmpty);
+    },
+  );
 
   test(
     'fails over when the best link goes quiet, and drops dead peers',

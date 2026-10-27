@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:io' show Platform;
+import 'dart:io' show NetworkInterface, Platform;
 
 import 'package:flutter/services.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -34,14 +34,69 @@ abstract class RelayConnector {
 
   /// The platform default: native sockets on Android (they bypass the
   /// Wi-Fi-without-internet process binding), dart:io elsewhere.
-  static RelayConnector platform() =>
-      Platform.isAndroid ? AndroidRelayConnector.instance : IoRelayConnector();
+  static RelayConnector platform() => Platform.isAndroid
+      ? AndroidRelayConnector.instance
+      : IoRelayConnector(
+          watchNetwork:
+              (Platform.isWindows || Platform.isLinux || Platform.isMacOS) &&
+              !Platform.environment.containsKey('FLUTTER_TEST'),
+        );
+}
+
+/// Desktop (v1.9.8): no network callbacks, so the addresses of the PC's
+/// network adapters are checked every [every]; a change (Wi-Fi joined or
+/// lost, cable in / out, VPN up) fires like Android's network callback.
+/// One shared poll for every relay socket, only while someone listens.
+class DesktopNetWatch {
+  DesktopNetWatch._();
+  static final instance = DesktopNetWatch._();
+  static const every = Duration(seconds: 3);
+
+  late final _ctl = StreamController<String>.broadcast(
+    onListen: _start,
+    onCancel: _stop,
+  );
+  Timer? _timer;
+  String? _last;
+
+  Stream<String> get changes => _ctl.stream;
+
+  void _start() {
+    _timer ??= Timer.periodic(every, (_) => _check());
+    unawaited(_check());
+  }
+
+  void _stop() {
+    _timer?.cancel();
+    _timer = null;
+    _last = null;
+  }
+
+  Future<void> _check() async {
+    try {
+      final list = await NetworkInterface.list();
+      final sig = [
+        for (final i in list)
+          for (final a in i.addresses) '${i.name}=${a.address}',
+      ]..sort();
+      final now = sig.join(',');
+      final was = _last;
+      _last = now;
+      if (was != null && was != now && !_ctl.isClosed) _ctl.add('network');
+    } catch (_) {}
+  }
 }
 
 /// dart:io WebSocket (tests, iOS, desktop).
 class IoRelayConnector implements RelayConnector {
+  IoRelayConnector({this.watchNetwork = false});
+
+  /// Desktop: fire [networkChanges] from [DesktopNetWatch] (v1.9.8).
+  final bool watchNetwork;
+
   @override
-  Stream<String> get networkChanges => const Stream.empty();
+  Stream<String> get networkChanges =>
+      watchNetwork ? DesktopNetWatch.instance.changes : const Stream.empty();
 
   @override
   Future<RelaySocket> connect(Uri uri, {required Duration timeout}) async {

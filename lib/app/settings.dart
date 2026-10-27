@@ -3,6 +3,7 @@ import 'dart:math';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../core/link_policy.dart';
 import '../friends/friend_links.dart';
 import '../trip/trip_settings.dart';
 import 'call_signs.dart';
@@ -47,6 +48,7 @@ class AppSettings {
     this.newInstall = false,
     this.showDiagnostics = false,
     this.powerSaver = false,
+    this.connectionSpeed = ConnectionSpeed.maxSpeed,
     this.offlineSaver = false,
     this.volumeKeyPtt = false,
     this.headsetPtt = false,
@@ -163,6 +165,10 @@ class AppSettings {
 
   /// Battery saver: slower beacons / scans / keep-alives.
   bool powerSaver;
+
+  /// v1.9.8: "Max speed (more battery)" (default) or "Balanced": how often
+  /// connections are checked and how fast a failing one is replaced.
+  ConnectionSpeed connectionSpeed;
 
   /// Offline power save (v1.8.1): no internet relay, no network sweeps,
   /// slow Bluetooth / GPS / announcements, dim dark UI. Talk, receive,
@@ -361,6 +367,7 @@ class SharedPrefsSettingsStore implements SettingsStore {
   static const _kDiag = 'show_diagnostics';
   static const _kVolumes = 'peer_volumes';
   static const _kSaver = 'power_saver';
+  static const _kSpeed = 'connection_speed';
   static const _kOffline = 'offline_saver';
   static const _kVolPtt = 'vol_ptt';
   static const _kHeadset = 'headset_ptt';
@@ -432,6 +439,9 @@ class SharedPrefsSettingsStore implements SettingsStore {
       showDiagnostics: prefs?.getBool(_kDiag) ?? false,
       peerVolumes: AppSettings.decodeVolumes(prefs?.getString(_kVolumes)),
       powerSaver: prefs?.getBool(_kSaver) ?? false,
+      connectionSpeed: prefs?.getString(_kSpeed) == 'balanced'
+          ? ConnectionSpeed.balanced
+          : ConnectionSpeed.maxSpeed,
       offlineSaver: prefs?.getBool(_kOffline) ?? false,
       volumeKeyPtt: prefs?.getBool(_kVolPtt) ?? false,
       headsetPtt: prefs?.getBool(_kHeadset) ?? false,
@@ -480,6 +490,7 @@ class SharedPrefsSettingsStore implements SettingsStore {
       await prefs.setBool(_kSetupPrompt, s.setupPromptShown);
       await prefs.setBool(_kDiag, s.showDiagnostics);
       await prefs.setBool(_kSaver, s.powerSaver);
+      await prefs.setString(_kSpeed, s.connectionSpeed.name);
       await prefs.setBool(_kOffline, s.offlineSaver);
       await prefs.setBool(_kVolPtt, s.volumeKeyPtt);
       await prefs.setBool(_kHeadset, s.headsetPtt);
