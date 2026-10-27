@@ -127,6 +127,7 @@ class MapLayersPage extends StatelessWidget {
       ),
       MapLayerKind.tiles => const Icon(Icons.map),
       MapLayerKind.overlay => const Icon(Icons.image),
+      MapLayerKind.roads => const Icon(Icons.alt_route),
     };
     return Column(
       children: [
@@ -233,6 +234,8 @@ class MapLayersPage extends StatelessWidget {
             : GeoPoint((b.south + b.north) / 2, (b.west + b.east) / 2);
       case MapLayerKind.overlay:
         return l.georef?.toMap((u: l.imageW / 2, v: l.imageH / 2));
+      case MapLayerKind.roads:
+        return l.area?.center;
     }
   }
 

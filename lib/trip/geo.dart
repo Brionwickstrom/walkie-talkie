@@ -70,6 +70,18 @@ const _points8 = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 String cardinal(double bearing) =>
     _points8[((normDeg(bearing) + 22.5) ~/ 45) % 8];
 
+/// "north", "southwest" (for speech).
+String cardinalWord(double bearing) => const {
+  'N': 'north',
+  'NE': 'northeast',
+  'E': 'east',
+  'SE': 'southeast',
+  'S': 'south',
+  'SW': 'southwest',
+  'W': 'west',
+  'NW': 'northwest',
+}[cardinal(bearing)]!;
+
 /// "0.8 mi", "350 ft", "1.2 km", "80 m".
 String formatDistance(double metres, {bool imperial = true}) {
   if (imperial) {

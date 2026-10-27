@@ -139,6 +139,8 @@ Future<MapLayer?> importMapFile(
           builder: (_) => OverlayPlacePage(trip: trip, layer: l!),
         ),
       );
+    case MapLayerKind.roads:
+      _snack(context, 'Saved roads ${l.name} (${formatBytes(l.bytes)}).');
   }
   return l;
 }

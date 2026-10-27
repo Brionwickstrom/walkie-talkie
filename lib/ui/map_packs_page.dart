@@ -340,7 +340,7 @@ class _MapPacksPageState extends State<MapPacksPage> {
             const Padding(
               padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
               child: Text(
-                'Trails and topo maps for these areas, ready to use. Tap '
+                'Trails, topo maps and roads for these areas, ready to use. Tap '
                 'Add: the app downloads them and puts them on the map, no '
                 'files to find. Once added they work with no signal.',
               ),
@@ -409,6 +409,8 @@ class _MapPacksPageState extends State<MapPacksPage> {
       if (p.files.any((f) => f.kind == PackFileKind.tiles)) 'offline topo map',
       if (p.files.any((f) => f.kind == PackFileKind.overlay))
         'topo map picture',
+      if (p.files.any((f) => f.kind == PackFileKind.roads))
+        'offline roads for driving directions',
     ].join(' + ');
     return Card(
       margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
@@ -420,7 +422,11 @@ class _MapPacksPageState extends State<MapPacksPage> {
             Row(
               children: [
                 Icon(
-                  added ? Icons.check_circle : Icons.terrain,
+                  added
+                      ? Icons.check_circle
+                      : p.files.every((f) => f.kind == PackFileKind.roads)
+                      ? Icons.alt_route
+                      : Icons.terrain,
                   color: added ? Colors.green : null,
                 ),
                 const SizedBox(width: 8),

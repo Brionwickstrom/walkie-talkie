@@ -19,7 +19,7 @@ import 'map_layers.dart';
 /// The list lives in `map_packs.json` at the repo root. A copy is bundled
 /// in the APK; the app also fetches the latest from GitHub ([remoteUrl]),
 /// so new packs show up without an app update.
-enum PackFileKind { trail, tiles, overlay }
+enum PackFileKind { trail, tiles, overlay, roads }
 
 class PackFile {
   const PackFile({
@@ -33,7 +33,11 @@ class PackFile {
     this.attribution = '',
     this.bounds,
     this.opacity = 0.8,
+    this.summary = '',
   });
+
+  /// Shown with the added layer ("32,000 km of road").
+  final String summary;
 
   /// File name (also how an added layer is matched to this file).
   final String name;
@@ -83,6 +87,7 @@ class PackFile {
       attribution: (j['attribution'] as String?) ?? '',
       bounds: GeoBounds.fromJson(j['bounds']),
       opacity: ((j['opacity'] as num?)?.toDouble() ?? 0.8).clamp(0.1, 1.0),
+      summary: (j['summary'] as String?) ?? '',
     );
   }
 
@@ -317,6 +322,16 @@ class PackInstaller {
           final src = tmp ?? await _write(f.name, bytes!);
           l = await layers.importMbtiles(src, move: true);
           tmp = null; // moved
+        case PackFileKind.roads:
+          final b = f.bounds ?? p.bounds;
+          if (b == null) throw PackException('${f.name}: no area given');
+          l = await layers.importRoads(
+            f.title.isEmpty ? f.name : f.title,
+            bytes ?? await tmp!.readAsBytes(),
+            area: b,
+            summary: f.summary,
+            attribution: f.attribution,
+          );
         case PackFileKind.overlay:
           final img = bytes ?? await tmp!.readAsBytes();
           final ext = f.name.contains('.') ? f.name.split('.').last : 'png';
@@ -331,7 +346,9 @@ class PackInstaller {
             await layers.setOpacity(l, f.opacity);
           }
       }
-      if (f.title.isNotEmpty && f.kind != PackFileKind.overlay) {
+      if (f.title.isNotEmpty &&
+          f.kind != PackFileKind.overlay &&
+          f.kind != PackFileKind.roads) {
         await layers.rename(l, f.title);
       }
       await layers.tagPack(l, p.id, f.name);
@@ -426,6 +443,8 @@ GeoBounds? layerBounds(MapLayers layers, MapLayer l) {
       return boundsOfPoints(pts);
     case MapLayerKind.tiles:
       return layers.tilesOf(l.id)?.bounds;
+    case MapLayerKind.roads:
+      return l.area;
     case MapLayerKind.overlay:
       final g = l.georef;
       if (g == null) return null;
@@ -547,6 +566,7 @@ class PackCatalog {
                       attribution: f.attribution,
                       bounds: f.bounds,
                       opacity: f.opacity,
+                      summary: f.summary,
                     ),
           ],
         ),
@@ -617,6 +637,7 @@ Future<MapLayer?> findCopy(MapPack p, PackFile f, MapLayers layers) async {
     PackFileKind.trail => MapLayerKind.trail,
     PackFileKind.tiles => MapLayerKind.tiles,
     PackFileKind.overlay => MapLayerKind.overlay,
+    PackFileKind.roads => MapLayerKind.roads,
   };
   final area = f.bounds ?? p.bounds;
   final names = {normName(f.name), if (f.title.isNotEmpty) normName(f.title)};
@@ -651,6 +672,8 @@ Future<MapLayer?> findCopy(MapPack p, PackFile f, MapLayers layers) async {
         }
       case MapLayerKind.overlay:
         // Pictures: same content (above), or same name and size.
+        if (sameSize && sameName) return l;
+      case MapLayerKind.roads:
         if (sameSize && sameName) return l;
     }
   }

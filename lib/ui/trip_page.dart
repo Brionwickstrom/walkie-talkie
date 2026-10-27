@@ -29,6 +29,8 @@ import 'map_layer_widgets.dart';
 import 'map_layers_page.dart';
 import 'map_packs_page.dart';
 import 'map_search_page.dart';
+import 'drive_page.dart';
+import 'road_areas_page.dart';
 import 'nav_page.dart';
 import 'network_map_page.dart';
 import 'offline_maps_page.dart';
@@ -168,6 +170,12 @@ class TripPageState extends State<TripPage> {
           controls: _mapControls(context, trip),
           fullControls: _zoomControls(),
           topLeft: [
+            if (trip.drive != null)
+              DriveCard(
+                trip: trip,
+                session: trip.drive!,
+                onFollow: () => _openDriveFollow(trip),
+              ),
             if (trip.nav != null)
               NavCard(
                 trip: trip,
@@ -213,7 +221,9 @@ class TripPageState extends State<TripPage> {
     final hl = _hl;
     final nav = trip.nav;
     final navRoute = nav?.route;
+    final drive = trip.drive;
     final lines = <Polyline>[
+      if (drive != null) ...driveLines(drive.route),
       if (navRoute != null)
         Polyline(
           points: [for (final p in navRoute.points) ll(p)],
@@ -265,6 +275,14 @@ class TripPageState extends State<TripPage> {
         ),
     ];
     final markers = <Marker>[
+      if (drive != null)
+        Marker(
+          key: const Key('driveTarget'),
+          point: ll(drive.target),
+          width: 40,
+          height: 40,
+          child: const Icon(Icons.flag, color: Color(0xFF1565C0), size: 32),
+        ),
       if (nav != null)
         Marker(
           key: const Key('navTarget'),
@@ -488,6 +506,11 @@ class TripPageState extends State<TripPage> {
         icon: Icons.download_for_offline,
         tip: 'Offline maps',
         onTap: () => _openOffline(context, trip),
+      ),
+      RoundMapButton(
+        icon: Icons.alt_route,
+        tip: 'Offline roads',
+        onTap: () => _openRoads(context, trip),
       ),
       RoundMapButton(
         icon: Icons.add_location_alt,
@@ -893,6 +916,80 @@ class TripPageState extends State<TripPage> {
     );
   }
 
+  void _openRoads(BuildContext context, TripController trip) {
+    GeoBounds? b;
+    if (_mapReady) {
+      final v = _map.camera.visibleBounds;
+      b = GeoBounds(v.south, v.west, v.north, v.east);
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            RoadAreasPage(trip: trip, view: b, onFit: _showNewLayer),
+      ),
+    );
+  }
+
+  void _openDriveFollow(TripController trip) => Navigator.of(
+    context,
+  ).push(MaterialPageRoute<void>(builder: (_) => DriveFollowPage(trip: trip)));
+
+  /// "Drive here" / "Drive, then hike" (v1.9.2).
+  Future<void> _startDrive(
+    TripController trip,
+    GeoPoint to,
+    String name, {
+    bool hike = false,
+  }) async {
+    final m = ScaffoldMessenger.maybeOf(context);
+    m?.showSnackBar(
+      const SnackBar(
+        duration: Duration(seconds: 2),
+        content: Text('Finding a road route…'),
+      ),
+    );
+    final res = hike
+        ? await trip.driveThenHike(to, name: name)
+        : await trip.driveTo(to, name: name);
+    if (!mounted) return;
+    final s = res.session;
+    if (s == null) {
+      m?.showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 8),
+          content: Text(res.message),
+          action: trip.layers.roads.isEmpty
+              ? SnackBarAction(
+                  label: 'Offline roads',
+                  onPressed: () => _openRoads(context, trip),
+                )
+              : null,
+        ),
+      );
+      return;
+    }
+    setState(() => _follow = false);
+    final r = s.route;
+    final b = boundsOfPoints(r.points);
+    if (b != null) _fit(b, maxZoom: 16);
+    final warn = mainWarnings(r);
+    m?.showSnackBar(
+      SnackBar(
+        duration: const Duration(seconds: 6),
+        content: Text(
+          '${hike ? 'Drive to ${s.name}, then hike to ${s.hikeName}. ' : ''}'
+          'Drive: ${formatDistance(r.lengthM, imperial: trip.settings.imperial)}, '
+          'about ${driveDuration(r.duration)}.'
+          '${warn.isEmpty ? '' : ' ${warn.first.text}.'}',
+        ),
+        action: SnackBarAction(
+          label: 'Follow',
+          onPressed: () => _openDriveFollow(trip),
+        ),
+      ),
+    );
+  }
+
   void _openOffline(BuildContext context, TripController trip) {
     GeoBounds? b;
     double? zoom;
@@ -995,7 +1092,8 @@ class TripPageState extends State<TripPage> {
                     leading: const Icon(Icons.terrain),
                     title: const Text('Ready-made maps'),
                     subtitle: const Text(
-                      'Silver Star & Trapper Creek, one tap',
+                      'Silver Star & Trapper Creek maps, Portland to Gifford '
+                      'Pinchot roads, one tap',
                     ),
                     onTap: () {
                       Navigator.pop(ctx);
@@ -1174,6 +1272,26 @@ class TripPageState extends State<TripPage> {
                 },
               ),
               const SizedBox(height: 6),
+              FilledButton.tonalIcon(
+                key: const Key('driveHere'),
+                icon: const Icon(Icons.directions_car),
+                label: const Text('Drive here'),
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  _startDrive(trip, at, name);
+                },
+              ),
+              const SizedBox(height: 6),
+              OutlinedButton.icon(
+                key: const Key('driveThenHike'),
+                icon: const Icon(Icons.hiking),
+                label: const Text('Drive to trailhead, then hike'),
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  _startDrive(trip, at, name, hike: true);
+                },
+              ),
+              const SizedBox(height: 6),
               OutlinedButton.icon(
                 key: const Key('compassHere'),
                 icon: const Icon(Icons.explore),
@@ -1329,6 +1447,15 @@ class TripPageState extends State<TripPage> {
                 onPressed: () {
                   Navigator.pop(ctx);
                   _startNav(trip, p.pos, p.title);
+                },
+              ),
+              FilledButton.tonalIcon(
+                key: const Key('pinDrive'),
+                icon: const Icon(Icons.directions_car),
+                label: const Text('Drive here'),
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  _startDrive(trip, p.pos, p.title);
                 },
               ),
               OutlinedButton.icon(
@@ -1581,6 +1708,12 @@ class TripPageState extends State<TripPage> {
               icon: const Icon(Icons.download_for_offline),
               label: const Text('Offline maps'),
               onPressed: () => _openOffline(context, trip),
+            ),
+            OutlinedButton.icon(
+              key: const Key('openRoads'),
+              icon: const Icon(Icons.alt_route),
+              label: const Text('Offline roads'),
+              onPressed: () => _openRoads(context, trip),
             ),
             OutlinedButton.icon(
               icon: const Icon(Icons.tune),

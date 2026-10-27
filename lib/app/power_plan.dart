@@ -110,6 +110,14 @@ class PowerPlan {
       ? const Duration(seconds: 5)
       : const Duration(seconds: 2);
 
+  /// GPS fix interval while driving (v1.9.2): every second normally, a
+  /// little slower with battery saver / Offline power save.
+  Duration get driveInterval => offline
+      ? const Duration(seconds: 3)
+      : saver
+      ? const Duration(seconds: 2)
+      : const Duration(seconds: 1);
+
   /// Check-in period: offline doubles it, capped at 15 min so phones that
   /// only hear us by radio do not raise a lost-contact alert (20 min).
   int checkInMinutes(int every) {

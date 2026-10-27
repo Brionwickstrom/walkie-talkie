@@ -13,6 +13,12 @@ import 'imports/geo_import.dart' show ImportedData;
 import 'imports/map_layers.dart';
 import 'imports/route_share.dart';
 import 'lost_contact.dart';
+import 'drive/drive_nav.dart' show spokenDistance;
+import 'drive/drive_session.dart';
+import 'drive/road_download.dart';
+import 'drive/road_service.dart';
+import 'drive/speech.dart';
+import 'imports/geo_import.dart' show ImportedWaypoint;
 import 'nav/nav_session.dart';
 import 'nav/trail_graph.dart';
 import 'search/fetch.dart';
@@ -141,6 +147,7 @@ class TripController extends ChangeNotifier {
       userAgent: userAgent,
     );
     final f = fetch ?? ioFetch(userAgent);
+    this.fetch = f;
     search = MapSearch(
       fetch: f,
       // Tests pass an instant limiter; the app shares the polite ones.
@@ -179,6 +186,9 @@ class TripController extends ChangeNotifier {
 
   /// Online "Find maps" (Nominatim + Overpass), v1.8.4.
   late final MapSearch search;
+
+  /// HTTP for map search and saving roads.
+  late final Fetch fetch;
   final TrackRecorder recorder = TrackRecorder();
   final TrackAssembler _assembler = TrackAssembler();
 
@@ -278,6 +288,10 @@ class TripController extends ChangeNotifier {
     _disposed = true;
     nav?.dispose();
     nav = null;
+    drive?.dispose();
+    drive = null;
+    roads.dispose();
+    unawaited(speaker.stop());
     _sub?.cancel();
     _timer?.cancel();
     tiles.close();
@@ -321,11 +335,13 @@ class TripController extends ChangeNotifier {
       recorder.recording ||
       sos.active != null ||
       _visible ||
-      nav != null;
+      nav != null ||
+      drive != null;
 
   Duration get _wantedInterval {
     final now = _clock();
     final p = plan;
+    if (drive != null) return p.driveInterval;
     if (sos.active != null) return const Duration(seconds: 5);
     if (nav != null) return p.navInterval;
     if (recorder.recording) {
@@ -354,7 +370,8 @@ class TripController extends ChangeNotifier {
         settings.tripMode ||
         recorder.recording ||
         sos.active != null ||
-        nav != null;
+        nav != null ||
+        drive != null;
     if (bg != _bgLoc) {
       _bgLoc = bg;
       await host.backgroundLocation(bg);
@@ -373,6 +390,7 @@ class TripController extends ChangeNotifier {
     }
     _maybeSendLive();
     _navFix(f.pos);
+    _driveFix(f);
     notifyListeners();
   }
 
@@ -416,6 +434,20 @@ class TripController extends ChangeNotifier {
     if (_disposed) return s;
     nav?.dispose();
     nav = s;
+    _saidJunction = null;
+    if (drive != null) {
+      drive!.dispose();
+      drive = null;
+    }
+    if (settings.trailVoice && r != null && me != null) {
+      final first = r.junctions.firstOrNull;
+      unawaited(
+        _say(
+          'Route to $name, ${spokenDistance(r.lengthM, imperial: settings.imperial)}'
+          '${first == null ? '' : '. First: ${first.text}'}.',
+        ),
+      );
+    }
     if (me != null) s.update(me);
     await _updateLocationNeed();
     notifyListeners();
@@ -457,10 +489,13 @@ class TripController extends ChangeNotifier {
     notifyListeners();
   }
 
+  double? _saidJunction;
+
   void _navFix(GeoPoint p) {
     final s = nav;
     if (s == null) return;
     final ev = s.update(p);
+    final voice = settings.trailVoice;
     if (ev == 'off') {
       final st = s.state!;
       host.notify(
@@ -468,11 +503,32 @@ class TripController extends ChangeNotifier {
         '${formatDistance(st.offM, imperial: settings.imperial)} off the '
             'route to ${s.name}. Head ${cardinal(st.bearingToRoute)} to get back.',
       );
+      if (voice) {
+        unawaited(
+          _say(
+            'You are off the route. Head ${cardinalWord(st.bearingToRoute)} to get back.',
+          ),
+        );
+      }
     } else if (ev == 'arrived') {
       host.notify('Arrived', 'You reached ${s.name}.');
+      if (voice) unawaited(_say('You have arrived at ${s.name}.'));
+    }
+    // Spoken junctions (v1.9.2): once, about 40 m before.
+    final st = s.state;
+    if (voice && st != null && !st.offRoute && st.next != null) {
+      final j = st.next!;
+      if ((st.nextInM ?? 1e9) <= 45 && _saidJunction != j.alongM) {
+        _saidJunction = j.alongM;
+        unawaited(
+          _say(
+            'In ${spokenDistance(st.nextInM!, imperial: settings.imperial)}, '
+            '${j.text.isEmpty ? '' : j.text[0].toLowerCase() + j.text.substring(1)}.',
+          ),
+        );
+      }
     }
     // Way off for a while: route again from here (at most every 30 s).
-    final st = s.state;
     if (st != null && st.offRoute && st.offM > 60) {
       final last = _lastReroute;
       if (last == null || _clock().difference(last).inSeconds >= 30) {
@@ -487,6 +543,280 @@ class TripController extends ChangeNotifier {
     if (s == null) return (parts: 0, radio: false);
     return _shareData(s.asData(), s.asData().name, 0xFFE53935);
   }
+
+  // ------------------------------------------------------------ driving
+
+  /// "Drive here" in progress (v1.9.2), null when not driving.
+  DriveSession? drive;
+
+  /// Routing over the saved road areas (background isolate).
+  RoadService roads = RoadService();
+
+  /// Spoken directions (the phone's offline text-to-speech).
+  Speaker speaker = TtsSpeaker();
+  DateTime? _lastDriveReroute;
+
+  Future<void> _say(String text) => speaker.say(text);
+
+  /// Saved road areas (all of them are used together).
+  List<MapLayer> get roadAreas => layers.roads;
+
+  Future<void> _loadRoads() {
+    final paths = [for (final l in layers.roads) layers.fileOf(l).path]..sort();
+    return roads.load(paths);
+  }
+
+  static const noRoadsMessage =
+      'No roads saved on this phone yet. Add "Portland to Gifford Pinchot '
+      'roads" in Ready-made maps, or save an area in Offline roads.';
+
+  /// Start driving to [to] along the saved roads. [hikeTo]: walk on to
+  /// there after arriving (trail navigation starts by itself). Returns the
+  /// session, or a message saying why not.
+  Future<({DriveSession? session, String message})> driveTo(
+    GeoPoint to, {
+    String name = 'Destination',
+    GeoPoint? hikeTo,
+    String hikeName = '',
+  }) async {
+    if (layers.roads.isEmpty) return (session: null, message: noRoadsMessage);
+    final me = myFix?.pos ?? (await host.locateOnce())?.pos;
+    if (me == null) {
+      return (
+        session: null,
+        message: 'Waiting for GPS. Try again in a moment.',
+      );
+    }
+    await _loadRoads();
+    final r = await roads.route(
+      me,
+      to,
+      name: name,
+      imperial: settings.imperial,
+      now: _clock(),
+    );
+    if (r == null) {
+      final a = await roads.snap(me), b = await roads.snap(to);
+      final why = a == null
+          ? 'You are not near any saved roads. Save the area you are in '
+                '(Offline roads) or use a ready-made pack.'
+          : b == null
+          ? 'No saved roads near there.'
+          : 'No road route found: the roads there do not connect (a gate or '
+                'private road may block the way).';
+      return (session: null, message: why);
+    }
+    if (_disposed) return (session: null, message: '');
+    final s = DriveSession(
+      target: to,
+      name: name,
+      route: r,
+      imperial: settings.imperial,
+      hikeTo: hikeTo,
+      hikeName: hikeName,
+    );
+    nav?.dispose();
+    nav = null;
+    drive?.dispose();
+    drive = s;
+    _lastDriveReroute = null;
+    final f = myFix;
+    _speakDrive(s.update(me, speed: f?.speedMps, at: f?.at).say);
+    await _updateLocationNeed();
+    notifyListeners();
+    return (session: s, message: '');
+  }
+
+  void _speakDrive(String? text) {
+    if (text == null || !settings.driveVoice) return;
+    unawaited(_say(text));
+  }
+
+  /// Mute / unmute spoken directions.
+  Future<void> setDriveVoice(bool on) async {
+    await update((s) => s.driveVoice = on);
+    if (!on) await speaker.stop();
+  }
+
+  Future<void> setTrailVoice(bool on) => update((s) => s.trailVoice = on);
+
+  /// Route again from where you are.
+  Future<bool> rerouteDrive() async {
+    final s = drive;
+    final me = myFix?.pos ?? s?.me;
+    if (s == null || me == null) return false;
+    _lastDriveReroute = _clock();
+    s.rerouting = true;
+    notifyListeners();
+    await _loadRoads();
+    final r = await roads.route(
+      me,
+      s.target,
+      name: s.name,
+      imperial: settings.imperial,
+      now: _clock(),
+    );
+    if (drive != s || _disposed) return false;
+    if (r == null) {
+      s.rerouting = false;
+      notifyListeners();
+      return false;
+    }
+    s.replaceRoute(r);
+    notifyListeners();
+    return true;
+  }
+
+  Future<void> stopDrive() async {
+    drive?.dispose();
+    drive = null;
+    await speaker.stop();
+    await _updateLocationNeed();
+    notifyListeners();
+  }
+
+  void _driveFix(Fix f) {
+    final s = drive;
+    if (s == null) return;
+    final u = s.update(f.pos, speed: f.speedMps, at: f.at);
+    _speakDrive(u.say);
+    final st = s.state;
+    if (u.event == 'arrived') {
+      final hike = s.hikeTo;
+      if (hike != null) {
+        _speakDrive('Now walk to ${s.hikeName}.');
+        unawaited(walkOn());
+      } else {
+        host.notify('Arrived', 'You reached ${s.name}.');
+      }
+      return;
+    }
+    // Off the route: route again (at most every 10 s).
+    if (st != null && st.offRoute && !s.rerouting) {
+      final last = _lastDriveReroute;
+      if (last == null || _clock().difference(last).inSeconds >= 10) {
+        _speakDrive('Rerouting.');
+        unawaited(rerouteDrive());
+      }
+    }
+  }
+
+  /// After driving: walk on to the hike target (or the destination when
+  /// it is off the road), with trail navigation.
+  Future<NavSession?> walkOn() async {
+    final s = drive;
+    if (s == null) return null;
+    final to = s.hikeTo ?? s.target;
+    final name = s.hikeTo != null ? s.hikeName : s.name;
+    return navigateTo(to, name: name);
+  }
+
+  /// "Drive to trailhead, then hike": the trailhead to drive to for
+  /// walking to [to] (a trailhead waypoint near the trails that lead
+  /// there, close to a saved road), or the nearest road point.
+  Future<({GeoPoint at, String name})?> trailheadFor(GeoPoint to) async {
+    await _loadRoads();
+    final g = await trailGraph();
+    final cands = <ImportedWaypoint>[
+      for (final l in layers.trails)
+        if (l.visible && l.data != null)
+          for (final w in l.data!.waypoints)
+            if ((w.kind == 'trailhead' ||
+                    RegExp(
+                      r'trail ?head|\bTH\b',
+                      caseSensitive: false,
+                    ).hasMatch(w.name)) &&
+                distanceM(w.pos, to) < 25000)
+              w,
+    ];
+    ({GeoPoint at, String name})? best;
+    var bestM = double.infinity;
+    for (final w in cands) {
+      final road = await roads.snap(w.pos, maxM: 500);
+      if (road == null) continue;
+      double hike;
+      if (g.isEmpty) {
+        hike = distanceM(w.pos, to) * 1.4;
+      } else {
+        final r = g.route(w.pos, to);
+        if (r == null) continue;
+        hike = r.lengthM + (r.startOffM + r.endOffM) * 3;
+      }
+      if (hike < bestM) {
+        bestM = hike;
+        best = (at: w.pos, name: w.name);
+      }
+    }
+    if (best != null) return best;
+    final road = await roads.snap(to, maxM: 10000);
+    if (road == null) return null;
+    return (at: road.pos, name: 'the nearest road');
+  }
+
+  /// Drive to the best trailhead for [to], then hike there.
+  Future<({DriveSession? session, String message})> driveThenHike(
+    GeoPoint to, {
+    String name = 'Destination',
+  }) async {
+    if (layers.roads.isEmpty) return (session: null, message: noRoadsMessage);
+    final th = await trailheadFor(to);
+    if (th == null) {
+      return (session: null, message: 'No saved roads near there.');
+    }
+    return driveTo(th.at, name: th.name, hikeTo: to, hikeName: name);
+  }
+
+  /// Share the driving route with the group.
+  ({int parts, bool radio}) shareDriveRoute() {
+    final s = drive;
+    if (s == null) return (parts: 0, radio: false);
+    return _shareData(s.asData(), s.asData().name, 0xFF1565C0);
+  }
+
+  // ------------------------------------------------------------ saved roads
+
+  /// Save the roads of [area] from OpenStreetMap ([replace]: update that
+  /// saved area). Throws [RoadDownloadException] / fetch errors.
+  Future<MapLayer> saveRoads(
+    GeoBounds area, {
+    String name = '',
+    MapLayer? replace,
+    void Function(RoadProgress p)? onProgress,
+    bool Function()? cancelled,
+    RoadDownloader? downloader,
+  }) async {
+    if (!plan.mapTileDownloads) {
+      throw RoadDownloadException(
+        'Offline power save is on: saving roads needs the internet.',
+      );
+    }
+    final dl = downloader ?? RoadDownloader(fetch: fetch, clock: _clock);
+    final d = await dl.download(
+      area,
+      onProgress: onProgress,
+      cancelled: cancelled,
+    );
+    final bytes = d.encode();
+    final l = await layers.importRoads(
+      name.isEmpty ? defaultRoadsName(area) : name,
+      bytes,
+      area: area,
+      summary: roadsSummary(d.roadKm, d.builtAt),
+      attribution: '© OpenStreetMap contributors, ODbL',
+      replace: replace,
+    );
+    notifyListeners();
+    return l;
+  }
+
+  static String defaultRoadsName(GeoBounds b) {
+    final c = b.center;
+    return 'Roads near ${c.lat.abs().toStringAsFixed(2)}° ${c.lat >= 0 ? 'N' : 'S'}, '
+        '${c.lng.abs().toStringAsFixed(2)}° ${c.lng >= 0 ? 'E' : 'W'}';
+  }
+
+  static String roadsSummary(double km, DateTime at) =>
+      '${km.round()} km of road · map data ${at.year}-${at.month.toString().padLeft(2, '0')}-${at.day.toString().padLeft(2, '0')}';
 
   void onHeading(double h) {
     final prev = heading;

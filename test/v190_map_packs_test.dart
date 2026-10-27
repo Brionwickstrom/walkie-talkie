@@ -54,7 +54,11 @@ void main() {
       final packs = MapPack.parseList(
         File('map_packs.json').readAsStringSync(),
       );
-      expect(packs.map((p) => p.id), ['silver-star', 'trapper-creek']);
+      expect(packs.map((p) => p.id), [
+        'silver-star',
+        'trapper-creek',
+        'gp-roads', // v1.9.2
+      ]);
       final ss = packs.first;
       expect(ss.short, 'Silver Star');
       expect(ss.files.map((f) => f.name), [
@@ -65,7 +69,7 @@ void main() {
         PackFileKind.trail,
         PackFileKind.tiles,
       ]);
-      final tc = packs.last;
+      final tc = packs[1];
       expect(tc.files.last.kind, PackFileKind.overlay);
       expect(tc.files.last.bounds!.north, 45.955);
       for (final p in packs) {

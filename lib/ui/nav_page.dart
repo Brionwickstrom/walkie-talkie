@@ -307,6 +307,16 @@ class NavFollowPage extends StatelessWidget {
                   label: const Text('Re-route'),
                 ),
               OutlinedButton.icon(
+                key: const Key('trailVoice'),
+                onPressed: () => trip.setTrailVoice(!trip.settings.trailVoice),
+                icon: Icon(
+                  trip.settings.trailVoice ? Icons.volume_up : Icons.volume_off,
+                ),
+                label: Text(
+                  trip.settings.trailVoice ? 'Voice on' : 'Voice off',
+                ),
+              ),
+              OutlinedButton.icon(
                 key: const Key('shareRoute'),
                 onPressed: () {
                   final res = trip.shareNavRoute();

@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 
 import '../geo.dart';
 import '../search/offline_search.dart';
+import '../tile_cache.dart' show GeoBounds;
 import 'geo_import.dart';
 import 'georef.dart';
 import 'mbtiles.dart';
@@ -14,7 +15,7 @@ import 'mbtiles.dart';
 /// from GPX, KML, KMZ (or shared by someone), offline MBTiles base maps,
 /// and georeferenced image / PDF park maps. Kept on the device under the
 /// trip folder with an index file.
-enum MapLayerKind { trail, tiles, overlay }
+enum MapLayerKind { trail, tiles, overlay, roads }
 
 /// Palette for imported lines (ARGB).
 const List<int> layerColors = [
@@ -49,8 +50,12 @@ class MapLayer {
     this.packFile,
     this.packMatched = false,
     this.sha,
+    this.area,
     DateTime? added,
   }) : added = added ?? DateTime.now();
+
+  /// Area covered (offline roads, v1.9.2).
+  GeoBounds? area;
 
   /// Map pack (v1.9.0) this layer came from, and which of its files.
   String? pack;
@@ -120,6 +125,7 @@ class MapLayer {
     'pf': ?packFile,
     if (packMatched) 'pm': true,
     'sh': ?sha,
+    if (area != null) 'ar': area!.toJson(),
     'a': added.millisecondsSinceEpoch,
   };
 
@@ -151,6 +157,7 @@ class MapLayer {
       packFile: j['pf'] as String?,
       packMatched: j['pm'] == true,
       sha: j['sh'] is String ? j['sh'] as String : null,
+      area: GeoBounds.fromJson(j['ar']),
       added: DateTime.fromMillisecondsSinceEpoch(
         (j['a'] as num?)?.toInt() ?? 0,
       ),
@@ -260,6 +267,10 @@ class MapLayers extends ChangeNotifier {
       _layers.where((l) => l.kind == MapLayerKind.tiles).toList();
   List<MapLayer> get overlays =>
       _layers.where((l) => l.kind == MapLayerKind.overlay).toList();
+
+  /// Saved road areas for driving directions (v1.9.2).
+  List<MapLayer> get roads =>
+      _layers.where((l) => l.kind == MapLayerKind.roads).toList();
   MapLayer? byId(String id) => _layers.where((l) => l.id == id).firstOrNull;
 
   int get usedBytes => _layers.fold(0, (s, l) => s + l.bytes);
@@ -579,6 +590,55 @@ class MapLayers extends ChangeNotifier {
   }
 
   File fileOf(MapLayer l) => _f(l.file);
+
+  // ------------------------------------------------------------ roads
+
+  /// Store an offline roads file (`.wtr`, see RoadData) for [area].
+  /// [replace] (updating an area) is deleted afterwards, keeping its name.
+  Future<MapLayer> importRoads(
+    String name,
+    Uint8List bytes, {
+    required GeoBounds area,
+    String summary = '',
+    String attribution = '',
+    MapLayer? replace,
+  }) async {
+    if (bytes.length < 64 || bytes[0] != 0x1f || bytes[1] != 0x8b) {
+      throw ImportFormatException('Not a roads file');
+    }
+    _ensureRoom(
+      bytes.length - (replace?.bytes ?? 0),
+      name.isEmpty ? 'these roads' : name,
+    );
+    final id = _newId();
+    final file = 'roads_$id.wtr';
+    await dir.create(recursive: true);
+    await _f(file).writeAsBytes(bytes, flush: true);
+    final l = MapLayer(
+      id: id,
+      kind: MapLayerKind.roads,
+      name: replace?.name ?? (name.isEmpty ? 'Roads' : name),
+      file: file,
+      bytes: bytes.length,
+      summary: summary,
+      attribution: attribution,
+      area: area,
+      pack: replace?.pack,
+      packFile: replace?.packFile,
+      added: _clock(),
+    );
+    final at = replace == null ? 0 : _layers.indexOf(replace);
+    _layers.insert(at < 0 ? 0 : at, l);
+    if (replace != null) {
+      _layers.remove(replace);
+      try {
+        await _f(replace.file).delete();
+      } catch (_) {}
+    }
+    await _save();
+    notifyListeners();
+    return l;
+  }
 
   // ------------------------------------------------------------ edits
 

@@ -18,6 +18,8 @@ class TripSettings {
     this.radioTrailMinutes = 15,
     this.packsOffered = false,
     List<String>? overlays,
+    this.driveVoice = true,
+    this.trailVoice = false,
   }) : overlays = overlays ?? [],
        canned = canned ?? List.of(defaultCustomCanned);
 
@@ -53,6 +55,12 @@ class TripSettings {
 
   /// Map overlays switched on (v1.9.1), e.g. 'ov_land', 'ov_slope'.
   List<String> overlays;
+
+  /// Spoken directions while driving (v1.9.2; the mute button).
+  bool driveVoice;
+
+  /// Spoken junctions / off-route on trail navigation (v1.9.2).
+  bool trailVoice;
   static const radioTrailChoices = [0, 5, 10, 15];
 
   static const defaultCustomCanned = ['Lunch spot', 'Going ahead', 'Found it'];
@@ -72,6 +80,8 @@ class TripSettings {
     'rtm': radioTrailMinutes,
     'po': packsOffered,
     if (overlays.isNotEmpty) 'ov': overlays,
+    if (!driveVoice) 'dv': false,
+    if (trailVoice) 'tv': true,
   });
 
   static TripSettings decode(String? s) {
@@ -100,6 +110,8 @@ class TripSettings {
           for (final o in (j['ov'] as List? ?? const []))
             if (o is String) o,
         ],
+        driveVoice: j['dv'] != false,
+        trailVoice: j['tv'] == true,
       );
     } catch (_) {
       return TripSettings();

@@ -22,7 +22,7 @@
           "asset": "assets/map_packs/Silver_Star_Trails.gpx",
           "size": 387208,
           "sha256": "da6d53f09928d93e797367a0869cb9b7e4734370c39573899ec6d200d5173ffe",
-          "attribution": "Trails \u00a9 OpenStreetMap contributors, ODbL",
+          "attribution": "Trails © OpenStreetMap contributors, ODbL",
           "bounds": {
             "s": 45.6904,
             "w": -122.35187,
@@ -61,7 +61,7 @@
           "asset": "assets/map_packs/Trapper_Creek_Trails.gpx",
           "size": 191531,
           "sha256": "60441ba0940073f5d9a7988c1353ff24c4ad2a45496b46acb714d2870dae936c",
-          "attribution": "Trails \u00a9 OpenStreetMap contributors, ODbL",
+          "attribution": "Trails © OpenStreetMap contributors, ODbL",
           "bounds": {
             "s": 45.87318,
             "w": -122.08499,
@@ -83,6 +83,37 @@
             "e": -121.955
           },
           "opacity": 0.85
+        }
+      ]
+    },
+    {
+      "id": "gp-roads",
+      "name": "Portland to Gifford Pinchot roads",
+      "short": "Gifford Pinchot roads",
+      "area": "Portland, Vancouver, Columbia Gorge, Gifford Pinchot NF (OR + WA)",
+      "about": "Offline driving directions: 40,155 km of roads from Portland to Mount St. Helens, Trapper Creek and Mount Adams, including forest roads like FR 4109 to Silver Star (marked rough / high clearance where OpenStreetMap says so).",
+      "bounds": {
+        "s": 45.4,
+        "w": -122.95,
+        "n": 46.65,
+        "e": -121.35
+      },
+      "files": [
+        {
+          "name": "Portland_Gifford_Pinchot_Roads.wtr",
+          "kind": "roads",
+          "title": "Portland to Gifford Pinchot roads",
+          "url": "https://github.com/Brionwickstrom/walkie-talkie/releases/download/maps-roads-gp/Portland_Gifford_Pinchot_Roads.wtr",
+          "size": 8945802,
+          "sha256": "9c2d0a6d175aaede6627fd0b3dc6d8621359d610ed3123fe22ca11b0c27463a6",
+          "summary": "40155 km of road · map data 2026-10-25",
+          "attribution": "Roads © OpenStreetMap contributors, ODbL",
+          "bounds": {
+            "s": 45.4,
+            "w": -122.95,
+            "n": 46.65,
+            "e": -121.35
+          }
         }
       ]
     }

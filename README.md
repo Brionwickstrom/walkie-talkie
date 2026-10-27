@@ -1201,3 +1201,49 @@ shared route) and **Stop**. More than 40 m off the route the phone vibrates
 and shows an arrow back; far off it re-routes by itself. GPS runs every 2 s
 while navigating (5 s with Battery saver, 10 s with Offline power save).
 Code: `lib/trip/nav/` (trail_graph, navigator, nav_session), `lib/ui/nav_page.dart`.
+
+## v1.9.2: offline driving directions
+
+Car routing on the phone with no signal, from saved OpenStreetMap roads.
+
+**Get roads** (Trip tab, *Offline roads* map button or the panel button):
+
+- *Ready-made maps* → **Portland to Gifford Pinchot roads** → Add
+  (8.9 MB; 40,155 km of road from Portland/Vancouver to Mount St. Helens,
+  Trapper Creek, the Gorge and Mount Adams; box 45.40,-122.95 to 46.65,-121.35).
+- *Save roads for an area* → drag the corners (or the middle) of the box, or
+  *Use current view* → the size is shown first ("About N roads · X on the
+  phone (Y to download)") → *Save roads (X)*. Up to 1 x 1 degree per area;
+  big areas download in pieces from Overpass (several mirrors are tried).
+- Each saved area has a menu: *Show on map*, *Update* (download again /
+  newer pack), *Rename*, *Delete*. All saved areas are joined for routing,
+  so a route can cross from one area into another.
+
+**Drive**: long-press the map (or tap a waypoint/pin) → *Drive here*, or
+*Drive to trailhead, then hike* (picks the best trailhead waypoint within
+25 km, drives there, then starts *Navigate here* on the trail by itself).
+The drive card shows distance, time and warnings; *Follow* opens the follow
+screen (next turn arrow and distance, heading-up map that re-centres,
+spoken directions with mute, *Re-route*, *Steps*, *Stop*). Going off route
+re-routes by itself. At a trailhead, *Navigate here* continues on foot.
+
+**Roads rules** (from OSM tags): `access`/`motor_vehicle`/`motorcar` no,
+private, forestry, agricultural are avoided (destination = only if needed);
+`oneway`, roundabouts (exit counting); locked gates / bollards are avoided
+(only used, with a warning, when there is no other way); open gates are
+warned. Roughness: `4wd_only`, `smoothness=horrible`, `tracktype=grade5` →
+*high clearance / 4WD*; `smoothness=bad`, grade3-4, dirt → *rough*; gravel /
+grade2 / tracks → *gravel / unpaved*; each slows the estimate and is shown on
+the route (dashed / coloured) and in the warnings. Seasonal closures from
+`*:conditional = no @ (Nov 15-Apr 30)` are avoided while closed and warned
+otherwise. Not modelled: turn restrictions, traffic, live closures.
+
+**Voice**: Android text-to-speech (works offline with the phone's voice
+data). Driving: "In half a mile, turn left onto Silverstar Road (FR 4109)",
+then at the turn; trail navigation can speak too (*Voice on/off* on the
+trail follow screen, off by default). GPS while driving: 1 s, 2 s with
+battery saver, 3 s in Offline power save (saving roads is off there).
+
+Pack building: `tool/build_roads.dart` turns an `osmium cat -f opl` extract
+(Geofabrik, highway=motorway..track) into the `.wtr` file (gzip, typed
+arrays, ~42 bytes a road piece).
