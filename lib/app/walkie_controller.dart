@@ -14,6 +14,14 @@ import 'package:permission_handler/permission_handler.dart';
 import '../audio/audio_engine.dart';
 import 'link_settings.dart';
 import 'link_settings.dart' as link_settings;
+
+import 'package:flutter_blue_plus/flutter_blue_plus.dart' as fbp;
+
+import 'conn_probes.dart';
+import 'connection_test.dart';
+import 'debug_log.dart';
+import 'invite.dart';
+import 'setup.dart';
 import 'people_refresh.dart';
 import 'power_plan.dart';
 import '../audio/codec.dart';
@@ -188,6 +196,7 @@ class WalkieController extends ChangeNotifier {
     );
     whosWhere.replyPresence = _replyPresence;
     whosWhere.addListener(notifyListeners);
+    debugLog.secrets = () => settings.privateChannels.values;
     peopleRefresh = PeopleRefresh(
       probe: _probeEveryone,
       probeRadio: _probeRadio,
@@ -227,6 +236,391 @@ class WalkieController extends ChangeNotifier {
   Future<void> _replyPresence({required bool radio}) =>
       radio ? manager.sendRadioHello() : manager.sendHello();
 
+  // ------------------------------------- setup, connection test, invites,
+  // ------------------------------------- debug log (v1.8.7)
+
+  /// Rolling connection log ("Send debug log").
+  final DebugLog debugLog = DebugLog();
+
+  /// What to show at start for setup (wizard / one-time prompt / none).
+  SetupEntry get setupEntry => setupEntryFor(
+    newInstall: settings.newInstall,
+    setupDone: settings.setupDone,
+    promptShown: settings.setupPromptShown,
+  );
+
+  /// The wizard asks for permissions itself: [start] must not.
+  bool permissionsBySetup = false;
+
+  Future<void> markSetupDone() async {
+    if (settings.setupDone) return;
+    settings.setupDone = true;
+    settings.setupPromptShown = true;
+    // The wizard covered the battery question.
+    settings.batteryPromptShown = true;
+    await settingsStore.save(settings);
+    debugLog.add('setup', 'setup finished / skipped');
+  }
+
+  Future<void> markSetupPromptShown() async {
+    settings.setupPromptShown = true;
+    await settingsStore.save(settings);
+  }
+
+  static PermState _permState(PermissionStatus s) {
+    if (s.isGranted || s.isLimited || s.isProvisional) return PermState.granted;
+    if (s.isPermanentlyDenied) return PermState.permanentlyDenied;
+    return PermState.denied;
+  }
+
+  int? _sdk;
+
+  /// Android SDK level (0 elsewhere / unknown -> treated as newest).
+  Future<int> androidSdk() async {
+    if (_sdk != null) return _sdk!;
+    if (!Platform.isAndroid) return _sdk = 0;
+    final d = await bridge.deviceInfo();
+    final v = d?['sdk'];
+    return _sdk = v is int ? v : 0;
+  }
+
+  /// Runtime permissions behind [p] on this phone. Android 11 and older
+  /// have no "Nearby devices" (Bluetooth scanning uses location there);
+  /// Wi-Fi Direct's NEARBY_WIFI_DEVICES exists from Android 13.
+  static List<Permission> _permsFor(AppPermission p, int sdk) {
+    final android = Platform.isAndroid;
+    final newest = sdk == 0;
+    return switch (p) {
+      AppPermission.microphone => [Permission.microphone],
+      AppPermission.nearby =>
+        android
+            ? [
+                if (newest || sdk >= 31) ...[
+                  Permission.bluetoothScan,
+                  Permission.bluetoothConnect,
+                  Permission.bluetoothAdvertise,
+                ],
+                if (newest || sdk >= 33) Permission.nearbyWifiDevices,
+              ]
+            : [Permission.bluetooth],
+      AppPermission.location =>
+        android ? [Permission.locationWhenInUse] : const [],
+      AppPermission.notifications => [Permission.notification],
+    };
+  }
+
+  /// Each permission group: the worst of its parts.
+  Future<Map<AppPermission, PermState>> permissionStates() async {
+    final out = <AppPermission, PermState>{};
+    if (!Platform.isAndroid && !Platform.isIOS) return out;
+    final sdk = await androidSdk();
+    for (final p in AppPermission.values) {
+      final perms = _permsFor(p, sdk);
+      if (perms.isEmpty) {
+        out[p] = PermState.notNeeded;
+        continue;
+      }
+      var worst = PermState.granted;
+      for (final x in perms) {
+        try {
+          final st = _permState(await x.status);
+          if (st == PermState.permanentlyDenied) {
+            worst = st;
+          } else if (st == PermState.denied && worst == PermState.granted) {
+            worst = st;
+          }
+        } catch (_) {}
+      }
+      out[p] = worst;
+    }
+    return out;
+  }
+
+  /// Ask for [p]; "don't ask again" opens App info. Links that were down
+  /// for lack of it start again. True when granted.
+  Future<bool> requestAppPermission(AppPermission p) async {
+    final perms = _permsFor(p, await androidSdk());
+    if (perms.isEmpty) return true;
+    var ok = false;
+    try {
+      final r = await perms.request();
+      ok = r.values.every((s) => _permState(s) == PermState.granted);
+      if (!ok && r.values.any((s) => s.isPermanentlyDenied)) {
+        await openPhoneSettings(PhoneSetting.appInfo);
+      }
+    } catch (_) {}
+    debugLog.add('perm', '${p.name}: ${ok ? 'granted' : 'not granted'}');
+    if (ok && p == AppPermission.nearby) await restartDownLinks();
+    return ok;
+  }
+
+  /// Ask for every missing permission at once (setup wizard).
+  Future<void> requestAllPermissions() async {
+    await _requestPermissions(force: true);
+    debugLog.add('perm', 'asked for all permissions');
+    await restartDownLinks();
+  }
+
+  /// Bluetooth / Wi-Fi Direct that are down (e.g. permission was missing)
+  /// start again.
+  Future<void> restartDownLinks() async {
+    if (!started) return;
+    for (final t in manager.transports) {
+      if (t.kind != TransportKind.ble && t.kind != TransportKind.wifiDirect) {
+        continue;
+      }
+      if (t.status == TransportStatus.running ||
+          t.status == TransportStatus.starting) {
+        continue;
+      }
+      try {
+        await t.stop();
+        await t.start(localNodeId: nodeId, channel: scope);
+      } catch (_) {}
+    }
+    notifyListeners();
+  }
+
+  /// Bluetooth adapter on (null: unknown / unsupported).
+  Future<bool?> bluetoothOn() async {
+    try {
+      if (!await fbp.FlutterBluePlus.isSupported) return null;
+      final s = fbp.FlutterBluePlus.adapterStateNow;
+      if (s == fbp.BluetoothAdapterState.on) return true;
+      if (s == fbp.BluetoothAdapterState.off) return false;
+    } catch (_) {}
+    return null;
+  }
+
+  Transport? _transport(TransportKind k) {
+    for (final t in manager.transports) {
+      if (t.kind == k) return t;
+    }
+    return null;
+  }
+
+  /// The connection test: active probes + current link states.
+  bool connectionTestRunning = false;
+
+  Future<List<CheckRow>> runConnectionTest({
+    Future<NetProbe> Function()? internetProbe,
+    Future<RelayProbe> Function(Uri server)? relayProbe,
+  }) async {
+    connectionTestRunning = true;
+    notifyListeners();
+    try {
+      if (bridge.supported) await refreshPhoneNet();
+      final offline = settings.offlineSaver;
+      final relays = relayUrisFor(settings);
+      NetProbe? net;
+      RelayProbe? relay;
+      if (!offline) {
+        final results = await Future.wait<Object?>([
+          (internetProbe ?? probeInternet)(),
+          if (relays.isNotEmpty)
+            (relayProbe ??
+                (u) => probeRelay(
+                  server: u,
+                  channelScope: scope,
+                  connector: RelayConnector.platform(),
+                ))(relays.first),
+        ]);
+        net = results[0] as NetProbe;
+        if (results.length > 1) relay = results[1] as RelayProbe;
+      }
+      final lan = _transport(TransportKind.lan);
+      final wd = _transport(TransportKind.wifiDirect);
+      final ble = _transport(TransportKind.ble);
+      final snap = ConnSnapshot(
+        offlineSaver: offline,
+        ios: Platform.isIOS,
+        phoneNet: phoneNet,
+        lan: lan?.status,
+        lanDetail: lan?.statusDetail,
+        wifiDirect: wd?.status,
+        wifiDirectDetail: wd?.statusDetail,
+        wifiDirectEnabled: settings.wifiDirect,
+        ble: ble?.status,
+        bleDetail: ble?.statusDetail,
+        bluetoothOn: await bluetoothOn(),
+        bluetoothPermissionMissing: await bluetoothPermissionMissing(),
+        cell: cellStatus,
+        cellInfo: cellInfo,
+        internet: net,
+        relayConfigured: relays.isNotEmpty,
+        relayLink: _relay.status,
+        relayLinkDetail: internetStatus.text,
+        relay: relay,
+        radioPaired: radioPaired,
+        radioReady: radioDevice.ready,
+        radioDetail: radioDevice.deviceName ?? radioDevice.detail,
+        permissions: await permissionStates(),
+        batteryExempt: bridge.supported
+            ? await bridge.ignoringBatteryOptimizations()
+            : null,
+        stayReachable: settings.stayReachable,
+        serviceRunning: bridge.supported ? await bridge.serviceRunning() : null,
+        manufacturer: bridge.supported ? await bridge.manufacturer() : '',
+      );
+      final rows = evaluateConnection(snap);
+      lastConnectionTest = rows;
+      for (final r in rows) {
+        debugLog.add('test', '$r');
+      }
+      return rows;
+    } finally {
+      connectionTestRunning = false;
+      notifyListeners();
+    }
+  }
+
+  List<CheckRow>? lastConnectionTest;
+
+  /// Battery optimization exemption (the system "Allow" dialog).
+  Future<void> requestBatteryExemption() async {
+    debugLog.add('battery', 'asked to ignore battery optimizations');
+    await bridge.requestIgnoreBatteryOptimizations();
+  }
+
+  /// The phone maker's own screen, else App info.
+  Future<void> openVendorBattery() async {
+    if (!await bridge.openVendorBattery()) {
+      await openPhoneSettings(PhoneSetting.appInfo);
+    }
+  }
+
+  // invites
+
+  /// Invite for the current channel (public or private) and / or a friend
+  /// add (valid for [friendValid]).
+  Invite makeInvite({
+    bool channel = true,
+    bool friend = false,
+    Duration friendValid = const Duration(hours: 1),
+  }) => Invite(
+    channel: channel ? this.channel : null,
+    passcode: channel ? settings.passcodeFor(this.channel) : null,
+    name: name,
+    friendCode: friend ? friendQrText(validFor: friendValid) : null,
+  );
+
+  /// Apply a confirmed invite. Returns a short summary for a snackbar.
+  Future<String> applyInvite(
+    Invite inv, {
+    bool joinChannel = true,
+    bool addFriend = true,
+  }) async {
+    final done = <String>[];
+    if (joinChannel && inv.channel != null) {
+      final ch = inv.channel!;
+      if (inv.isPrivate) {
+        settings.privateChannels[ch] = ChannelKey.normalize(inv.passcode!);
+        await settingsStore.save(settings);
+      } else if (settings.isPrivate(ch)) {
+        // The invite is for the public channel with that number.
+        settings.privateChannels.remove(ch);
+        await settingsStore.save(settings);
+      }
+      await setChannel(ch);
+      done.add('joined CH $ch${inv.isPrivate ? ' (private)' : ''}');
+    }
+    if (addFriend && inv.friendCode != null) {
+      final err = await addFriendFromQr(inv.friendCode!);
+      done.add(err ?? 'friend added');
+    }
+    debugLog.add('invite', done.join(', '));
+    return done.isEmpty ? 'Nothing to do' : done.join(', ');
+  }
+
+  // debug log
+
+  Future<void> _attachDebugLog() async {
+    debugLog.secrets = () => settings.privateChannels.values;
+    try {
+      final base = await bridge.filesDir();
+      final root = base != null
+          ? Directory(base)
+          : await getApplicationSupportDirectory();
+      await debugLog.attach(Directory('${root.path}/logs'));
+    } catch (_) {}
+    debugLog.add('app', 'started, $channelLabel');
+  }
+
+  final Map<TransportKind, String> _lastLinkLog = {};
+
+  void _logLinks() {
+    for (final t in manager.transports) {
+      final line =
+          '${t.status.name}${t.statusDetail != null ? ' (${t.statusDetail})' : ''}';
+      if (_lastLinkLog[t.kind] == line) continue;
+      _lastLinkLog[t.kind] = line;
+      debugLog.add(t.kind.name, line);
+    }
+  }
+
+  /// Header lines of the debug report.
+  Future<List<String>> debugHeader() async {
+    String version = '?';
+    try {
+      final i = await PackageInfo.fromPlatform();
+      version = '${i.version}+${i.buildNumber}';
+    } catch (_) {}
+    final d = await bridge.deviceInfo();
+    final device = d == null
+        ? Platform.operatingSystem
+        : '${d['manufacturer']} ${d['model']}, Android ${d['release']} '
+              '(SDK ${d['sdk']})';
+    return [
+      'Walkie Talkie debug log',
+      'Created: ${DateTime.now().toIso8601String()}',
+      'App version: $version',
+      'Device: $device',
+      'Phone id: ${nodeId.toRadixString(16)}',
+      'Channel: $channelLabel',
+      'Offline power save: ${settings.offlineSaver}, battery saver: '
+          '${settings.powerSaver}, stay reachable: ${settings.stayReachable}',
+      'Phone network: ${phoneNet ?? '?'}, cell: ${cellStatus.name}'
+          '${cellInfo != null ? ' (${cellLabel(cellInfo!)})' : ''}',
+      internetStatus.text,
+      'Relay: ${relayUris.map((u) => u.host).join(', ')}',
+      for (final t in manager.transports)
+        'Link ${t.kind.name}: ${t.status.name}'
+            '${t.statusDetail != null ? ' (${t.statusDetail})' : ''}',
+      'People here: ${peers.length}, Who\'s where: '
+          '$whosWhereElsewhereCount elsewhere',
+      'Radio: ${radioPaired ? (radioDevice.ready ? 'connected' : 'paired, not connected') : 'none'}',
+      if (lastConnectionTest != null) ...[
+        'Last connection test:',
+        for (final r in lastConnectionTest!) '  $r',
+      ],
+    ];
+  }
+
+  Future<String> debugReport() async => debugLog.report(await debugHeader());
+
+  /// Write the report to a file and open the share sheet.
+  Future<bool> shareDebugLog() async {
+    final text = await debugReport();
+    try {
+      final tmp = await getTemporaryDirectory();
+      final dir = Directory('${tmp.path}/exports');
+      await dir.create(recursive: true);
+      final stamp = DateTime.now()
+          .toIso8601String()
+          .substring(0, 19)
+          .replaceAll(':', '-');
+      final f = File('${dir.path}/walkie-debug-$stamp.txt');
+      await f.writeAsString(text);
+      return await bridge.shareFile(
+        f.path,
+        mime: 'text/plain',
+        title: 'Walkie Talkie debug log',
+      );
+    } catch (_) {
+      return false;
+    }
+  }
+
   // ------------------------------------------- connection settings (v1.8.5)
 
   /// The phone's network: "wifi", "cell", "other", "none" (null = unknown).
@@ -236,10 +630,22 @@ class WalkieController extends ChangeNotifier {
     final n = await bridge.netKind();
     final cell = CellInfo.fromMap(await bridge.cellInfo());
     if (n == phoneNet && cell == cellInfo) return;
+    if (n != phoneNet) debugLog.add('net', 'phone network: ${n ?? '?'}');
     phoneNet = n;
     cellInfo = cell;
+    final cs = cellStatus.name;
+    if (cs != _lastCellLog) {
+      _lastCellLog = cs;
+      debugLog.add(
+        'cell',
+        '$cs${cell != null ? ' (${cellLabel(cell)}, data ${cell.dataUp ? 'up' : 'down'}'
+                  '${cell.airplane ? ', airplane' : ''}${cell.dataSaver ? ', data saver' : ''})' : ''}',
+      );
+    }
     notifyListeners();
   }
+
+  String? _lastCellLog;
 
   /// The phone's cellular side (v1.8.6), null when unknown (iOS).
   CellInfo? cellInfo;
@@ -289,6 +695,9 @@ class WalkieController extends ChangeNotifier {
   Future<bool> bluetoothPermissionMissing() async {
     try {
       if (Platform.isAndroid) {
+        final sdk = await androidSdk();
+        // Android 11 and older: no "Nearby devices" permission.
+        if (sdk != 0 && sdk < 31) return false;
         return !await Permission.bluetoothScan.isGranted ||
             !await Permission.bluetoothConnect.isGranted;
       }
@@ -766,6 +1175,7 @@ class WalkieController extends ChangeNotifier {
   }
 
   Future<void> _start() async {
+    await _attachDebugLog();
     await bridge.init();
     _subs.add(bridge.actions.listen(_onAction));
     _lifecycle = AppLifecycleListener(onStateChange: _onLifecycle);
@@ -781,7 +1191,12 @@ class WalkieController extends ChangeNotifier {
       error = 'Audio init failed: $e';
     }
     _subs.add(manager.peerChanges.listen(_onPeers));
-    _subs.add(manager.transportChanges.listen((_) => notifyListeners()));
+    _subs.add(
+      manager.transportChanges.listen((_) {
+        _logLinks();
+        notifyListeners();
+      }),
+    );
     _subs.add(
       manager.audio.listen((a) {
         final live = !transmitting && recording == null;
@@ -1041,7 +1456,9 @@ class WalkieController extends ChangeNotifier {
     return Directory('${root.path}/voice');
   }
 
-  Future<void> _requestPermissions() async {
+  Future<void> _requestPermissions({bool force = false}) async {
+    // First run: the setup wizard explains and asks (v1.8.7).
+    if (permissionsBySetup && !force) return;
     final perms = <Permission>[Permission.microphone];
     if (Platform.isAndroid) {
       perms.addAll([
@@ -1083,6 +1500,9 @@ class WalkieController extends ChangeNotifier {
         talking: transmitting,
       );
       _serviceText = '$_serviceTitle|$_serviceBody|$transmitting';
+      if (!serviceRunning) {
+        debugLog.add('service', 'listening service did not start');
+      }
     } else {
       await bridge.stopService();
       serviceRunning = false;
@@ -1132,6 +1552,9 @@ class WalkieController extends ChangeNotifier {
   void _onLifecycle(AppLifecycleState s) {
     final wasForeground = foreground;
     foreground = s == AppLifecycleState.resumed;
+    if (foreground != wasForeground) {
+      debugLog.add('app', foreground ? 'on screen' : 'background (${s.name})');
+    }
     unawaited(whosWhere.setForeground(foreground));
     if (s != AppLifecycleState.detached) _wasVisible = true;
     if (foreground && !wasForeground) {
@@ -1222,6 +1645,10 @@ class WalkieController extends ChangeNotifier {
         }
       case 'sosOpen':
         _uiRequests.add('sos');
+      case 'joinLink':
+        // walkietalkie://join?... opened (v1.8.7): confirm in the UI.
+        final url = a['url'];
+        if (url is String) _uiRequests.add('join:$url');
       case 'importFile':
         // A trail / map file opened with the app: import on the Trip tab.
         final path = a['path'] as String? ?? '';
@@ -1424,6 +1851,7 @@ class WalkieController extends ChangeNotifier {
   Future<void> setOfflineSaver(bool on) async {
     if (settings.offlineSaver == on) return;
     settings.offlineSaver = on;
+    debugLog.add('saver', 'Offline power save ${on ? 'on' : 'off'}');
     offlineUi.value = on;
     notifyListeners();
     await settingsStore.save(settings);
@@ -1505,6 +1933,12 @@ class WalkieController extends ChangeNotifier {
   }
 
   void _onPeers(List<Peer> list) {
+    if (list.length != peers.length) {
+      debugLog.add(
+        'people',
+        '${list.length} here: ${[for (final p in list) '${p.displayName} via ${manager.bestLinkTo(p.id)?.name ?? '?'}'].join(', ')}',
+      );
+    }
     final ids = {for (final p in list) p.id};
     for (final old in peers) {
       if (!ids.contains(old.id)) {
@@ -2582,7 +3016,7 @@ class WalkieController extends ChangeNotifier {
   Timer? _qrExpiry;
 
   /// Text for "my friend QR": valid for 10 minutes, for one scan.
-  String friendQrText() {
+  String friendQrText({Duration validFor = const Duration(minutes: 10)}) {
     final code = PairKey.randomSecret();
     final key = PairKey.fromQrCode(code, nodeId);
     final old = _qrPending;
@@ -2591,7 +3025,7 @@ class WalkieController extends ChangeNotifier {
     friendLinks.addPending(key);
     unawaited(friendLinks.sendPresence());
     _qrExpiry?.cancel();
-    _qrExpiry = Timer(const Duration(minutes: 10), () {
+    _qrExpiry = Timer(validFor, () {
       friendLinks.removePending(key);
       if (_qrPending == key) _qrPending = null;
     });
@@ -3075,6 +3509,10 @@ class WalkieController extends ChangeNotifier {
     }
     if (token != _channelToken) return; // a newer switch won
     await manager.setChannel(ch, key: key);
+    debugLog.add(
+      'channel',
+      'CH $ch${key != null ? ' (private, room ${RelayTransport.roomFor(manager.scope)})' : ''}',
+    );
     whosWhere.announceSoon();
     _left.clear(); // a private switch forgets everyone; not "left"
 
@@ -3124,8 +3562,10 @@ class WalkieController extends ChangeNotifier {
   void _applyName() {
     name = settings.name;
     manager.localName = name;
-    manager.sendHello();
-    whosWhere.announceSoon();
+    if (started) {
+      manager.sendHello();
+      whosWhere.announceSoon();
+    }
     unawaited(settingsStore.save(settings));
     notifyListeners();
   }
@@ -3158,6 +3598,7 @@ class WalkieController extends ChangeNotifier {
     }
     _talkLimit?.cancel();
     _qrExpiry?.cancel();
+    unawaited(debugLog.close());
     for (final t in _friendTalkTimers.values) {
       t.cancel();
     }

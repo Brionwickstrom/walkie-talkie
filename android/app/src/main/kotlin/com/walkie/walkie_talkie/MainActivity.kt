@@ -52,6 +52,11 @@ class MainActivity : FlutterActivity() {
         val from = i.getLongExtra("from", 0)
         val id = i.getLongExtra("id", 0)
         val channel = i.getIntExtra("channel", 0)
+        // v1.8.7: invite link walkietalkie://join?... -> confirm in Dart.
+        if (i.action == Intent.ACTION_VIEW && i.data?.scheme == "walkietalkie") {
+            BgBridge.deliver(this, mapOf("type" to "joinLink", "url" to i.data.toString()))
+            return
+        }
         when (i.action) {
             Intent.ACTION_VIEW, Intent.ACTION_SEND -> importShared(i)
             Notifier.ACTION_ANSWER -> {

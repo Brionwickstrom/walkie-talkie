@@ -152,6 +152,32 @@ object BgBridge {
             }
             "filesDir" -> result.success(ctx.filesDir.absolutePath)
             "manufacturer" -> result.success(Build.MANUFACTURER ?: "")
+            // v1.8.7: header of "Send debug log".
+            "deviceInfo" -> result.success(
+                mapOf(
+                    "manufacturer" to (Build.MANUFACTURER ?: ""),
+                    "model" to (Build.MODEL ?: ""),
+                    "sdk" to Build.VERSION.SDK_INT,
+                    "release" to (Build.VERSION.RELEASE ?: ""),
+                ),
+            )
+            // v1.8.7: invite link through the share sheet.
+            "shareText" -> {
+                try {
+                    val send = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, str(call, "text"))
+                        putExtra(Intent.EXTRA_SUBJECT, str(call, "title"))
+                    }
+                    open(ctx, Intent.createChooser(send, str(call, "title")))
+                    result.success(true)
+                } catch (_: Exception) {
+                    result.success(false)
+                }
+            }
+            // v1.8.7: the phone maker's own background / auto-start screen
+            // (Xiaomi, Huawei, Oppo...). False when none could be opened.
+            "openVendorBattery" -> result.success(openVendorBattery(ctx))
             // Walkie audio plays on the media stream (STREAM_MUSIC, loud
             // speaker). Fraction 0..1 of its volume, for the "volume low" hint.
             "mediaVolume" -> {
@@ -448,6 +474,39 @@ object BgBridge {
         } catch (_: Exception) {
             false
         }
+    }
+
+    /** Known maker screens for auto-start / background limits (v1.8.7). */
+    private fun openVendorBattery(ctx: Context): Boolean {
+        val m = (Build.MANUFACTURER ?: "").lowercase()
+        val targets = mutableListOf<Pair<String, String>>()
+        when {
+            m.contains("xiaomi") || m.contains("redmi") || m.contains("poco") ->
+                targets.add("com.miui.securitycenter" to "com.miui.permcenter.autostart.AutoStartManagementActivity")
+            m.contains("huawei") || m.contains("honor") -> {
+                targets.add("com.huawei.systemmanager" to "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity")
+                targets.add("com.huawei.systemmanager" to "com.huawei.systemmanager.optimize.process.ProtectActivity")
+            }
+            m.contains("oppo") || m.contains("realme") -> {
+                targets.add("com.coloros.safecenter" to "com.coloros.safecenter.permission.startup.StartupAppListActivity")
+                targets.add("com.oppo.safe" to "com.oppo.safe.permission.startup.StartupAppListActivity")
+            }
+            m.contains("oneplus") ->
+                targets.add("com.oneplus.security" to "com.oneplus.security.chainlaunch.view.ChainLaunchAppListActivity")
+            m.contains("samsung") ->
+                targets.add("com.samsung.android.lool" to "com.samsung.android.sm.battery.ui.BatteryActivity")
+        }
+        for ((pkg, cls) in targets) {
+            try {
+                val i = Intent().setClassName(pkg, cls)
+                if (i.resolveActivity(ctx.packageManager) != null) {
+                    open(ctx, i)
+                    return true
+                }
+            } catch (_: Exception) {
+            }
+        }
+        return false
     }
 
     @SuppressLint("BatteryLife")

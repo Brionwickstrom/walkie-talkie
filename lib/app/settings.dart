@@ -40,6 +40,9 @@ class AppSettings {
     this.stayReachable = true,
     this.startOnBoot = false,
     this.batteryPromptShown = false,
+    this.setupDone = false,
+    this.setupPromptShown = false,
+    this.newInstall = false,
     this.showDiagnostics = false,
     this.powerSaver = false,
     this.offlineSaver = false,
@@ -103,6 +106,16 @@ class AppSettings {
 
   /// The battery-optimization explanation was shown once already.
   bool batteryPromptShown;
+
+  /// First-run setup wizard finished or skipped (v1.8.7).
+  bool setupDone;
+
+  /// Existing users (updated from an older version): the one-time
+  /// "Run setup check" prompt was shown (v1.8.7).
+  bool setupPromptShown;
+
+  /// This launch created the phone id: a fresh install (not saved).
+  final bool newInstall;
 
   /// Per-person playback volume (peer id -> 0..2, 1 = normal).
   final Map<int, double> peerVolumes;
@@ -318,6 +331,8 @@ class SharedPrefsSettingsStore implements SettingsStore {
   static const _kReach = 'stay_reachable';
   static const _kBoot = 'start_on_boot';
   static const _kBattery = 'battery_prompt_shown';
+  static const _kSetupDone = 'setup_done';
+  static const _kSetupPrompt = 'setup_prompt_shown';
   static const _kPrivate = 'private_channels';
   static const _kDiag = 'show_diagnostics';
   static const _kVolumes = 'peer_volumes';
@@ -346,6 +361,7 @@ class SharedPrefsSettingsStore implements SettingsStore {
       prefs = await SharedPreferences.getInstance();
     } catch (_) {}
     var id = prefs?.getInt(_kId);
+    final fresh = prefs != null && (id == null || id <= 0);
     if (id == null || id <= 0) {
       id = newNodeId();
       try {
@@ -380,6 +396,9 @@ class SharedPrefsSettingsStore implements SettingsStore {
       stayReachable: prefs?.getBool(_kReach) ?? true,
       startOnBoot: prefs?.getBool(_kBoot) ?? false,
       batteryPromptShown: prefs?.getBool(_kBattery) ?? false,
+      setupDone: prefs?.getBool(_kSetupDone) ?? false,
+      setupPromptShown: prefs?.getBool(_kSetupPrompt) ?? false,
+      newInstall: fresh,
       privateChannels: AppSettings.decodePrivate(prefs?.getString(_kPrivate)),
       showDiagnostics: prefs?.getBool(_kDiag) ?? false,
       peerVolumes: AppSettings.decodeVolumes(prefs?.getString(_kVolumes)),
@@ -423,6 +442,8 @@ class SharedPrefsSettingsStore implements SettingsStore {
       await prefs.setBool(_kReach, s.stayReachable);
       await prefs.setBool(_kBoot, s.startOnBoot);
       await prefs.setBool(_kBattery, s.batteryPromptShown);
+      await prefs.setBool(_kSetupDone, s.setupDone);
+      await prefs.setBool(_kSetupPrompt, s.setupPromptShown);
       await prefs.setBool(_kDiag, s.showDiagnostics);
       await prefs.setBool(_kSaver, s.powerSaver);
       await prefs.setBool(_kOffline, s.offlineSaver);

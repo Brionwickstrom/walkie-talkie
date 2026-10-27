@@ -224,6 +224,19 @@ class BackgroundBridge {
   Future<bool> openUrl(String url) async =>
       await _call<bool>('openUrl', {'url': url}) ?? false;
 
+  /// Manufacturer, model, Android SDK and release (v1.8.7, debug log).
+  Future<Map<Object?, Object?>?> deviceInfo() =>
+      _call<Map<Object?, Object?>>('deviceInfo');
+
+  /// Share [text] through the Android share sheet (v1.8.7).
+  Future<bool> shareText(String text, String title) async =>
+      await _call<bool>('shareText', {'text': text, 'title': title}) ?? false;
+
+  /// Open the phone maker's own auto-start / background screen; false when
+  /// this phone has none we know (v1.8.7).
+  Future<bool> openVendorBattery() async =>
+      await _call<bool>('openVendorBattery') ?? false;
+
   Future<String> manufacturer() async =>
       await _call<String>('manufacturer') ?? '';
 

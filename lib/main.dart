@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'app/setup.dart';
 import 'app/walkie_controller.dart';
 import 'ui/home_page.dart';
 
@@ -10,7 +11,10 @@ Future<void> main() async {
   // Normally the home screen starts the controller. When Android starts the
   // app with no screen (after a reboot, or after it was killed while
   // "stay reachable" is on) nothing is drawn, so start it here.
-  Future.delayed(const Duration(seconds: 3), controller.start);
+  // First run: the setup wizard starts it (v1.8.7).
+  Future.delayed(const Duration(seconds: 3), () {
+    if (controller.setupEntry != SetupEntry.wizard) controller.start();
+  });
 }
 
 class WalkieApp extends StatelessWidget {

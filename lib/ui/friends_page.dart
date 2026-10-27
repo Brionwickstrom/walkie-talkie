@@ -4,10 +4,12 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import '../app/invite.dart';
 import '../app/walkie_controller.dart';
 import '../chat/chat_body.dart';
 import '../chat/chat_store.dart';
 import 'chat_page.dart';
+import 'invite_sheet.dart';
 
 /// One row of the friends list.
 class FriendItem {
@@ -301,31 +303,51 @@ Future<void> showFriendCode(BuildContext context, WalkieController c) async {
 }
 
 Future<void> scanFriendCode(BuildContext context, WalkieController c) async {
-  final granted = (await Permission.camera.request()).isGranted;
-  if (!context.mounted) return;
-  String? text;
-  if (granted) {
-    text = await Navigator.of(context)
-        .push<String>(MaterialPageRoute(builder: (_) => const _ScanPage()));
-  } else {
-    text = await _pasteCode(context);
-  }
+  final text = await scanCode(context, title: 'Scan friend code');
   if (text == null || !context.mounted) return;
+  // An invite link / QR (v1.8.7) works here too.
+  final inv = Invite.parse(text);
+  if (inv != null && !text.trim().startsWith('walkie-friend:')) {
+    await confirmInvite(context, c, inv);
+    return;
+  }
   final err = await c.addFriendFromQr(text);
   if (err != null && context.mounted) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
   }
 }
 
+/// Camera scan of a friend code or an invite (paste when the camera is not
+/// allowed). Null when cancelled.
+Future<String?> scanCode(
+  BuildContext context, {
+  String title = 'Scan a code',
+}) async {
+  final granted = (await Permission.camera.request()).isGranted;
+  if (!context.mounted) return null;
+  if (granted) {
+    return Navigator.of(
+      context,
+    ).push<String>(MaterialPageRoute(builder: (_) => QrScanPage(title: title)));
+  }
+  return _pasteCode(context);
+}
+
+/// A scanned / pasted text this app understands.
+bool isWalkieCode(String v) =>
+    v.startsWith('walkie-friend:') || Invite.parse(v) != null;
+
 Future<String?> _pasteCode(BuildContext context) {
   final ctl = TextEditingController();
   return showDialog<String>(
     context: context,
     builder: (ctx) => AlertDialog(
-      title: const Text('Paste friend code'),
+      title: const Text('Paste a code or link'),
       content: TextField(
         controller: ctl,
-        decoration: const InputDecoration(hintText: 'walkie-friend:1:...'),
+        decoration: const InputDecoration(
+          hintText: 'walkie-friend:1:... or walkietalkie://join?...',
+        ),
       ),
       actions: [
         TextButton(
@@ -334,28 +356,29 @@ Future<String?> _pasteCode(BuildContext context) {
         ),
         FilledButton(
           onPressed: () => Navigator.pop(ctx, ctl.text.trim()),
-          child: const Text('Add'),
+          child: const Text('OK'),
         ),
       ],
     ),
   );
 }
 
-class _ScanPage extends StatefulWidget {
-  const _ScanPage();
+class QrScanPage extends StatefulWidget {
+  const QrScanPage({super.key, this.title = 'Scan a code'});
+  final String title;
 
   @override
-  State<_ScanPage> createState() => _ScanPageState();
+  State<QrScanPage> createState() => _QrScanPageState();
 }
 
-class _ScanPageState extends State<_ScanPage> {
+class _QrScanPageState extends State<QrScanPage> {
   bool _done = false;
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Scan friend code'),
+        title: Text(widget.title),
         actions: [
           TextButton(
             onPressed: () async {
@@ -374,7 +397,7 @@ class _ScanPageState extends State<_ScanPage> {
           if (_done) return;
           for (final b in capture.barcodes) {
             final v = b.rawValue;
-            if (v != null && v.startsWith('walkie-friend:')) {
+            if (v != null && isWalkieCode(v)) {
               _done = true;
               Navigator.pop(context, v);
               return;

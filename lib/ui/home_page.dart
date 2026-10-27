@@ -25,6 +25,12 @@ import 'trip_widgets.dart';
 import 'whos_where_page.dart';
 import '../app/power_plan.dart';
 import '../app/link_settings.dart';
+import '../app/invite.dart';
+import '../app/setup.dart';
+import 'battery_help.dart';
+import 'connection_test_page.dart';
+import 'invite_sheet.dart';
+import 'setup_wizard.dart';
 
 import 'dart:io' show Platform;
 
@@ -61,10 +67,24 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
-    c.start().then((_) {
-      _wireTrip();
-      _maybeAskBattery();
-    });
+    if (c.setupEntry == SetupEntry.wizard && !c.started) {
+      // First run (v1.8.7): the setup wizard asks for permissions and
+      // starts the links itself.
+      c.permissionsBySetup = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted) return;
+        await openSetupWizard(context, c);
+        c.permissionsBySetup = false;
+        await c.start();
+        _wireTrip();
+      });
+    } else {
+      c.start().then((_) async {
+        _wireTrip();
+        await _maybeAskBattery();
+        await _maybeSetupPrompt();
+      });
+    }
     _updates.updater
         .currentVersionLabel()
         .then((v) {
@@ -126,6 +146,17 @@ class _HomePageState extends State<HomePage> {
       c.uiRequests.listen((r) {
         if (!mounted) return;
         if (r == 'inbox') _openInbox(context);
+        if (r.startsWith('join:')) {
+          // Invite link opened (v1.8.7): confirm before anything changes.
+          final inv = Invite.parse(r.substring(5));
+          if (inv != null) {
+            confirmInvite(context, c, inv);
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('That invite link is not valid.')),
+            );
+          }
+        }
         if (r.startsWith('import:')) {
           // A trail / map file opened with the app: Trip tab, import it.
           final j = jsonDecode(r.substring(7)) as Map;
@@ -204,6 +235,43 @@ class _HomePageState extends State<HomePage> {
 
   int get _tripAlerts =>
       (c.trip?.sos.unanswered.length ?? 0) + (c.trip?.lost.lost.length ?? 0);
+
+  /// Updated from an older version (v1.8.7): offer the setup check once,
+  /// never force the wizard.
+  Future<void> _maybeSetupPrompt() async {
+    if (!mounted || c.setupEntry != SetupEntry.prompt) return;
+    await c.markSetupPromptShown();
+    if (!mounted) return;
+    final pick = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        key: const Key('setup-prompt'),
+        title: const Text('Run setup check?'),
+        content: const Text(
+          'New in this version: a quick check of permissions, mobile data, '
+          'battery settings and every connection, with a fix button for '
+          'anything that is off. Find it later in Settings.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Not now'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, 'test'),
+            child: const Text('Connection test'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, 'setup'),
+            child: const Text('Run setup check'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (pick == 'setup') await openSetupWizard(context, c);
+    if (pick == 'test' && mounted) await openConnectionTest(context, c);
+  }
 
   /// One-time friendly explanation before Android's battery prompt.
   Future<void> _maybeAskBattery() async {
@@ -414,6 +482,7 @@ class _HomePageState extends State<HomePage> {
                     onCellTap: () => _openCellSheet(context),
                     alone: c.aloneReason,
                     onAloneFix: c.openPhoneSettings,
+                    onConnectionTest: () => openConnectionTest(context, c),
                     notice: c.announcementMode && !c.isAdmin
                         ? Card(
                             margin: const EdgeInsets.fromLTRB(8, 4, 8, 0),
@@ -906,6 +975,10 @@ class _HomePageState extends State<HomePage> {
       builder: (ctx) => LinkSheetView(
         kind: k,
         info: info,
+        onTest: () {
+          Navigator.pop(ctx);
+          openConnectionTest(context, c);
+        },
         onAction: () async {
           Navigator.pop(ctx);
           if (info.setting == PhoneSetting.radioPairing) {
@@ -944,6 +1017,10 @@ class _HomePageState extends State<HomePage> {
         kind: TransportKind.internet,
         icon: cellIcon(state, c.cellInfo?.level),
         info: info,
+        onTest: () {
+          Navigator.pop(ctx);
+          openConnectionTest(context, c);
+        },
         onAction: () {
           Navigator.pop(ctx);
           c.openPhoneSettings(info.setting);
@@ -1364,6 +1441,71 @@ class _HomePageState extends State<HomePage> {
                   onTap: () => c.openPhoneSettings(PhoneSetting.appInfo),
                 ),
                 const Divider(height: 32),
+                _SectionTitle('Help & setup'),
+                ListTile(
+                  key: const Key('settings-setup'),
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.checklist),
+                  title: const Text('Setup wizard'),
+                  subtitle: const Text(
+                    'Call sign, permissions, mobile data, battery, channel, '
+                    'radio.',
+                  ),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    openSetupWizard(context, c);
+                  },
+                ),
+                ListTile(
+                  key: const Key('settings-conn-test'),
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.network_check),
+                  title: const Text('Connection test'),
+                  subtitle: const Text(
+                    'Checks Wi-Fi, Bluetooth, mobile data, internet, the '
+                    'relay, the radio, permissions and battery, with fixes.',
+                  ),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    openConnectionTest(context, c);
+                  },
+                ),
+                ListTile(
+                  key: const Key('settings-invite'),
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.qr_code),
+                  title: const Text('Invite (QR code / link)'),
+                  subtitle: const Text(
+                    'Share this channel and / or a friend add.',
+                  ),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    showInviteSheet(context, c);
+                  },
+                ),
+                ListTile(
+                  key: const Key('settings-join'),
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.qr_code_scanner),
+                  title: const Text('Join with a code'),
+                  subtitle: const Text('Scan or paste an invite.'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    scanInvite(context, c);
+                  },
+                ),
+                ListTile(
+                  key: const Key('settings-debug-log'),
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.bug_report_outlined),
+                  title: const Text('Send debug log'),
+                  subtitle: const Text(
+                    'Connection log for troubleshooting (passcodes, keys and '
+                    'precise locations removed).',
+                  ),
+                  onTap: () => sendDebugLog(ctx, c),
+                ),
+                const Divider(height: 32),
                 Row(
                   children: [
                     Expanded(
@@ -1392,53 +1534,10 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
-/// Explains why Android / Samsung battery saving must leave the app alone,
-/// then opens the right system screen.
-Future<void> showBatteryHelp(BuildContext context, WalkieController c) async {
-  final samsung = (await c.bridge.manufacturer()).toLowerCase().contains(
-    'samsung',
-  );
-  final ignoring = await c.bridge.ignoringBatteryOptimizations();
-  if (!context.mounted) return;
-  await showDialog<void>(
-    context: context,
-    builder: (ctx) => AlertDialog(
-      title: const Text('Let Walkie Talkie run in the background'),
-      content: SingleChildScrollView(
-        child: Text(
-          'To ring you or deliver voice messages while the app is closed, '
-          'Android must not put it to sleep.\n\n'
-          '${ignoring ? 'Battery optimization is already off for this app. ' : 'Tap Allow, then choose "Allow" (or "Unrestricted"). '}'
-          '${samsung ? '\n\nSamsung phones also put apps to sleep on their own. Open Settings > Battery > Background usage limits > Never sleeping apps and add Walkie Talkie. Also set Settings > Apps > Walkie Talkie > Battery to "Unrestricted".' : ''}'
-          '\n\nA phone that is turned off, or where the app was force-stopped, '
-          'cannot be reached.',
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(ctx),
-          child: const Text('Not now'),
-        ),
-        if (samsung || ignoring)
-          TextButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              c.bridge.openAppSettings();
-            },
-            child: const Text('App settings'),
-          ),
-        if (!ignoring)
-          FilledButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              c.bridge.requestIgnoreBatteryOptimizations();
-            },
-            child: const Text('Allow'),
-          ),
-      ],
-    ),
-  );
-}
+/// Explains why Android / the phone maker's battery saving must leave the
+/// app alone, with maker-specific steps (v1.8.7).
+Future<void> showBatteryHelp(BuildContext context, WalkieController c) =>
+    showBatteryGuide(context, c);
 
 class _FullScreenButton extends StatefulWidget {
   const _FullScreenButton({required this.controller});
@@ -2049,6 +2148,16 @@ Future<void> showPrivacySheet(BuildContext context, WalkieController c) async {
                     const Text(
                       'Announcement mode is on: only the admin talks.',
                     ),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    key: const Key('privacy-invite'),
+                    icon: const Icon(Icons.qr_code),
+                    label: const Text('Invite with QR / link'),
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      showInviteSheet(context, c);
+                    },
+                  ),
                   const SizedBox(height: 8),
                   OutlinedButton.icon(
                     icon: const Icon(Icons.lock_open),

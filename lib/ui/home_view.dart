@@ -321,6 +321,7 @@ class HomeBody extends StatelessWidget {
     this.cellLevel,
     this.onCellTap,
     this.alone,
+    this.onConnectionTest,
     this.onAloneFix,
     required this.actions,
     required this.ptt,
@@ -343,6 +344,9 @@ class HomeBody extends StatelessWidget {
 
   /// Why nobody shows up over the internet (empty list only, v1.8.7).
   final AloneReason? alone;
+
+  /// "Connection test" under the alone reason (v1.8.7).
+  final VoidCallback? onConnectionTest;
   final ValueChanged<PhoneSetting>? onAloneFix;
 
   /// Trailing button on the "N on CH 3" header (Who's where).
@@ -511,6 +515,13 @@ class HomeBody extends StatelessWidget {
                                         child: const Text(
                                           'Open phone settings',
                                         ),
+                                      ),
+                                    if (onConnectionTest != null)
+                                      TextButton.icon(
+                                        key: const Key('alone-test'),
+                                        icon: const Icon(Icons.network_check),
+                                        onPressed: onConnectionTest,
+                                        label: const Text('Connection test'),
                                       ),
                                   ],
                                 ),

@@ -331,6 +331,83 @@ decrypt).
 * Private talk to a friend is not saved in the replay history.
 * 1.4 and older phones do not see chats, names, friends or moderation.
 
+## v1.8.7: setup wizard, connection test, invites, debug log
+
+* **Why nobody shows up:** when the people list is empty, a card under it
+  says why. The reasons are: Offline power save is on, the relay is off in
+  Settings, the app is still connecting, the relay is not connected (with
+  the error and the cell state, plus a button to the right phone settings),
+  or the relay works and the other phone must be online on the same channel
+  and passcode. A **Connection test** button sits under it.
+* **First-run setup wizard** (fresh installs only, skippable at every step).
+  The steps are:
+  1. Call sign or your own name.
+  2. Permissions (microphone, Nearby devices / Bluetooth, location,
+     notifications), each with what it is for. The wizard asks instead of the
+     usual start-up prompts.
+  3. Mobile data / background data check, with **Open App info**.
+  4. The battery exemption request, plus steps for your phone maker.
+  5. Pick or join a channel: public, or private with a passcode, or scan an
+     invite.
+  6. Optional Meshtastic radio pairing.
+
+  Re-open it any time from **Settings > Help & setup > Setup wizard**. People
+  who update from an older version are never forced through it. They get a
+  one-time **Run setup check?** prompt instead.
+* **Connection test** (Settings > Help & setup, every connection status
+  sheet, and the empty people list). It has one row each for:
+  * **Wi-Fi / LAN:** link state.
+  * **Wi-Fi Direct:** link state.
+  * **Bluetooth:** adapter and permission.
+  * **Cell:** same logic as the Cell icon.
+  * **Internet:** an HTTPS request to a 204 page, with time.
+  * **Relay:** a separate connection to your channel's relay room over the
+    app's own network path, a text ping, and the round trip in ms. Nothing
+    is sent to people in the room.
+  * **Radio:** optional.
+  * **Permissions**.
+  * **Background / battery**.
+
+  Rows are green, yellow or red, each with a fix button. Grey rows are off
+  on purpose (Offline power save, relay "off", Stay reachable off). The test
+  runs again when you come back from a settings screen.
+* **Background reliability:**
+  * The app asks Android to ignore battery optimizations (the system
+    "Allow" dialog, with an explanation first).
+  * It detects Samsung, Xiaomi / Redmi / POCO, OnePlus, Oppo / Realme,
+    Huawei / Honor and Pixel and shows that maker's steps. For example,
+    Samsung: Never sleeping apps and Battery "Unrestricted"; Xiaomi:
+    Autostart and "No restrictions". Where a known maker screen exists, a
+    button opens it, falling back to App info.
+  * The listening foreground service now also holds a Wi-Fi lock, so LAN and
+    the relay over Wi-Fi stay up with the screen off.
+* **Invite link / QR** (Settings > Invite, or the lock / channel sheet). It
+  shares your channel (public CH, or private with its passcode) and / or a
+  friend add, valid for 1 hour, as a QR code and a share link:
+  * `walkietalkie://join?v=1&ch=3&p=...&n=...&f=...` opens the app directly.
+  * `https://github.com/Brionwickstrom/walkie-talkie/releases/latest#wt-join?...`
+    lands phones without the app on the download page. The parameters are in
+    the URL fragment, which is never sent to GitHub.
+  * Scanning in the app (Settings > Join with a code, Friends > Scan) or
+    opening the link shows a confirm dialog before anything changes.
+  * Private-channel QR codes and links contain the passcode, and the app
+    warns before showing them.
+  * The Meshtastic radio channel key (PSK) is never included.
+  * The old private-channel QR text still scans.
+* **Send debug log** (Settings > Help & setup, and the connection test). The
+  app keeps a rolling log of link, network, cell, channel, people, service
+  and test events: 1,500 lines in memory plus a 256 KB file that rotates
+  once.
+  * The report starts with the app version, phone model, Android version and
+    every link's state.
+  * Passcodes, friend codes, key-like tokens, private / friend relay rooms
+    and precise coordinates (rounded to 0.1 degree) are removed by default.
+    Call signs stay.
+  * **Share** opens the Android share sheet with the text file (email,
+    Drive...). **Copy** puts it on the clipboard.
+* Android 11 and older no longer report a missing "Nearby devices"
+  permission, because it doesn't exist there.
+
 ## v1.8.6: Cell / mobile data icon
 
 * A **Cell** icon now sits next to the Internet icon in the connection icons

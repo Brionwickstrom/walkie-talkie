@@ -73,6 +73,13 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!-- v1.8.7: invite links (channel / friend), confirmed in the app. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="walkietalkie" android:host="join"/>
+            </intent-filter>
             <!-- v1.8.3: "Open with" / "Share to" Walkie Talkie for trails
                  (GPX, KML, KMZ), offline maps (MBTiles) and park maps
                  (image, PDF): imported on the Trip tab. -->
@@ -169,6 +176,13 @@
 
          In particular, this is used by the Flutter engine in io.flutter.plugin.text.ProcessTextPlugin. -->
     <queries>
+        <!-- v1.8.7: phone makers' auto-start / battery screens -->
+        <package android:name="com.miui.securitycenter" />
+        <package android:name="com.huawei.systemmanager" />
+        <package android:name="com.coloros.safecenter" />
+        <package android:name="com.oppo.safe" />
+        <package android:name="com.oneplus.security" />
+        <package android:name="com.samsung.android.lool" />
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>

@@ -15,6 +15,7 @@ class LinkSheetView extends StatelessWidget {
     required this.onAction,
     this.icon,
     this.onSecond,
+    this.onTest,
   });
   final TransportKind kind;
   final LinkInfo info;
@@ -25,6 +26,9 @@ class LinkSheetView extends StatelessWidget {
 
   /// [LinkInfo.secondButton] tapped.
   final VoidCallback? onSecond;
+
+  /// "Run connection test" (v1.8.7).
+  final VoidCallback? onTest;
 
   @override
   Widget build(BuildContext context) {
@@ -82,6 +86,15 @@ class LinkSheetView extends StatelessWidget {
               icon: const Icon(Icons.signal_cellular_alt),
               label: Text(info.secondButton!),
               onPressed: onSecond,
+            ),
+          ],
+          if (onTest != null) ...[
+            const SizedBox(height: 8),
+            TextButton.icon(
+              key: const Key('link-conn-test'),
+              icon: const Icon(Icons.network_check),
+              label: const Text('Run connection test'),
+              onPressed: onTest,
             ),
           ],
         ],

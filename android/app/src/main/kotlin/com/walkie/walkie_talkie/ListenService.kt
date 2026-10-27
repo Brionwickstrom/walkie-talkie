@@ -106,6 +106,9 @@ class ListenService : Service() {
 
     private var wakeLock: PowerManager.WakeLock? = null
 
+    /** v1.8.7: keeps Wi-Fi awake (LAN + relay over Wi-Fi) while listening. */
+    private var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -182,6 +185,24 @@ class ListenService : Service() {
             if (!lock.isHeld) lock.acquire()
         } catch (_: Exception) {
         }
+        try {
+            val w = wifiLock ?: run {
+                val wm = applicationContext.getSystemService(Context.WIFI_SERVICE)
+                    as android.net.wifi.WifiManager
+                @Suppress("DEPRECATION")
+                val mode = if (Build.VERSION.SDK_INT >= 29) {
+                    android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF
+                } else {
+                    android.net.wifi.WifiManager.WIFI_MODE_FULL
+                }
+                wm.createWifiLock(mode, "walkie:listen").also {
+                    it.setReferenceCounted(false)
+                    wifiLock = it
+                }
+            }
+            if (!w.isHeld) w.acquire()
+        } catch (_: Exception) {
+        }
     }
 
     override fun onDestroy() {
@@ -191,6 +212,10 @@ class ListenService : Service() {
         PttKeys.updateSession(this)
         try {
             wakeLock?.let { if (it.isHeld) it.release() }
+        } catch (_: Exception) {
+        }
+        try {
+            wifiLock?.let { if (it.isHeld) it.release() }
         } catch (_: Exception) {
         }
         super.onDestroy()
