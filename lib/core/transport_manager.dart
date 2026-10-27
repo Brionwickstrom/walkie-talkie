@@ -11,6 +11,7 @@ import 'lobby.dart';
 import 'frame.dart';
 import 'mesh.dart';
 import 'peer.dart';
+import 'peer_box.dart';
 import 'transport.dart';
 
 /// Audio received from a peer, ready for the decoder.
@@ -1446,6 +1447,9 @@ class TransportManager {
                   changed = true;
                 }
               case ControlKind.hello:
+                // v1.9.4: per-phone key, every hello (fake hellos with
+                // another key show up as a conflict, see KxBook).
+                KxBook.record(peer.kxSeen, msg.x['kx'], now);
                 final iv = msg.interval;
                 peer.helloInterval = iv != null && iv > 0 && iv <= 30000
                     ? Duration(milliseconds: iv)

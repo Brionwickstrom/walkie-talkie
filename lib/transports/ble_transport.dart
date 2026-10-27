@@ -420,6 +420,12 @@ class BleTransport extends Transport {
     _peerToLink.removeWhere((_, linkId) => linkId == id);
   }
 
+  /// Some phone wrote to our GATT server recently (v1.9.4): only then is
+  /// broadcast audio notified to subscribers. Android cannot notify one
+  /// subscriber only, so once one real phone is connected, every
+  /// subscriber gets the notifications (private channels are encrypted).
+  bool get mayNotifyAudio => _peripheralPeers.isNotEmpty;
+
   @override
   bool canReach(int peerId) {
     if (_links.containsKey(_peerToLink[peerId])) return true;
@@ -443,7 +449,12 @@ class BleTransport extends Transport {
     var notify = false;
     if (peerIds == null) {
       targets.addAll(_links.values);
-      notify = true;
+      // v1.9.4: audio goes out on our own GATT server (to every phone
+      // subscribed to it at once) only after we have heard a phone write
+      // to us; a silent subscriber gets no talk. Every app version writes
+      // its hellos to the phones it is subscribed to, so nobody real
+      // misses anything. (Targeted sends below already need that.)
+      notify = !isAudio || mayNotifyAudio;
     } else {
       for (final id in peerIds) {
         final link = _links[_peerToLink[id]];

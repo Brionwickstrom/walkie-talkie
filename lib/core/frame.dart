@@ -188,9 +188,13 @@ enum ControlKind {
 /// 16 = v1.5.4 (private reply on the home screen), 17 = v1.6.0 (mesh relay,
 /// Wi-Fi Direct), 18 = v1.8.0 (Trip tab: map, SOS, check-ins, pins,
 /// trails, base camp), 19 = v1.8.2 (Who's where lobby beacons), 20 =
-/// v1.8.9 (direct internet links, [ControlKind.dx]). Absent on older
-/// phones.
-const int featureLevel = 20;
+/// v1.8.9 (direct internet links, [ControlKind.dx]), 21 = v1.9.4 (per
+/// phone key `kx` in hellos: private rekey `k: 2` and sealed direct link
+/// setup, see core/peer_box.dart). Absent on older phones.
+const int featureLevel = 21;
+
+/// Phones at this level announce `kx` and read rekey `k: 2` / sealed dx.
+const int peerBoxFeature = 21;
 
 /// Phones at this level set up direct internet links.
 const int directFeature = 20;

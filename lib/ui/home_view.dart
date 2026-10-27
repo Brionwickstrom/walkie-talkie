@@ -306,6 +306,7 @@ class HomeBody extends StatelessWidget {
     this.details = const [],
     required this.channelLabel,
     this.isPrivate = false,
+    this.listenerWarning,
     required this.me,
     required this.people,
     required this.onRing,
@@ -368,6 +369,9 @@ class HomeBody extends StatelessWidget {
   final List<String> details;
   final String channelLabel;
   final bool isPrivate;
+
+  /// "Unknown listener" warning under the header (v1.9.4), or null.
+  final Widget? listenerWarning;
   final PersonView me;
   final List<PersonView> people;
   final ValueChanged<PersonView> onRing;
@@ -469,6 +473,7 @@ class HomeBody extends StatelessWidget {
                       ],
                     ),
                   ),
+                  ?listenerWarning,
                   PersonCard(person: me, onEdit: onEditMe),
                   if (people.isEmpty)
                     Padding(

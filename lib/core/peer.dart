@@ -33,6 +33,10 @@ class Peer {
   /// Phone battery 0..100 from its hellos (`bt`, v1.8.3), null = unknown.
   int? battery;
 
+  /// Per-phone public keys announced in its hellos (`x.kx`, v1.9.4) and
+  /// when each was last seen; see `KxBook` in peer_box.dart.
+  final Map<String, DateTime> kxSeen = {};
+
   /// Hello extension fields (channel name, admin, announcement mode...).
   Map<String, Object?> info = const {};
 

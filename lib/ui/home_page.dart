@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../app/config.dart';
+import '../app/passcodes.dart';
 import '../app/walkie_controller.dart';
 import '../core/peer.dart';
 import '../core/transport.dart';
@@ -28,6 +29,7 @@ import '../app/link_settings.dart';
 import '../app/invite.dart';
 import '../app/setup.dart';
 import 'battery_help.dart';
+import 'channels_sheet.dart';
 import 'connection_test_page.dart';
 import 'invite_sheet.dart';
 import 'setup_wizard.dart';
@@ -301,11 +303,9 @@ class _HomePageState extends State<HomePage> {
                     children: [
                       _ChannelPicker(
                         channel: c.channel,
-                        isPrivate: c.settings.isPrivate,
-                        emojiOf: (ch) => ch == c.channel
-                            ? c.channelName?.emoji ?? ''
-                            : c.channelNameOf(ch)?.emoji ?? '',
-                        onChanged: (ch) => c.setChannel(ch),
+                        isPrivate: c.isPrivate,
+                        emoji: c.channelName?.emoji ?? '',
+                        onTap: () => showChannelsSheet(context, c),
                       ),
                       IconButton(
                         tooltip: c.isPrivate
@@ -461,6 +461,18 @@ class _HomePageState extends State<HomePage> {
                         ? 'CH ${c.channel}'
                         : '${c.channelTitle} (CH ${c.channel})',
                     isPrivate: c.isPrivate,
+                    listenerWarning: c.hiddenListeners > 0
+                        ? UnknownListenerCard(
+                            count: c.hiddenListeners,
+                            isPrivate: c.isPrivate,
+                            onTap: () => explainUnknownListener(
+                              context,
+                              isPrivate: c.isPrivate,
+                              count: c.hiddenListeners,
+                              isAdmin: c.isAdmin,
+                            ),
+                          )
+                        : null,
                     me: PersonView(
                       id: c.nodeId,
                       name: c.name,
@@ -1340,6 +1352,25 @@ class _HomePageState extends State<HomePage> {
                     ),
                 ],
                 const Divider(height: 32),
+                _SectionTitle('Privacy'),
+                SwitchListTile(
+                  key: const Key('settings-join-private'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text(
+                    'Alert when someone joins a private channel',
+                  ),
+                  subtitle: const Text('A short tone and their name.'),
+                  value: c.settings.joinAlertPrivate,
+                  onChanged: (v) => c.setJoinAlert(private: v),
+                ),
+                SwitchListTile(
+                  key: const Key('settings-join-open'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Alert when someone joins an open channel'),
+                  value: c.settings.joinAlertPublic,
+                  onChanged: (v) => c.setJoinAlert(public: v),
+                ),
+                const Divider(height: 32),
                 _SectionTitle('Messages'),
                 SwitchListTile(
                   key: const Key('autoPlay'),
@@ -1829,40 +1860,36 @@ class _RecordButton extends StatelessWidget {
   }
 }
 
+/// The channel button in the top bar (v1.9.4): "CH 3 ▾", opens the
+/// channel picker with its Private channels section.
 class _ChannelPicker extends StatelessWidget {
   const _ChannelPicker({
     required this.channel,
     required this.isPrivate,
-    required this.emojiOf,
-    required this.onChanged,
+    required this.emoji,
+    required this.onTap,
   });
   final int channel;
-  final bool Function(int channel) isPrivate;
-  final String Function(int channel) emojiOf;
-  final ValueChanged<int> onChanged;
+  final bool isPrivate;
+  final String emoji;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return DropdownButton<int>(
-      value: channel,
-      underline: const SizedBox.shrink(),
-      items: [
-        for (var i = 1; i <= 16; i++)
-          DropdownMenuItem(
-            value: i,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text('${emojiOf(i).isEmpty ? '' : '${emojiOf(i)} '}CH $i'),
-                if (isPrivate(i)) ...[
-                  const SizedBox(width: 4),
-                  const Icon(Icons.lock, size: 14),
-                ],
-              ],
-            ),
-          ),
-      ],
-      onChanged: (v) => v == null ? null : onChanged(v),
+    return InkWell(
+      key: const Key('channel-picker'),
+      borderRadius: BorderRadius.circular(8),
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('${emoji.isEmpty ? '' : '$emoji '}CH $channel'),
+            const Icon(Icons.arrow_drop_down),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -2012,7 +2039,10 @@ Future<void> showPrivacySheet(BuildContext context, WalkieController c) async {
                     autocorrect: false,
                     enableSuggestions: false,
                     decoration: InputDecoration(
-                      labelText: 'Passcode (at least 6 characters)',
+                      labelText: makeAdmin
+                          ? 'New passcode (at least ${Passcodes.minNew} '
+                                'characters)'
+                          : 'Passcode they gave you',
                       errorText: err,
                       suffixIcon: IconButton(
                         icon: Icon(
@@ -2022,6 +2052,20 @@ Future<void> showPrivacySheet(BuildContext context, WalkieController c) async {
                       ),
                     ),
                   ),
+                  if (makeAdmin)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        key: const Key('privacy-generate'),
+                        icon: const Icon(Icons.casino_outlined),
+                        label: const Text('Make one for me'),
+                        onPressed: () => setSheet(() {
+                          passCtl.text = Passcodes.generate();
+                          show = true;
+                          err = null;
+                        }),
+                      ),
+                    ),
                   CheckboxListTile(
                     contentPadding: EdgeInsets.zero,
                     value: makeAdmin,
@@ -2039,8 +2083,13 @@ Future<void> showPrivacySheet(BuildContext context, WalkieController c) async {
                     label: const Text('Make private'),
                     onPressed: () async {
                       final p = passCtl.text.trim();
-                      if (p.length < 6) {
-                        setSheet(() => err = 'Use at least 6 characters');
+                      // v1.9.4: a new channel needs a strong passcode;
+                      // joining someone's channel takes theirs as it is.
+                      final problem = makeAdmin
+                          ? Passcodes.problemForNew(p)
+                          : Passcodes.problemForJoin(p);
+                      if (problem != null) {
+                        setSheet(() => err = problem);
                         return;
                       }
                       await c.setChannelPrivacy(ch, p, makeAdmin: makeAdmin);
@@ -2129,6 +2178,21 @@ Future<void> showPrivacySheet(BuildContext context, WalkieController c) async {
                           child: const Text('Become admin'),
                         ),
                     ],
+                  ),
+                  SwitchListTile(
+                    key: const Key('join-alert-private'),
+                    contentPadding: EdgeInsets.zero,
+                    secondary: const Icon(Icons.notifications_active_outlined),
+                    title: const Text('Alert when someone joins'),
+                    subtitle: const Text(
+                      'A short tone and a note with their name (all private '
+                      'channels).',
+                    ),
+                    value: c.settings.joinAlertPrivate,
+                    onChanged: (v) async {
+                      await c.setJoinAlert(private: v);
+                      setSheet(() {});
+                    },
                   ),
                   if (c.isAdmin) ...[
                     SwitchListTile(

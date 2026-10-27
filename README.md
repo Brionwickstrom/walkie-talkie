@@ -1305,3 +1305,69 @@ Code: `lib/trip/offline_areas.dart`, `lib/trip/drive/online_router.dart`,
 `RoadGraph.check` in `road_router.dart`, `lib/ui/offline_areas_page.dart`.
 Tests: `test/v193_offline_area_drive_test.dart` (`ONLINE=1` also calls the
 real router).
+
+## v1.9.4: private channels hardened, one place for them
+
+Open channels (CH 1-16 without a passcode) work exactly as before. Private
+channels get these fixes, and everything stays compatible with older app
+versions and older relays (old phones keep working, no new steps):
+
+* **Where private channels live.** Tap the channel name in the top bar
+  ("CH 3 ▾"): the picker shows **Private channels** (lock icon, with their
+  names) at the top, with **New private channel** and **Join with a code or
+  QR** right there, and **Open channels** below. Before 1.9.4 there was one
+  dropdown CH 1-16 with a small lock on private numbers, and a channel was
+  made private with the lock button next to it (that still works).
+* **New private channel** fills in a strong generated passcode (12 letters
+  and digits, no look-alikes), picks a free channel number (CH 16 down),
+  makes you admin and opens the invite QR. A passcode you type for a NEW
+  channel needs 10+ characters with 5+ different ones (no runs like
+  1234567890). Joining a channel and channels already saved keep accepting
+  6+ characters. Key stretching (PBKDF2, 120k) is unchanged: a different
+  setting would give older phones a different key from the same passcode.
+* **Unknown listener.** Relay 1.4.0 sends a room roster (who is connected:
+  claimed id, seconds idle, seconds connected) every 5 s, only to sockets
+  that ask (`&r=1`; older apps never ask and ignore text anyway). The app
+  compares it with the people it hears and shows **Unknown listener (n)** on
+  a private channel (and a quiet "n more connected without showing up" on
+  an open one). Rules (`core/listeners.dart`): connected 8 s+, and either an
+  unheard id that is active, a second socket using a heard id, or silent
+  for over 60 s (the relay closes dead sockets well before that). Smoothed
+  over two rosters. Needs relay 1.4.0; with an older relay nothing shows.
+* **Silent sockets in private rooms (relay 1.4.0).** A socket gets a private
+  room's frames for its first 10 s, then only while it keeps sending binary
+  frames (every app version sends a hello every 1-4 s); 90 s without one
+  and it stops receiving until it sends again. Text pings alone do not
+  count. Open rooms, friend rooms and the lobby are unchanged.
+* **Join alert.** Settings > Privacy (and the lock sheet): "Alert when
+  someone joins" a private channel (on by default) / an open channel (off).
+  A short tone (app on screen) and a note with the name; not for phones
+  that were already there, came back within 30 s, or were announced in the
+  last 10 min.
+* **Real kick.** Every phone now announces a per-app-start X25519 key in
+  its hellos (`x.kx`, feature level 21, `core/peer_box.dart`). When the
+  admin removes someone, each remaining phone gets the new passcode sealed
+  for it alone (`core/rekey.dart`): with the friend pair key if they are
+  friends, else to its own key. The removed phone still sees the rekey
+  frames (it knows the old passcode) but cannot open the passcode. Members
+  accept a sealed rekey only from the admin's own announced key. If two
+  different keys claim to be one phone (someone fakes its hellos), nothing
+  is sent to it and the admin is told. **Fallback:** phones older than
+  1.9.4 only understand the old clear copy, so they get exactly what they
+  got before (no worse than today); the admin's note names them, because
+  the removed phone could read that copy.
+* **Direct link setup.** On private channels it was already sealed with the
+  channel key (checked). Now offers/answers are also sealed to the other
+  phone's own key when it has one, so a hidden listener on an open channel
+  (or a removed member) does not learn addresses or link tokens; older
+  phones get the plain message. Offers are only answered for phones whose
+  hello we have heard.
+* **Bluetooth.** Broadcast audio is only notified on our GATT server after
+  some phone has written to it (every app version writes hellos). Android
+  cannot notify one subscriber only, so once one real phone is connected,
+  every subscriber gets the notifications (private channels are encrypted
+  anyway).
+
+Limits: this protects against listening, not against a phone that has the
+passcode and actively fakes another phone's hellos (it shows as a key
+conflict). The join tone plays only while the app is on screen.

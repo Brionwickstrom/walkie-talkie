@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import '../core/frame.dart';
+import '../core/listeners.dart';
 import '../core/transport.dart';
 import 'direct_links.dart';
 import 'relay_socket.dart';
@@ -35,6 +36,7 @@ class RelayTransport extends Transport {
     this.room,
     this.quickRetry = false,
     this.quickRetryDelay = const Duration(milliseconds: 400),
+    this.roster = false,
   }) : connector = connector ?? IoRelayConnector() {
     _netSub = this.connector.networkChanges.listen(_onNetworkChanged);
   }
@@ -60,6 +62,18 @@ class RelayTransport extends Transport {
   /// Tailscale Funnel fail on the first try and work on the second.
   bool quickRetry;
   final Duration quickRetryDelay;
+
+  /// v1.9.4: ask the relay for the room roster (`&r=1`, relay 1.4.0+;
+  /// older relays ignore it) for the "Unknown listener" warning.
+  final bool roster;
+
+  /// The last roster the relay sent (null: none on this socket yet, or an
+  /// older relay).
+  RelayRoster? lastRoster;
+  final _rosterCtl = StreamController<RelayRoster>.broadcast();
+
+  /// Every roster the relay sends (about every 5 s).
+  Stream<RelayRoster> get rosters => _rosterCtl.stream;
   bool _quickUsed = false;
   Duration? _retryDelay;
 
@@ -138,11 +152,17 @@ class RelayTransport extends Transport {
       ? 'p${(channel & 0xFFFF).toRadixString(16).padLeft(4, '0')}'
       : '$channel';
 
-  static Uri channelUri(Uri base, int channel, int nodeId) => base.replace(
+  static Uri channelUri(
+    Uri base,
+    int channel,
+    int nodeId, {
+    bool roster = false,
+  }) => base.replace(
     queryParameters: {
       ...base.queryParameters,
       'ch': roomFor(channel),
       'id': nodeId.toRadixString(16),
+      if (roster) 'r': '1',
     },
   );
 
@@ -195,7 +215,7 @@ class RelayTransport extends Transport {
                   'id': _localNodeId.toRadixString(16),
                 },
               )
-            : channelUri(base, _channel, _localNodeId),
+            : channelUri(base, _channel, _localNodeId, roster: roster),
         timeout: connectTimeout,
       );
       if (attempt != _attempt || !_wanted) {
@@ -216,7 +236,14 @@ class RelayTransport extends Transport {
             _framesCtl.add(InboundFrame(f, TransportKind.internet));
           }
         }
-        // Text ("pong") only refreshes liveness.
+        // Text: "pong" only refreshes liveness; relay 1.4.0 rosters.
+        if (data is String && roster) {
+          final r = RelayRoster.tryParse(data);
+          if (r != null) {
+            lastRoster = r;
+            if (!_rosterCtl.isClosed) _rosterCtl.add(r);
+          }
+        }
       }, onDone: () => _onLost(ws, ws.closeReason ?? 'connection closed'));
       _startPing();
       _setStatus(TransportStatus.running);
@@ -285,6 +312,7 @@ class RelayTransport extends Transport {
     final sub = _sub;
     _sub = null;
     _ws = null;
+    lastRoster = null;
     unawaited(sub?.cancel());
     unawaited(which.close());
     // A connection that lived a while was fine: retry fast.
@@ -338,6 +366,7 @@ class RelayTransport extends Transport {
     _sub = null;
     final ws = _ws;
     _ws = null;
+    lastRoster = null;
     await sub?.cancel();
     await ws?.close();
   }
@@ -404,6 +433,7 @@ class RelayTransport extends Transport {
     await _netSub?.cancel();
     await _statusCtl.close();
     await _framesCtl.close();
+    await _rosterCtl.close();
   }
 }
 
@@ -448,9 +478,14 @@ class MultiRelayTransport extends Transport {
     this.failover = true,
     this.direct,
     Stream<String>? networkChanges,
+    bool roster = false,
   }) : _factory =
            factory ??
-           ((u) => RelayTransport(serverUri: u, connector: connector)) {
+           ((u) => RelayTransport(
+             serverUri: u,
+             connector: connector,
+             roster: roster,
+           )) {
     _build(serverUris);
     final d = direct;
     if (d != null) {
@@ -517,6 +552,11 @@ class MultiRelayTransport extends Transport {
   final List<StreamSubscription<dynamic>> _subs = [];
   final _statusCtl = StreamController<TransportStatus>.broadcast();
   final _framesCtl = StreamController<InboundFrame>.broadcast();
+  final _rosterCtl =
+      StreamController<(RelayTransport, RelayRoster)>.broadcast();
+
+  /// Room rosters from every relay that sends them (relay 1.4.0+, v1.9.4).
+  Stream<(RelayTransport, RelayRoster)> get rosters => _rosterCtl.stream;
   bool _wanted = false;
   int _localNodeId = 0;
   int _channel = 1;
@@ -549,6 +589,11 @@ class MultiRelayTransport extends Transport {
       _subs.add(
         r.frames.listen((f) {
           if (!_framesCtl.isClosed) _framesCtl.add(f);
+        }),
+      );
+      _subs.add(
+        r.rosters.listen((ro) {
+          if (!_rosterCtl.isClosed) _rosterCtl.add((r, ro));
         }),
       );
       _subs.add(
@@ -847,5 +892,6 @@ class MultiRelayTransport extends Transport {
     await _teardown();
     await _statusCtl.close();
     await _framesCtl.close();
+    await _rosterCtl.close();
   }
 }

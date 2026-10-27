@@ -33,9 +33,12 @@ import '../chat/chat_store.dart';
 import '../chat/photo.dart';
 import '../core/channel_crypto.dart';
 import '../core/frame.dart';
+import '../core/listeners.dart';
 import '../core/lobby.dart';
 import '../core/pair_key.dart';
 import '../core/peer.dart';
+import '../core/peer_box.dart';
+import '../core/rekey.dart';
 import '../core/transport.dart';
 import '../core/transport_manager.dart';
 import '../friends/friend_links.dart';
@@ -65,6 +68,7 @@ import '../trip/trip_controller.dart';
 import '../trip/trip_route.dart';
 import 'call_signs.dart';
 import 'config.dart';
+import 'passcodes.dart';
 import 'playback_log.dart';
 import 'private_reply.dart';
 import 'settings.dart';
@@ -119,6 +123,8 @@ class WalkieController extends ChangeNotifier {
          connector: RelayConnector.platform(),
          // v1.8.9: direct phone-to-phone links, signaled via the relays.
          direct: DirectLinks(),
+         // v1.9.4: room rosters for the "Unknown listener" warning.
+         roster: true,
        ) {
     name = settings.name;
     final wd = Platform.isAndroid
@@ -209,6 +215,12 @@ class WalkieController extends ChangeNotifier {
     _relay.direct!
       ..attach(manager)
       ..onEvent = (l) => debugLog.add('direct', l);
+    _wrapDirectSignals();
+    unawaited(
+      PeerBox.create().then((b) {
+        peerBox ??= b;
+      }),
+    );
     peopleRefresh = PeopleRefresh(
       probe: _probeEveryone,
       probeRadio: _probeRadio,
@@ -1077,6 +1089,31 @@ class WalkieController extends ChangeNotifier {
   }
 
   List<Peer> peers = const [];
+
+  // ------------------------------------------- private security (v1.9.4)
+
+  /// This phone's one-to-one key (made at app start, announced as `kx`).
+  PeerBox? peerBox;
+
+  /// Unknown listeners from the relays' room rosters.
+  final ListenerWatch listenerWatch = ListenerWatch();
+
+  /// Sockets in this channel's relay room that never showed up (relay
+  /// 1.4.0+). Shown as "Unknown listener" on private channels.
+  int hiddenListeners = 0;
+
+  /// The relays send rosters (relay 1.4.0+), so [hiddenListeners] means
+  /// something.
+  bool get listenerCheckOn => listenerWatch.supported(DateTime.now());
+
+  /// No join alerts until then (just switched channel / started: everyone
+  /// already there would "join").
+  DateTime _joinQuietUntil = DateTime.now();
+  final Map<int, DateTime> _joinAlerted = {};
+
+  /// The last join alert ("Bob joined CH 3"), for the UI.
+  ({String text, DateTime at})? lastJoinAlert;
+
   bool transmitting = false;
   String? error;
   bool started = false;
@@ -1235,6 +1272,8 @@ class WalkieController extends ChangeNotifier {
       error = 'Audio init failed: $e';
     }
     _subs.add(manager.peerChanges.listen(_onPeers));
+    _subs.add(_relay.rosters.listen(_onRoster));
+    _joinQuietUntil = DateTime.now().add(const Duration(seconds: 8));
     _subs.add(
       manager.transportChanges.listen((_) {
         _logLinks();
@@ -1980,6 +2019,7 @@ class WalkieController extends ChangeNotifier {
   }
 
   void _onPeers(List<Peer> list) {
+    _checkJoins(list);
     if (list.length != peers.length) {
       debugLog.add(
         'people',
@@ -2011,6 +2051,7 @@ class WalkieController extends ChangeNotifier {
       }
     }
     peers = list;
+    _refreshListeners();
     _adoptChannelInfo(list);
     trip?.onPeersChanged();
     final talking = {
@@ -2637,6 +2678,7 @@ class WalkieController extends ChangeNotifier {
         'ct': n.updated,
       },
       if (!settings.showInWhosWhere) 'hw': 0,
+      'kx': ?peerBox?.publicKey,
       if (isPrivate && settings.channelAdmins[scope] == nodeId) 'adm': 1,
       if (isPrivate &&
           settings.channelAdmins[scope] == nodeId &&
@@ -2754,9 +2796,47 @@ class WalkieController extends ChangeNotifier {
   final Set<int> _rekeysHandled = {};
   bool kicking = false;
 
+  /// How the new passcode reaches [member] in [kick] (v1.9.4); see
+  /// [Rekey] for the ways (`friend`, `key`, `legacy`, `conflict`).
+  ({Map<String, Object?>? x, String how}) rekeyFor(
+    int member,
+    String passcode,
+    int rid,
+    int removed,
+  ) {
+    final p = manager.peer(member);
+    return Rekey.build(
+      from: nodeId,
+      to: member,
+      rid: rid,
+      passcode: passcode,
+      removed: removed,
+      toFeature: p?.feature ?? 0,
+      toKx: p?.kxSeen ?? const {},
+      box: peerBox,
+      friendSecret: friendLinks.friend(member)?.key.secret,
+    );
+  }
+
+  /// The new passcode in a rekey from [from] (our admin), or null.
+  String? passcodeFromRekey(int from, ControlMessage m) {
+    final rid = m.id;
+    if (rid == null) return null;
+    return Rekey.open(
+      from: from,
+      me: nodeId,
+      rid: rid,
+      x: m.x,
+      fromKx: manager.peer(from)?.kxSeen ?? const {},
+      box: peerBox,
+      friendSecret: friendLinks.friend(from)?.key.secret,
+      minLength: Passcodes.minJoin,
+    );
+  }
+
   /// Remove [peerId] from this private channel: everyone else moves to a
-  /// new random passcode (sent to them encrypted with the old one); the
-  /// removed phone is not told it.
+  /// new random passcode, delivered to each phone separately (v1.9.4, see
+  /// [rekeyFor]); the removed phone is not told it and cannot read it.
   Future<void> kick(int peerId) async {
     if (!isAdmin || kicking) return;
     final ch = channel, oldScope = scope;
@@ -2767,25 +2847,26 @@ class WalkieController extends ChangeNotifier {
     final pass = _randomPasscode();
     final rid = Random().nextInt(0x7FFFFFFF) + 1;
     final acked = <int>{};
+    final legacy = <int>{};
+    final unsafe = <int>{};
     try {
       await Future.wait([
         for (final m in members)
           () async {
+            final r = rekeyFor(m, pass, rid, peerId);
+            debugLog.add('admin', 'rekey to #$m: ${r.how}');
+            if (r.x == null) {
+              unsafe.add(m);
+              return;
+            }
+            if (r.how == 'legacy') legacy.add(m);
             final done = Completer<void>();
             final key = rid ^ m;
             _rekeyAcks[key] = done;
             for (var i = 0; i < 10 && !done.isCompleted; i++) {
               await manager.sendControlTo(
                 m,
-                ControlMessage(
-                  ControlKind.rekey,
-                  to: m,
-                  id: rid,
-                  x: {
-                    'pc': pass,
-                    'ex': [peerId],
-                  },
-                ),
+                ControlMessage(ControlKind.rekey, to: m, id: rid, x: r.x!),
               );
               await Future.any([
                 done.future,
@@ -2811,24 +2892,37 @@ class WalkieController extends ChangeNotifier {
       await settingsStore.save(settings);
       await manager.sendHello();
       final missed = members.difference(acked);
-      _notice(
+      final parts = <String>[
         missed.isEmpty
-            ? 'Removed $kickedName. ${acked.length} phones moved to the new passcode.'
+            ? 'Removed $kickedName. ${acked.length} phones moved to the new '
+                  'passcode.'
             : 'Removed $kickedName. Not confirmed: '
                   '${missed.map(nameOf).join(', ')}. Give them the new '
                   'passcode (tap the lock).',
-      );
+      ];
+      final old = legacy.intersection(acked);
+      if (old.isNotEmpty) {
+        parts.add(
+          '${old.map(nameOf).join(', ')} ${old.length == 1 ? 'has' : 'have'} '
+          'an older app and got it the old way, which $kickedName could '
+          'read. Update their app; the next removal is private for them '
+          'too.',
+        );
+      }
+      if (unsafe.isNotEmpty) {
+        parts.add(
+          'Two phones claimed to be ${unsafe.map(nameOf).join(', ')}, so '
+          'nothing was sent to them.',
+        );
+      }
+      _notice(parts.join(' '));
     } finally {
       kicking = false;
       notifyListeners();
     }
   }
 
-  static String _randomPasscode() {
-    const a = 'abcdefghjkmnpqrstuvwxyz23456789';
-    final r = Random.secure();
-    return List.generate(10, (_) => a[r.nextInt(a.length)]).join();
-  }
+  static String _randomPasscode() => Passcodes.generate();
 
   Future<void> _onRekey(InboundControl c) async {
     final m = c.message;
@@ -2840,8 +2934,8 @@ class WalkieController extends ChangeNotifier {
     }
     // A new passcode from our admin, for the channel we are on.
     if (!isPrivate || c.channel != scope || adminId != c.peerId) return;
-    final pc = m.x['pc'];
-    if (pc is! String || pc.length < 6) return;
+    final pc = passcodeFromRekey(c.peerId, m);
+    if (pc == null) return;
     final ack = ControlMessage(ControlKind.rekeyAck, to: c.peerId, id: rid);
     await manager.sendControlTo(c.peerId, ack);
     if (!_rekeysHandled.add(rid)) return;
@@ -2863,6 +2957,175 @@ class WalkieController extends ChangeNotifier {
       '${nameOf(admin)} (admin) changed the passcode of $channelTitle; '
       'you were moved automatically.',
     );
+  }
+
+  // ------------------------------------- private security (v1.9.4)
+
+  /// Direct link setup (dx) sealed to the other phone's own key when it
+  /// has one (v1.9.4), so nobody else in the relay room (a hidden listener
+  /// on a public channel, a removed member on a private one) learns its
+  /// addresses or link tokens. Phones on older apps get it as before. And
+  /// a link is only started for / accepted from phones we have heard a
+  /// hello from.
+  void _wrapDirectSignals() {
+    final d = _relay.direct!;
+    d.signal = (to, x) =>
+        unawaited(manager.sendDirectSignal(to, sealDirectSignal(to, x)));
+    manager.onDirectSignal = (from, x) {
+      final open = openDirectSignal(from, x);
+      if (open == null) return;
+      final op = open['op'];
+      if ((op == 'o' || op == 'r') &&
+          (manager.peer(from)?.feature ?? 0) < directFeature) {
+        return; // never heard its hello: not in the people list
+      }
+      d.onSignal(from, open);
+    };
+  }
+
+  /// [x] sealed for [to] (`{e, pk}`), or [x] unchanged for older phones.
+  Map<String, Object?> sealDirectSignal(int to, Map<String, Object?> x) {
+    final p = manager.peer(to);
+    return DirectSeal.seal(
+      from: nodeId,
+      to: to,
+      x: x,
+      toFeature: p?.feature ?? 0,
+      toKx: p?.kxSeen ?? const {},
+      box: peerBox,
+    );
+  }
+
+  /// The dx payload from [from], opened if sealed; null if it does not open.
+  Map<String, Object?>? openDirectSignal(int from, Map<String, Object?> x) =>
+      DirectSeal.open(
+        from: from,
+        me: nodeId,
+        x: x,
+        fromKx: manager.peer(from)?.kxSeen ?? const {},
+        box: peerBox,
+      );
+
+  void _onRoster((RelayTransport, RelayRoster) e) {
+    final heard = <String>{
+      nodeId.toRadixString(16),
+      for (final p in peers)
+        if (p.channel == scope) p.id.toRadixString(16),
+      for (final id in settings.blocked.keys) id.toRadixString(16),
+    };
+    listenerWatch.update(e.$1, e.$2, heard);
+    _refreshListeners();
+  }
+
+  void _refreshListeners() {
+    final n = listenerWatch.count(DateTime.now());
+    if (n == hiddenListeners) return;
+    debugLog.add(
+      'people',
+      '$n unknown listener(s) in relay room ${RelayTransport.roomFor(scope)}',
+    );
+    hiddenListeners = n;
+    notifyListeners();
+  }
+
+  /// Alert when someone joins (v1.9.4): on by default for private
+  /// channels, off for open ones (Settings).
+  bool get joinAlertOn =>
+      isPrivate ? settings.joinAlertPrivate : settings.joinAlertPublic;
+
+  Future<void> setJoinAlert({bool? private, bool? public}) async {
+    if (private != null) settings.joinAlertPrivate = private;
+    if (public != null) settings.joinAlertPublic = public;
+    notifyListeners();
+    await settingsStore.save(settings);
+  }
+
+  void _checkJoins(List<Peer> list) {
+    final now = DateTime.now();
+    final before = {
+      for (final p in peers)
+        if (p.channel == scope) p.id,
+    };
+    final fresh = [
+      for (final p in list)
+        if (p.channel == scope &&
+            !before.contains(p.id) &&
+            !isBlocked(p.id) &&
+            // Back after a short drop-out: not a new join.
+            !_left.containsKey(p.id))
+          p,
+    ];
+    if (fresh.isEmpty || !started || !joinAlertOn) return;
+    if (now.isBefore(_joinQuietUntil)) return;
+    final names = <String>[];
+    int? first;
+    for (final p in fresh) {
+      final last = _joinAlerted[p.id];
+      if (last != null && now.difference(last) < const Duration(minutes: 10)) {
+        continue;
+      }
+      _joinAlerted[p.id] = now;
+      names.add(p.displayName);
+      first ??= p.id;
+    }
+    if (names.isEmpty) return;
+    final text = '${names.join(', ')} joined $channelTitle';
+    lastJoinAlert = (text: text, at: now);
+    debugLog.add('people', 'join alert: $text');
+    _notice(isPrivate ? '\u{1F512} $text' : text);
+    if (foreground && bridge.supported) {
+      unawaited(
+        bridge
+            .beep(from: first!, name: names.first, notify: false)
+            .catchError((_) {}),
+      );
+    }
+  }
+
+  /// Name of channel number [ch] as this phone knows it (a private
+  /// channel's name is kept under its key, known once it was opened).
+  ChannelName? nameForChannel(int ch) {
+    final pass = settings.passcodeFor(ch);
+    if (pass == null) return channelNameOf(ch);
+    final key = _keys['$ch\u0000$pass'];
+    if (key == null) return null;
+    return channelNameOf(TransportManager.scopeFor(ch, key));
+  }
+
+  /// Private channels saved on this phone (channel numbers, sorted).
+  List<int> get privateChannelNumbers =>
+      settings.privateChannels.keys.toList()..sort();
+
+  /// A channel number for a new private channel: the highest one that is
+  /// not private yet and not the one we are on (CH 16 down), so the low
+  /// numbers stay free for open talk. Null when all 16 are private.
+  int? freeChannelForPrivate() {
+    for (var ch = 16; ch >= 1; ch--) {
+      if (!settings.isPrivate(ch) && ch != channel) return ch;
+    }
+    return settings.isPrivate(channel) ? null : channel;
+  }
+
+  /// Set up a new private channel (v1.9.4): [passcode] must be strong
+  /// ([Passcodes.problemForNew]); I become its admin and move there.
+  /// Returns the problem with the passcode, or null when done.
+  Future<String?> createPrivateChannel({
+    required int ch,
+    required String passcode,
+    String name = '',
+    String emoji = '',
+  }) async {
+    final p = ChannelKey.normalize(passcode);
+    final problem = Passcodes.problemForNew(p);
+    if (problem != null) return problem;
+    settings.privateChannels[ch] = p;
+    await settingsStore.save(settings);
+    await setChannel(ch);
+    await claimAdmin();
+    if (name.trim().isNotEmpty || emoji.trim().isNotEmpty) {
+      await setChannelName(name, emoji);
+    }
+    return null;
   }
 
   // -------------------------------------------------------- mute / block
@@ -3556,6 +3819,9 @@ class WalkieController extends ChangeNotifier {
     }
     if (token != _channelToken) return; // a newer switch won
     await manager.setChannel(ch, key: key);
+    listenerWatch.clear();
+    hiddenListeners = 0;
+    _joinQuietUntil = DateTime.now().add(const Duration(seconds: 8));
     debugLog.add(
       'channel',
       'CH $ch${key != null ? ' (private, room ${RelayTransport.roomFor(manager.scope)})' : ''}',
