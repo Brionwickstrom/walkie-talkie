@@ -22,7 +22,7 @@ import 'package:walkie_talkie/trip/tile_cache.dart';
 import 'package:walkie_talkie/trip/trip_controller.dart';
 import 'package:walkie_talkie/trip/trip_settings.dart';
 import 'package:walkie_talkie/ui/drive_page.dart';
-import 'package:walkie_talkie/ui/road_areas_page.dart';
+import 'package:walkie_talkie/ui/offline_areas_page.dart';
 
 import 'trip_integration_test.dart' show FakeHost;
 
@@ -782,7 +782,7 @@ void main() {
       final res = await t.driveTo(at(10, 10));
       expect(res.session, isNull);
       expect(res.message, contains('Ready-made maps'));
-      expect(res.message, contains('Offline roads'));
+      expect(res.message, contains('Save this area offline'));
     });
 
     test(
@@ -1069,7 +1069,7 @@ void main() {
     });
 
     testWidgets(
-      'offline roads list: rename, delete; picker shows the size and saves',
+      'offline areas list: rename, delete; save page shows the size and saves roads',
       (tester) async {
         final dl = RoadDownloader(
           fetch: (r) async {
@@ -1085,60 +1085,86 @@ void main() {
         late MapLayer l;
         await tester.runAsync(() async {
           l = await addRoads(o.build(), 'Test roads');
+          await t.areas.migrate();
         });
-        await tester.binding.setSurfaceSize(const Size(800, 1400));
+        final id = t.areas.entries.single.id;
+        expect(l.offlineArea, id);
+        await tester.binding.setSurfaceSize(const Size(800, 1600));
         addTearDown(() => tester.binding.setSurfaceSize(null));
         await tester.pumpWidget(
           MaterialApp(
-            home: RoadAreasPage(
+            home: OfflineAreasPage(
               trip: t,
               view: const GeoBounds(45.74, -122.26, 45.78, -122.20),
               downloader: dl,
             ),
           ),
         );
+        await tester.pump();
         expect(find.text('Test roads'), findsOneWidget);
         expect(find.textContaining('1 saved area'), findsOneWidget);
-        await tester.tap(find.byKey(Key('roadMenu:${l.id}')));
+        await tester.tap(find.byKey(Key('areaMenu:$id')));
         await tester.pumpAndSettle();
         expect(find.text('Update'), findsOneWidget);
         await tester.tap(find.text('Rename'));
         await tester.pumpAndSettle();
-        await tester.enterText(find.byType(TextField), 'Gifford roads');
+        await tester.enterText(find.byType(TextField), 'Gifford');
         await tester.runAsync(() async {
           await tester.tap(find.text('OK'));
           await Future<void>.delayed(const Duration(milliseconds: 50));
         });
         await tester.pumpAndSettle();
-        expect(find.text('Gifford roads'), findsOneWidget);
-        // New area.
+        expect(find.text('Gifford'), findsOneWidget);
+        for (
+          var i = 0;
+          i < 20 && t.layers.roads.single.name != 'Gifford roads';
+          i++
+        ) {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 50)),
+          );
+        }
+        expect(t.layers.roads.single.name, 'Gifford roads');
+        // New area: roads only (map style, elevation and trails off).
         await tester.pumpWidget(const SizedBox());
         await tester.pumpWidget(
           MaterialApp(
-            home: RoadAreaPickerPage(
+            home: SaveAreaPage(
               trip: t,
-              initial: const GeoBounds(45.74, -122.26, 45.78, -122.20),
+              initial: const GeoBounds(46.0, -122.26, 46.1, -122.10),
               downloader: dl,
               showTiles: false,
             ),
           ),
         );
-        await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 50)),
-        );
+        await tester.ensureVisible(find.byKey(const Key('style:topo')));
+        await tester.tap(find.byKey(const Key('style:topo')));
         await tester.pump();
+        await tester.ensureVisible(find.byKey(const Key('areaElev')));
+        await tester.tap(find.byKey(const Key('areaElev')));
+        await tester.pump();
+        await tester.ensureVisible(find.byKey(const Key('areaTrails')));
+        await tester.tap(find.byKey(const Key('areaTrails')));
+        await tester.pump();
+        for (var i = 0; i < 20; i++) {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 60)),
+          );
+          await tester.pump(const Duration(milliseconds: 950));
+        }
         expect(
-          tester.widget<Text>(find.byKey(const Key('roadEstimate'))).data,
-          contains('About 4000 roads'),
+          tester.widget<Text>(find.byKey(const Key('areaEstimate'))).data,
+          allOf(contains('+ roads '), isNot(contains('checking'))),
         );
-        expect(find.textContaining('Save roads ('), findsOneWidget);
-        expect(find.byKey(const Key('roadUseView')), findsOneWidget);
+        expect(find.textContaining('Save this area (~'), findsOneWidget);
+        expect(find.byKey(const Key('areaUseView')), findsOneWidget);
         await tester.enterText(
-          find.byKey(const Key('roadName')),
-          'Silver Star roads',
+          find.byKey(const Key('areaName')),
+          'Silver Star',
         );
+
         await tester.runAsync(() async {
-          await tester.tap(find.byKey(const Key('roadSave')));
+          await tester.tap(find.byKey(const Key('areaSave')));
         });
         for (var i = 0; i < 100 && t.layers.roads.length < 2; i++) {
           await tester.pump(const Duration(milliseconds: 100));
@@ -1153,14 +1179,14 @@ void main() {
         );
         // Delete from the list.
         await tester.pumpWidget(const SizedBox());
-        await tester.pumpWidget(MaterialApp(home: RoadAreasPage(trip: t)));
-        final g = t.layers.roads.firstWhere((l) => l.name == 'Gifford roads');
-        await tester.tap(find.byKey(Key('roadMenu:${g.id}')));
+        await tester.pumpWidget(MaterialApp(home: OfflineAreasPage(trip: t)));
+        await tester.pump();
+        await tester.tap(find.byKey(Key('areaMenu:$id')));
         await tester.pumpAndSettle();
         await tester.tap(find.text('Delete'));
         await tester.pumpAndSettle();
         await tester.runAsync(() async {
-          await tester.tap(find.byKey(const Key('roadDeleteOk')));
+          await tester.tap(find.byKey(const Key('areaDeleteOk')));
           await Future<void>.delayed(const Duration(milliseconds: 50));
         });
         await tester.pumpAndSettle();

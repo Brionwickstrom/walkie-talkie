@@ -15,11 +15,14 @@ import 'imports/route_share.dart';
 import 'lost_contact.dart';
 import 'drive/drive_nav.dart' show spokenDistance;
 import 'drive/drive_session.dart';
+import 'drive/online_router.dart';
 import 'drive/road_download.dart';
+import 'drive/road_router.dart';
 import 'drive/road_service.dart';
 import 'drive/speech.dart';
 import 'imports/geo_import.dart' show ImportedWaypoint;
 import 'nav/nav_session.dart';
+import 'offline_areas.dart';
 import 'nav/trail_graph.dart';
 import 'search/fetch.dart';
 import 'search/map_search.dart';
@@ -142,6 +145,12 @@ class TripController extends ChangeNotifier {
     store = StoreForward(clock: _clock)..enabled = settings.baseCamp;
     tiles = TileCache(Directory('${dir.path}/tiles'), userAgent: userAgent);
     layers = MapLayers(Directory('${dir.path}/layers'), clock: _clock);
+    areas = OfflineAreas(
+      File('${dir.path}/offline_areas.json'),
+      tiles: tiles,
+      layers: layers,
+      clock: _clock,
+    );
     weather = WeatherCache(
       File('${dir.path}/weather.json'),
       userAgent: userAgent,
@@ -178,6 +187,9 @@ class TripController extends ChangeNotifier {
 
   /// Imported trails, offline MBTiles maps and park map overlays (v1.8.3).
   late final MapLayers layers;
+
+  /// Saved offline areas (v1.9.3): map tiles, trails and roads together.
+  late final OfflineAreas areas;
   final RouteAssembler _routes = RouteAssembler();
 
   /// The newest route someone shared being stored (tests wait on it).
@@ -276,6 +288,8 @@ class TripController extends ChangeNotifier {
       _loadTracks(),
       layers.load(),
     ]);
+    await areas.load();
+    await _restoreDrive();
     unawaited(tiles.trim());
     await _updateLocationNeed();
     notifyListeners();
@@ -552,6 +566,10 @@ class TripController extends ChangeNotifier {
   /// Routing over the saved road areas (background isolate).
   RoadService roads = RoadService();
 
+  /// Online directions while there is signal (v1.9.3); tests swap in one
+  /// with a fake [Fetch].
+  late OnlineRouter onlineRouter = OnlineRouter(fetch: fetch);
+
   /// Spoken directions (the phone's offline text-to-speech).
   Speaker speaker = TtsSpeaker();
   DateTime? _lastDriveReroute;
@@ -561,25 +579,159 @@ class TripController extends ChangeNotifier {
   /// Saved road areas (all of them are used together).
   List<MapLayer> get roadAreas => layers.roads;
 
+  /// Online directions may be tried (not in Offline power save, not
+  /// told there is no network).
+  bool get onlineRoutingAllowed => plan.mapTileDownloads && tiles.online;
+
   Future<void> _loadRoads() {
     final paths = [for (final l in layers.roads) layers.fileOf(l).path]..sort();
     return roads.load(paths);
   }
 
   static const noRoadsMessage =
-      'No roads saved on this phone yet. Add "Portland to Gifford Pinchot '
-      'roads" in Ready-made maps, or save an area in Offline roads.';
+      'No signal, and no roads saved on this phone for offline directions. '
+      'With signal, Drive works anywhere. For places with no signal, save '
+      'the area first (Offline areas > Save this area offline) or add '
+      '"Portland to Gifford Pinchot roads" in Ready-made maps.';
 
-  /// Start driving to [to] along the saved roads. [hikeTo]: walk on to
-  /// there after arriving (trail navigation starts by itself). Returns the
-  /// session, or a message saying why not.
+  static const offRouteNoRoads =
+      'Off route. No signal and no saved roads here, so I cannot re-route. '
+      'Head back to the route.';
+
+  /// Plan a drive (v1.9.3): online while there is signal (then checked
+  /// against the saved roads for gates and rough roads), else over the
+  /// saved roads. [message]: why not, or a note about the route.
+  Future<({DriveRoute? route, String message})> planDrive(
+    GeoPoint from,
+    GeoPoint to, {
+    String name = '',
+    double? course,
+  }) async {
+    String? why;
+    final haveRoads = layers.roads.isNotEmpty;
+    if (onlineRoutingAllowed) {
+      try {
+        final r = await onlineRouter.route(
+          from,
+          to,
+          name: name,
+          imperial: settings.imperial,
+          course: course,
+        );
+        final c = await _checkOnline(r);
+        if (c.locked && haveRoads) {
+          final off = await _offlineRoute(from, to, name);
+          if (off != null) {
+            return (
+              route: off,
+              message:
+                  'Offline route: the online route goes through a locked gate '
+                  'in your saved roads.',
+            );
+          }
+        }
+        return (route: c.route, message: '');
+      } on OnlineRouteException catch (e) {
+        why = e.kind == OnlineFail.noSignal ? null : e.message;
+      }
+    }
+    if (!haveRoads) {
+      if (!plan.mapTileDownloads) {
+        return (
+          route: null,
+          message:
+              'Offline power save is on, so online directions are off, and no '
+              'roads are saved on this phone. Turn Offline power save off, or '
+              'save the area offline first.',
+        );
+      }
+      return (
+        route: null,
+        message: why == null ? noRoadsMessage : '$why $noRoadsMessage',
+      );
+    }
+    final r = await _offlineRoute(from, to, name);
+    if (r != null) {
+      return (
+        route: r,
+        message: !onlineRoutingAllowed || why == null
+            ? ''
+            : 'Offline route ($why)',
+      );
+    }
+    final a = await roads.snap(from), b = await roads.snap(to);
+    final off = a == null
+        ? 'You are not near any saved roads${onlineRoutingAllowed ? ' and there is no signal' : ''}. '
+              'Save the area you are in (Offline areas) or use a ready-made pack.'
+        : b == null
+        ? 'No saved roads near there${onlineRoutingAllowed ? ', and no signal for online directions' : ''}.'
+        : 'No road route found: the roads there do not connect (a gate or '
+              'private road may block the way).';
+    return (route: null, message: why == null ? off : '$why $off');
+  }
+
+  Future<DriveRoute?> _offlineRoute(
+    GeoPoint from,
+    GeoPoint to,
+    String name,
+  ) async {
+    if (layers.roads.isEmpty) return null;
+    await _loadRoads();
+    return roads.route(
+      from,
+      to,
+      name: name,
+      imperial: settings.imperial,
+      now: _clock(),
+    );
+  }
+
+  /// Rough roads, closures and gates on an online route, from the saved
+  /// roads; what they do not cover is marked unknown.
+  Future<({DriveRoute route, bool locked})> _checkOnline(DriveRoute r) async {
+    RouteCheck? c;
+    if (layers.roads.isNotEmpty) {
+      await _loadRoads();
+      try {
+        c = await roads.check(r, now: _clock());
+      } catch (_) {}
+    }
+    final unknown = c?.unknownM ?? r.lengthM;
+    final warns = [
+      ...?c?.warnings,
+      if (unknown > 300)
+        RoadWarning(
+          'unknown',
+          '',
+          unknown,
+          0,
+          c == null
+              ? 'Gates and road surface not checked (no roads saved on this '
+                    'phone for this route)'
+              : 'Gates and road surface not checked for '
+                    '${formatDistance(unknown, imperial: settings.imperial)} '
+                    'of the route (no saved roads there)',
+        ),
+    ];
+    return (
+      route: r.copyWith(segRough: c?.segRough, warnings: warns),
+      locked: c?.lockedGate ?? false,
+    );
+  }
+
+  /// Start driving to [to]: online directions with signal, else along the
+  /// saved roads. [hikeTo]: walk on to there after arriving (trail
+  /// navigation starts by itself). Returns the session, or a message
+  /// saying why not.
   Future<({DriveSession? session, String message})> driveTo(
     GeoPoint to, {
     String name = 'Destination',
     GeoPoint? hikeTo,
     String hikeName = '',
   }) async {
-    if (layers.roads.isEmpty) return (session: null, message: noRoadsMessage);
+    if (layers.roads.isEmpty && !onlineRoutingAllowed) {
+      return (session: null, message: noRoadsMessage);
+    }
     final me = myFix?.pos ?? (await host.locateOnce())?.pos;
     if (me == null) {
       return (
@@ -587,25 +739,9 @@ class TripController extends ChangeNotifier {
         message: 'Waiting for GPS. Try again in a moment.',
       );
     }
-    await _loadRoads();
-    final r = await roads.route(
-      me,
-      to,
-      name: name,
-      imperial: settings.imperial,
-      now: _clock(),
-    );
-    if (r == null) {
-      final a = await roads.snap(me), b = await roads.snap(to);
-      final why = a == null
-          ? 'You are not near any saved roads. Save the area you are in '
-                '(Offline roads) or use a ready-made pack.'
-          : b == null
-          ? 'No saved roads near there.'
-          : 'No road route found: the roads there do not connect (a gate or '
-                'private road may block the way).';
-      return (session: null, message: why);
-    }
+    final p = await planDrive(me, to, name: name);
+    final r = p.route;
+    if (r == null) return (session: null, message: p.message);
     if (_disposed) return (session: null, message: '');
     final s = DriveSession(
       target: to,
@@ -614,7 +750,7 @@ class TripController extends ChangeNotifier {
       imperial: settings.imperial,
       hikeTo: hikeTo,
       hikeName: hikeName,
-    );
+    )..notice = p.message;
     nav?.dispose();
     nav = null;
     drive?.dispose();
@@ -622,9 +758,10 @@ class TripController extends ChangeNotifier {
     _lastDriveReroute = null;
     final f = myFix;
     _speakDrive(s.update(me, speed: f?.speedMps, at: f?.at).say);
+    await _saveDrive();
     await _updateLocationNeed();
     notifyListeners();
-    return (session: s, message: '');
+    return (session: s, message: p.message);
   }
 
   void _speakDrive(String? text) {
@@ -640,7 +777,9 @@ class TripController extends ChangeNotifier {
 
   Future<void> setTrailVoice(bool on) => update((s) => s.trailVoice = on);
 
-  /// Route again from where you are.
+  /// Route again from where you are: online with signal, else offline from
+  /// the saved roads. False (with [DriveSession.notice] saying why) when
+  /// neither works; the old route stays.
   Future<bool> rerouteDrive() async {
     final s = drive;
     final me = myFix?.pos ?? s?.me;
@@ -648,21 +787,20 @@ class TripController extends ChangeNotifier {
     _lastDriveReroute = _clock();
     s.rerouting = true;
     notifyListeners();
-    await _loadRoads();
-    final r = await roads.route(
-      me,
-      s.target,
-      name: s.name,
-      imperial: settings.imperial,
-      now: _clock(),
-    );
+    final p = await planDrive(me, s.target, name: s.name, course: s.course);
     if (drive != s || _disposed) return false;
+    final r = p.route;
     if (r == null) {
       s.rerouting = false;
+      s.notice = layers.roads.isEmpty || p.message.isEmpty
+          ? offRouteNoRoads
+          : 'Cannot re-route: ${p.message}';
       notifyListeners();
       return false;
     }
     s.replaceRoute(r);
+    s.notice = p.message;
+    unawaited(_saveDrive());
     notifyListeners();
     return true;
   }
@@ -671,8 +809,40 @@ class TripController extends ChangeNotifier {
     drive?.dispose();
     drive = null;
     await speaker.stop();
+    try {
+      if (await _driveFile.exists()) await _driveFile.delete();
+    } catch (_) {}
     await _updateLocationNeed();
     notifyListeners();
+  }
+
+  File get _driveFile => File('${dir.path}/drive_active.json');
+
+  /// Keep the route on the phone (signal may drop; the app may restart).
+  Future<void> _saveDrive() async {
+    final s = drive;
+    if (s == null) return;
+    try {
+      await dir.create(recursive: true);
+      await _driveFile.writeAsString(jsonEncode(s.toJson(_clock())));
+    } catch (_) {}
+  }
+
+  /// Carry on with a drive from before an app restart (up to 12 hours).
+  Future<void> _restoreDrive() async {
+    try {
+      if (drive != null || !await _driveFile.exists()) return;
+      final j = DriveSession.fromJson(
+        jsonDecode(await _driveFile.readAsString()),
+        imperial: settings.imperial,
+      );
+      if (j == null || _clock().difference(j.at) > const Duration(hours: 12)) {
+        await _driveFile.delete();
+        return;
+      }
+      drive = j.session
+        ..notice = 'Carrying on with your drive (route kept on this phone).';
+    } catch (_) {}
   }
 
   void _driveFix(Fix f) {
@@ -696,7 +866,14 @@ class TripController extends ChangeNotifier {
       final last = _lastDriveReroute;
       if (last == null || _clock().difference(last).inSeconds >= 10) {
         _speakDrive('Rerouting.');
-        unawaited(rerouteDrive());
+        unawaited(
+          rerouteDrive().then((ok) {
+            if (!ok && drive == s && s.notice != s.spokenNotice) {
+              s.spokenNotice = s.notice;
+              _speakDrive(s.notice);
+            }
+          }),
+        );
       }
     }
   }
@@ -713,9 +890,12 @@ class TripController extends ChangeNotifier {
 
   /// "Drive to trailhead, then hike": the trailhead to drive to for
   /// walking to [to] (a trailhead waypoint near the trails that lead
-  /// there, close to a saved road), or the nearest road point.
+  /// there, close to a saved road when roads are saved), or the nearest
+  /// road point (online: the destination itself, the router finds the
+  /// road end).
   Future<({GeoPoint at, String name})?> trailheadFor(GeoPoint to) async {
-    await _loadRoads();
+    final haveRoads = layers.roads.isNotEmpty;
+    if (haveRoads) await _loadRoads();
     final g = await trailGraph();
     final cands = <ImportedWaypoint>[
       for (final l in layers.trails)
@@ -732,8 +912,10 @@ class TripController extends ChangeNotifier {
     ({GeoPoint at, String name})? best;
     var bestM = double.infinity;
     for (final w in cands) {
-      final road = await roads.snap(w.pos, maxM: 500);
-      if (road == null) continue;
+      if (haveRoads) {
+        final road = await roads.snap(w.pos, maxM: 500);
+        if (road == null) continue;
+      }
       double hike;
       if (g.isEmpty) {
         hike = distanceM(w.pos, to) * 1.4;
@@ -748,9 +930,12 @@ class TripController extends ChangeNotifier {
       }
     }
     if (best != null) return best;
-    final road = await roads.snap(to, maxM: 10000);
-    if (road == null) return null;
-    return (at: road.pos, name: 'the nearest road');
+    if (haveRoads) {
+      final road = await roads.snap(to, maxM: 10000);
+      if (road != null) return (at: road.pos, name: 'the nearest road');
+    }
+    if (onlineRoutingAllowed) return (at: to, name: 'the nearest road');
+    return null;
   }
 
   /// Drive to the best trailhead for [to], then hike there.
@@ -758,12 +943,262 @@ class TripController extends ChangeNotifier {
     GeoPoint to, {
     String name = 'Destination',
   }) async {
-    if (layers.roads.isEmpty) return (session: null, message: noRoadsMessage);
+    if (layers.roads.isEmpty && !onlineRoutingAllowed) {
+      return (session: null, message: noRoadsMessage);
+    }
     final th = await trailheadFor(to);
     if (th == null) {
       return (session: null, message: 'No saved roads near there.');
     }
     return driveTo(th.at, name: th.name, hikeTo: to, hikeName: name);
+  }
+
+  // ------------------------------------------------------------ offline areas
+
+  /// Size of what [o] saves; roads are counted by asking the server
+  /// ([withRoads]), which needs signal.
+  Future<AreaEstimate> estimateArea(
+    AreaSaveOptions o, {
+    bool withRoads = true,
+    RoadDownloader? downloader,
+  }) async {
+    var n = 0, bytes = 0;
+    String? tooBig;
+    for (final j in areaTileJobs(o)) {
+      final e = tiles.estimate(j.src, o.bounds, j.z0, j.z1);
+      n += e.tiles;
+      bytes += e.bytes;
+      if (e.tiles > tiles.maxDownloadTiles) {
+        tooBig =
+            '${j.src.name}: ${e.tiles} tiles (up to ${tiles.maxDownloadTiles} '
+            'per style). Make the box smaller or lower the detail.';
+      }
+    }
+    int? road;
+    if (withRoads && o.roads && plan.mapTileDownloads) {
+      final pieces = roadPieces(o.bounds);
+      if (pieces != null) {
+        final dl = downloader ?? RoadDownloader(fetch: fetch, clock: _clock);
+        try {
+          var r = 0;
+          for (final p in pieces) {
+            r += (await dl.estimate(p)).bytes;
+          }
+          road = r;
+        } catch (_) {}
+      }
+    }
+    return AreaEstimate(
+      tiles: n,
+      tileBytes: bytes,
+      roadBytes: road,
+      tooBig: tooBig,
+    );
+  }
+
+  /// "Save this area offline" (v1.9.3): map tiles of the chosen styles,
+  /// elevation, trails and road data of one box, as one area. [updateId]:
+  /// update that area (styles or parts left out are removed from it).
+  /// Parts that fail are listed in the result; the rest is kept.
+  Future<AreaSaveResult> saveArea(
+    AreaSaveOptions o, {
+    String? updateId,
+    void Function(AreaSaveProgress p)? onProgress,
+    bool Function()? cancelled,
+    RoadDownloader? downloader,
+    Duration tilePause = const Duration(milliseconds: 150),
+  }) async {
+    if (!plan.mapTileDownloads) {
+      throw StateError(
+        'Offline power save is on: saving an area needs the internet.',
+      );
+    }
+    final jobs = areaTileJobs(o);
+    for (final j in jobs) {
+      final n = countTiles(o.bounds, j.z0, j.z1);
+      if (n > tiles.maxDownloadTiles) {
+        throw StateError(
+          'Area too big for ${j.src.name}: $n tiles (up to '
+          '${tiles.maxDownloadTiles}). Make the box smaller or lower the '
+          'detail.',
+        );
+      }
+    }
+    final pieces = o.roads ? roadPieces(o.bounds) : null;
+    final name = o.name.trim().isEmpty ? 'Offline area' : o.name.trim();
+    final existing = updateId == null ? null : areas.byId(updateId);
+    final area =
+        existing ??
+        await areas.create(
+          name,
+          o.bounds,
+          styles: [for (final s in o.styles) s.id],
+          minZoom: o.minZoom,
+          maxZoom: o.maxZoom,
+          roads: o.roads,
+          trails: o.trails,
+        );
+    final old = areas.entry(area.id);
+    final oldRegions = old?.regions ?? const <OfflineRegion>[];
+    final oldRoads = old?.roadLayers ?? const <MapLayer>[];
+    final oldTrails = old?.trailLayers ?? const <MapLayer>[];
+    final problems = <String>[];
+    final steps = jobs.length + (pieces?.length ?? 0) + (o.trails ? 1 : 0);
+    var stepNo = 0;
+    bool stop() => cancelled?.call() ?? false;
+    void report(String step, double? f) =>
+        onProgress?.call(AreaSaveProgress(step, stepNo, steps, f));
+
+    // Map tiles, one style at a time.
+    for (final j in jobs) {
+      if (stop()) break;
+      stepNo++;
+      final p = DownloadProgress(countTiles(o.bounds, j.z0, j.z1));
+      report('Map: ${j.src.name}', 0);
+      final r = await tiles.download(
+        j.src,
+        o.bounds,
+        j.z0,
+        j.z1,
+        name: name,
+        progress: p,
+        areaId: area.id,
+        refresh: existing != null,
+        pause: tilePause,
+        onProgress: (p) {
+          if (stop()) p.cancelled = true;
+          report('Map: ${j.src.name}', p.fraction);
+        },
+      );
+      if (p.failed > 0 && p.done == 0) {
+        problems.add('${j.src.name}: could not download (no signal?)');
+      } else if (p.failed > 0) {
+        problems.add('${j.src.name}: ${p.failed} of ${p.total} tiles failed');
+      }
+      if (tiles.regions.contains(r)) {
+        for (final o in oldRegions.where((x) => x.sourceId == j.src.id)) {
+          await tiles.deleteRegion(o);
+        }
+      }
+    }
+    // Styles left out on update.
+    for (final r in oldRegions) {
+      if (!jobs.any((j) => j.src.id == r.sourceId) &&
+          tiles.regions.contains(r)) {
+        await tiles.deleteRegion(r);
+      }
+    }
+    // Roads for offline driving.
+    if (o.roads && pieces == null) {
+      problems.add(
+        'Roads: the box is too big for road data (up to 2° x 2°). Save '
+        'roads with a smaller box; routes cross from one area to the next.',
+      );
+    }
+    final keptRoads = <MapLayer>[];
+    if (pieces != null) {
+      for (var i = 0; i < pieces.length; i++) {
+        if (stop()) break;
+        stepNo++;
+        report(
+          'Roads${pieces.length > 1 ? ' (part ${i + 1} of ${pieces.length})' : ''}',
+          null,
+        );
+        try {
+          final l = await saveRoads(
+            pieces[i],
+            name: pieces.length > 1 ? '$name roads ${i + 1}' : '$name roads',
+            replace: i < oldRoads.length ? oldRoads[i] : null,
+            downloader: downloader,
+            cancelled: stop,
+            onProgress: (rp) => report(
+              'Roads${pieces.length > 1 ? ' (part ${i + 1} of ${pieces.length})' : ''}',
+              rp.fraction,
+            ),
+          );
+          await layers.tagArea(l, area.id);
+          keptRoads.add(l);
+        } catch (e) {
+          if (!stop()) problems.add('Roads: $e');
+          if (i < oldRoads.length) keptRoads.add(oldRoads[i]);
+        }
+      }
+    }
+    // Roads left out on update (or old pieces past the new ones).
+    if (!stop() && (!o.roads || pieces != null)) {
+      for (final l in oldRoads) {
+        if (!keptRoads.contains(l) && layers.byId(l.id) != null) {
+          await layers.delete(l);
+        }
+      }
+    }
+    // Trails.
+    if (o.trails && !stop()) {
+      stepNo++;
+      report('Trails', null);
+      try {
+        final box = capBounds(o.bounds, minKm: 0);
+        final r = await search.trailsFor(box.bounds, name: '$name trails');
+        if (r.data.isEmpty) {
+          problems.add('Trails: none found here in OpenStreetMap');
+        } else {
+          final l = await layers.addTrail(
+            r.data,
+            attribution: osmAttribution,
+            color: 0xFF6D4C41,
+          );
+          await layers.tagArea(l, area.id);
+          for (final t in oldTrails) {
+            if (layers.byId(t.id) != null) await layers.delete(t);
+          }
+          if (box.trimmed) {
+            problems.add(
+              'Trails: big box, so trails were saved for the middle '
+              '${maxTrailAreaKm.round()} km',
+            );
+          }
+        }
+      } catch (e) {
+        problems.add('Trails: $e');
+      }
+    } else if (!o.trails) {
+      for (final t in oldTrails) {
+        if (layers.byId(t.id) != null) await layers.delete(t);
+      }
+    }
+    area
+      ..name = name
+      ..bounds = o.bounds
+      ..styles = [for (final s in o.styles) s.id]
+      ..minZoom = o.minZoom
+      ..maxZoom = o.maxZoom
+      ..roads = o.roads
+      ..trails = o.trails;
+    final entry = areas.entry(area.id);
+    final empty =
+        entry == null || (entry.regions.isEmpty && entry.layers.isEmpty);
+    if (empty || (stop() && existing == null)) {
+      if (entry != null) await areas.delete(entry);
+      notifyListeners();
+      if (stop()) return AreaSaveResult(null, problems, cancelled: true);
+      throw StateError(
+        problems.isEmpty ? 'Nothing could be saved.' : problems.join('\n'),
+      );
+    }
+    await areas.touch(area);
+    await tiles.trim();
+    notifyListeners();
+    return AreaSaveResult(areas.entry(area.id), problems, cancelled: stop());
+  }
+
+  /// Delete an area (or a ready-made pack) and everything in it.
+  Future<void> deleteArea(AreaEntry e) async {
+    final base = baseTiles;
+    if (base != null && e.layers.any((l) => l.id == base.id)) {
+      await update((s) => s.mapSource = 'topo');
+    }
+    await areas.delete(e);
+    notifyListeners();
   }
 
   /// Share the driving route with the group.

@@ -68,6 +68,14 @@ class RoadService {
     return await _call(('route', from, to, name, imperial, now)) as DriveRoute?;
   }
 
+  /// What the saved roads say about [r] (an online route): roughness,
+  /// gates, closures (v1.9.3). Null when no roads are loaded.
+  Future<RouteCheck?> check(DriveRoute r, {DateTime? now}) async {
+    await _loading;
+    if (_inline) return _graph?.check(r, now: now);
+    return await _call(('check', r, now)) as RouteCheck?;
+  }
+
   /// Nearest road within [maxM].
   Future<RoadSnap?> snap(GeoPoint p, {double maxM = 3000}) async {
     await _loading;
@@ -113,6 +121,8 @@ class RoadService {
             DateTime? now,
           ):
             reply.send(g?.route(a, b, targetName: n, imperial: imp, now: now));
+          case ('check', DriveRoute r, DateTime? now):
+            reply.send(g?.check(r, now: now));
           case ('snap', GeoPoint p, double maxM):
             reply.send(g?.snap(p, maxM: maxM));
           default:

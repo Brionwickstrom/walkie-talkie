@@ -51,8 +51,12 @@ class MapLayer {
     this.packMatched = false,
     this.sha,
     this.area,
+    this.offlineArea,
     DateTime? added,
   }) : added = added ?? DateTime.now();
+
+  /// The offline area (v1.9.3) this layer was saved with.
+  String? offlineArea;
 
   /// Area covered (offline roads, v1.9.2).
   GeoBounds? area;
@@ -126,6 +130,7 @@ class MapLayer {
     if (packMatched) 'pm': true,
     'sh': ?sha,
     if (area != null) 'ar': area!.toJson(),
+    'oa': ?offlineArea,
     'a': added.millisecondsSinceEpoch,
   };
 
@@ -158,6 +163,7 @@ class MapLayer {
       packMatched: j['pm'] == true,
       sha: j['sh'] is String ? j['sh'] as String : null,
       area: GeoBounds.fromJson(j['ar']),
+      offlineArea: j['oa'] is String ? j['oa'] as String : null,
       added: DateTime.fromMillisecondsSinceEpoch(
         (j['a'] as num?)?.toInt() ?? 0,
       ),
@@ -625,6 +631,7 @@ class MapLayers extends ChangeNotifier {
       area: area,
       pack: replace?.pack,
       packFile: replace?.packFile,
+      offlineArea: replace?.offlineArea,
       added: _clock(),
     );
     final at = replace == null ? 0 : _layers.indexOf(replace);
@@ -657,6 +664,10 @@ class MapLayers extends ChangeNotifier {
     l.packFile = file;
     l.packMatched = pack != null && matched;
   });
+
+  /// Put [l] in offline area [areaId] (v1.9.3; null = none).
+  Future<void> tagArea(MapLayer l, String? areaId) =>
+      _edit(() => l.offlineArea = areaId);
   Future<void> setSha(MapLayer l, String sha) => _edit(() => l.sha = sha);
   Future<void> recolor(MapLayer l, int argb) => _edit(() => l.color = argb);
   Future<void> setOpacity(MapLayer l, double o) =>

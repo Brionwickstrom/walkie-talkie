@@ -90,7 +90,16 @@ class DriveRoute {
     required this.warnings,
     required this.startOffM,
     required this.endOffM,
+    this.source = DriveRoute.offline,
   });
+
+  static const offline = 'offline';
+  static const online = 'online';
+
+  /// Where the route came from (v1.9.3): [online] (a routing server, while
+  /// there was signal) or [offline] (the roads saved on this phone).
+  final String source;
+  bool get isOnline => source == online;
 
   final List<GeoPoint> points;
 
@@ -118,6 +127,123 @@ class DriveRoute {
   /// Worst roughness on the route.
   int get worstRough => segRough.fold(0, max);
 
+  DriveRoute copyWith({
+    Uint8List? segRough,
+    List<RoadWarning>? warnings,
+    String? source,
+  }) => DriveRoute(
+    points: points,
+    cum: cum,
+    timeCum: timeCum,
+    segRough: segRough ?? this.segRough,
+    segRoad: segRoad,
+    steps: steps,
+    warnings: warnings ?? this.warnings,
+    startOffM: startOffM,
+    endOffM: endOffM,
+    source: source ?? this.source,
+  );
+
+  /// For keeping the active route on the phone (v1.9.3).
+  Map<String, Object?> toJson() => {
+    'src': source,
+    'p': [
+      for (final p in points) [(p.lat * 1e6).round(), (p.lng * 1e6).round()],
+    ],
+    'c': [for (final c in cum) (c * 10).round()],
+    't': [for (final t in timeCum) (t * 10).round()],
+    'r': segRough.toList(),
+    'n': segRoad,
+    's': [
+      for (final s in steps)
+        {
+          'a': (s.alongM * 10).round(),
+          'm': s.maneuver.name,
+          'x': s.text,
+          'v': s.spoken,
+          'p': [(s.pos.lat * 1e6).round(), (s.pos.lng * 1e6).round()],
+          if (s.road.isNotEmpty) 'rd': s.road,
+          if (s.exit != 0) 'e': s.exit,
+        },
+    ],
+    'w': [
+      for (final w in warnings)
+        {
+          'k': w.kind,
+          'rd': w.road,
+          'l': w.lengthM.round(),
+          'a': w.alongM.round(),
+          'x': w.text,
+        },
+    ],
+    'so': startOffM.round(),
+    'eo': endOffM.round(),
+  };
+
+  static DriveRoute? fromJson(Object? j) {
+    if (j is! Map) return null;
+    try {
+      GeoPoint pt(Object? o) {
+        final l = o as List;
+        return GeoPoint((l[0] as num) / 1e6, (l[1] as num) / 1e6);
+      }
+
+      final pts = [for (final p in j['p'] as List) pt(p)];
+      final cum = [for (final c in j['c'] as List) (c as num) / 10];
+      final time = [for (final t in j['t'] as List) (t as num) / 10];
+      final rough = Uint8List.fromList([
+        for (final r in j['r'] as List) (r as num).toInt(),
+      ]);
+      final roads = [for (final n in j['n'] as List) '$n'];
+      if (pts.length < 2 ||
+          cum.length != pts.length ||
+          time.length != pts.length ||
+          rough.length != pts.length - 1 ||
+          roads.length != pts.length - 1) {
+        return null;
+      }
+      final steps = [
+        for (final s in j['s'] as List)
+          DriveStep(
+            alongM: ((s as Map)['a'] as num) / 10,
+            maneuver: Maneuver.values.firstWhere(
+              (m) => m.name == s['m'],
+              orElse: () => Maneuver.straight,
+            ),
+            text: s['x'] as String,
+            spoken: s['v'] as String,
+            pos: pt(s['p']),
+            road: (s['rd'] as String?) ?? '',
+            exit: (s['e'] as num?)?.toInt() ?? 0,
+          ),
+      ];
+      if (steps.length < 2) return null;
+      return DriveRoute(
+        points: pts,
+        cum: cum,
+        timeCum: time,
+        segRough: rough,
+        segRoad: roads,
+        steps: steps,
+        warnings: [
+          for (final w in (j['w'] as List? ?? const []))
+            RoadWarning(
+              (w as Map)['k'] as String,
+              w['rd'] as String,
+              (w['l'] as num).toDouble(),
+              (w['a'] as num).toDouble(),
+              w['x'] as String,
+            ),
+        ],
+        startOffM: ((j['so'] as num?) ?? 0).toDouble(),
+        endOffM: ((j['eo'] as num?) ?? 0).toDouble(),
+        source: j['src'] == online ? online : offline,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Seconds from the start at [m] metres.
   double timeAt(double m) {
     if (cum.length < 2) return 0;
@@ -134,6 +260,24 @@ class DriveRoute {
     final t = seg <= 0 ? 0.0 : ((m - cum[lo]) / seg).clamp(0.0, 1.0);
     return timeCum[lo] + (timeCum[hi] - timeCum[lo]) * t;
   }
+}
+
+/// What the saved roads say about a route made elsewhere (v1.9.3).
+class RouteCheck {
+  const RouteCheck({
+    required this.segRough,
+    required this.warnings,
+    required this.unknownM,
+    required this.lockedGate,
+  });
+  final Uint8List segRough;
+  final List<RoadWarning> warnings;
+
+  /// Metres of the route with no saved road near (surface, gates unknown).
+  final double unknownM;
+
+  /// The route goes through a locked gate / barrier in the saved roads.
+  final bool lockedGate;
 }
 
 /// Routing over [RoadData] (A* on travel time, car profile).
@@ -261,6 +405,217 @@ class RoadGraph {
       s += distanceM(pts[i], pts[i + 1]);
     }
     return s;
+  }
+
+  // ------------------------------------------------------------ checks
+
+  List<int>? _flaggedCache;
+  Map<int, List<int>>? _flagGrid;
+
+  Map<int, List<int>> get _flagCells {
+    final g = _flagGrid;
+    if (g != null) return g;
+    final out = <int, List<int>>{};
+    final list = <int>[];
+    for (var n = 0; n < d.nodeCount; n++) {
+      if (d.nodeFlags[n] & (NodeFlag.blocked | NodeFlag.gate) == 0) continue;
+      list.add(n);
+      final p = d.nodePos(n);
+      final k = _key(
+        (p.lng / _cell).floor() + 20000,
+        (p.lat / _cell).floor() + 10000,
+      );
+      (out[k] ??= []).add(n);
+    }
+    _flaggedCache = list;
+    return _flagGrid = out;
+  }
+
+  /// Checks a route made elsewhere (an online route, v1.9.3) against the
+  /// saved roads: how rough each stretch is, seasonal closures, fords,
+  /// local-only roads and gates. Stretches with no saved road within
+  /// [maxM] are not known ([RouteCheck.unknownM]).
+  RouteCheck check(DriveRoute r, {DateTime? now, double maxM = 15}) {
+    final doy = dayOfYear(now ?? DateTime.now());
+    final n = max(0, r.points.length - 1);
+    final rough = Uint8List(n);
+    final segEdge = Int32List(n)..fillRange(0, n, -1);
+    var unknown = 0.0;
+    for (var i = 0; i < n; i++) {
+      final a = r.points[i], b = r.points[i + 1];
+      final len = r.cum[i + 1] - r.cum[i];
+      if (len <= 0.5) {
+        if (i > 0) {
+          segEdge[i] = segEdge[i - 1];
+          rough[i] = rough[i - 1];
+        }
+        continue;
+      }
+      final s = snap(
+        GeoPoint((a.lat + b.lat) / 2, (a.lng + b.lng) / 2),
+        maxM: maxM,
+      );
+      if (s == null) {
+        unknown += len;
+        continue;
+      }
+      segEdge[i] = s.edge;
+      rough[i] = d.edgeRough[s.edge];
+    }
+    final out = <RoadWarning>[];
+    // Rough stretches by road and level; flags once per road.
+    final byKey = <String, (String, int, double, double)>{};
+    for (var i = 0; i < n; i++) {
+      final e = segEdge[i];
+      if (e < 0) continue;
+      final len = r.cum[i + 1] - r.cum[i];
+      final label = _nameOr(d.names[d.edgeName[e]], d.edgeCls[e]);
+      final rl = d.edgeRough[e];
+      if (rl >= 1) {
+        final key = '$label|$rl';
+        final o = byKey[key];
+        byKey[key] = (label, rl, (o?.$3 ?? 0) + len, o?.$4 ?? r.cum[i]);
+      }
+      final f = d.edgeFlags[e];
+      final cf = d.edgeClose[2 * e], ct = d.edgeClose[2 * e + 1];
+      if (cf != 0 &&
+          !out.any((w) => w.road == label && w.kind.startsWith('clos'))) {
+        final closed = closedOn(doy, cf, ct);
+        out.add(
+          RoadWarning(
+            closed ? 'closed' : 'seasonal',
+            label,
+            len,
+            r.cum[i],
+            '$label: closed ${dayLabel(cf)} to ${dayLabel(ct)}'
+            '${closed ? ' (closed now)' : ''}',
+          ),
+        );
+      } else if (f & EdgeFlag.seasonal != 0 &&
+          !out.any((w) => w.road == label && w.kind == 'seasonal')) {
+        out.add(
+          RoadWarning(
+            'seasonal',
+            label,
+            len,
+            r.cum[i],
+            '$label: seasonal road (may be closed in winter)',
+          ),
+        );
+      }
+      if (f & EdgeFlag.ford != 0 &&
+          !out.any((w) => w.road == label && w.kind == 'ford')) {
+        out.add(
+          RoadWarning(
+            'ford',
+            label,
+            len,
+            r.cum[i],
+            'Ford (water crossing) on $label',
+          ),
+        );
+      }
+      if (f & EdgeFlag.destination != 0 &&
+          !out.any((w) => w.road == label && w.kind == 'destination')) {
+        out.add(
+          RoadWarning(
+            'destination',
+            label,
+            len,
+            r.cum[i],
+            '$label: local / permit traffic only',
+          ),
+        );
+      }
+    }
+    // Gates and barriers on the line.
+    var locked = false;
+    final cells = _flagCells;
+    if ((_flaggedCache ?? const []).isNotEmpty) {
+      final seen = <int>{};
+      final kx =
+          111319.49 * cos((r.points.isEmpty ? 0 : r.points[0].lat) * pi / 180);
+      const ky = 111132.954;
+      for (var i = 0; i < n; i++) {
+        final a = r.points[i], b = r.points[i + 1];
+        final x0 = (min(a.lng, b.lng) / _cell).floor() + 20000;
+        final x1 = (max(a.lng, b.lng) / _cell).floor() + 20000;
+        final y0 = (min(a.lat, b.lat) / _cell).floor() + 10000;
+        final y1 = (max(a.lat, b.lat) / _cell).floor() + 10000;
+        for (var x = x0; x <= x1; x++) {
+          for (var y = y0; y <= y1; y++) {
+            for (final node in cells[_key(x, y)] ?? const <int>[]) {
+              if (seen.contains(node)) continue;
+              final p = d.nodePos(node);
+              final ax = (a.lng - p.lng) * kx, ay = (a.lat - p.lat) * ky;
+              final bx = (b.lng - p.lng) * kx, by = (b.lat - p.lat) * ky;
+              final dx = bx - ax, dy = by - ay;
+              final l2 = dx * dx + dy * dy;
+              var t = l2 == 0 ? 0.0 : -(ax * dx + ay * dy) / l2;
+              t = t.clamp(0.0, 1.0);
+              final px = ax + t * dx, py = ay + t * dy;
+              if (sqrt(px * px + py * py) > 8) continue;
+              seen.add(node);
+              var e = -1;
+              for (var k = _adjStart[node]; k < _adjStart[node + 1]; k++) {
+                final oe = _adj[k] >> 1;
+                if (e < 0 || d.edgeCls[oe] > d.edgeCls[e]) e = oe;
+              }
+              final label = e < 0
+                  ? 'the road'
+                  : _nameOr(d.names[d.edgeName[e]], d.edgeCls[e]);
+              final along = r.cum[i] + (r.cum[i + 1] - r.cum[i]) * t;
+              if (d.nodeFlags[node] & NodeFlag.blocked != 0) {
+                locked = true;
+                out.add(
+                  RoadWarning(
+                    'gate',
+                    label,
+                    0,
+                    along,
+                    'Locked gate or barrier on $label (saved roads say so)',
+                  ),
+                );
+              } else if (e >= 0 &&
+                  d.edgeCls[e] >= 4 &&
+                  !out.any((w) => w.kind == 'gate' && w.road == label)) {
+                out.add(
+                  RoadWarning(
+                    'gate',
+                    label,
+                    0,
+                    along,
+                    'Gate on $label (may be closed)',
+                  ),
+                );
+              }
+            }
+          }
+        }
+      }
+    }
+    final rs = byKey.values.toList()..sort((a, b) => b.$2.compareTo(a.$2));
+    var k = 0;
+    for (final (label, rl, len, at) in rs) {
+      if (len < 50) continue;
+      out.insert(
+        k++,
+        RoadWarning(
+          rl == 3 ? 'clearance' : (rl == 2 ? 'rough' : 'unpaved'),
+          label,
+          len,
+          at,
+          '$label: ${formatDistance(len, imperial: false)} ${roughLabels[rl]}'
+          '${rl == 3 ? ' (high-clearance vehicle)' : ''}',
+        ),
+      );
+    }
+    return RouteCheck(
+      segRough: rough,
+      warnings: out,
+      unknownM: unknown,
+      lockedGate: locked,
+    );
   }
 
   // ------------------------------------------------------------ cost

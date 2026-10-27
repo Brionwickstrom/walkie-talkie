@@ -5,6 +5,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../trip/drive/drive_session.dart';
+import '../trip/drive/online_router.dart';
 import '../trip/drive/road_router.dart';
 import '../trip/geo.dart';
 import '../trip/trip_controller.dart';
@@ -87,11 +88,60 @@ String driveSummary(DriveSession s, bool imperial, DateTime now) {
       'arrive ${_clock(now.add(t))}';
 }
 
-/// The warnings worth a line on the card.
+/// The warnings worth a line on the card ("not checked" is shown with
+/// the route source instead).
 List<RoadWarning> mainWarnings(DriveRoute r) => [
   for (final w in r.warnings)
-    if (w.kind != 'unpaved' || w.lengthM > 1000) w,
+    if (w.kind != 'unknown' && (w.kind != 'unpaved' || w.lengthM > 1000)) w,
 ];
+
+/// "Online route" / "Offline route", and what is not known.
+class DriveSourceLine extends StatelessWidget {
+  const DriveSourceLine({super.key, required this.session, this.color});
+  final DriveSession session;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    final r = session.route;
+    final unknown = r.warnings.where((w) => w.kind == 'unknown').firstOrNull;
+    final style = Theme.of(context).textTheme.bodySmall?.copyWith(color: color);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              r.isOnline ? Icons.cloud_done : Icons.offline_pin,
+              size: 15,
+              color:
+                  color ?? (r.isOnline ? Colors.blue : Colors.green.shade700),
+            ),
+            const SizedBox(width: 4),
+            Flexible(
+              child: Text(
+                '${session.sourceLabel}'
+                '${r.isOnline ? ' · kept on the phone if signal drops' : ' · from saved roads'}',
+                key: const Key('driveSource'),
+                style: style,
+              ),
+            ),
+          ],
+        ),
+        if (unknown != null)
+          Text(unknown.text, key: const Key('driveUnknown'), style: style),
+        if (session.notice.isNotEmpty)
+          Text(
+            session.notice,
+            key: const Key('driveNotice'),
+            style: style?.copyWith(fontWeight: FontWeight.w600),
+          ),
+      ],
+    );
+  }
+}
 
 /// Small card on the Trip map while driving.
 class DriveCard extends StatelessWidget {
@@ -149,6 +199,7 @@ class DriveCard extends StatelessWidget {
                             driveSummary(s, imperial, DateTime.now()),
                             style: theme.textTheme.titleSmall,
                           ),
+                          DriveSourceLine(session: s),
                           if (s.arrived)
                             Text('Arrived.', style: theme.textTheme.bodySmall)
                           else if (next != null)
@@ -249,10 +300,11 @@ Future<void> showDriveSteps(
               'Drive to ${s.name}',
               style: Theme.of(ctx).textTheme.titleLarge,
             ),
+            trailing: Text(s.sourceLabel, key: const Key('driveStepsSource')),
             subtitle: Text(
               '${formatDistance(r.lengthM, imperial: imperial)} · '
               '${driveDuration(r.duration)} by road'
-              '${r.startOffM > 40 ? '\nStart: ${formatDistance(r.startOffM, imperial: imperial)} to the nearest saved road' : ''}',
+              '${r.startOffM > 40 ? '\nStart: ${formatDistance(r.startOffM, imperial: imperial)} to the nearest ${r.isOnline ? '' : 'saved '}road' : ''}',
             ),
           ),
           for (final w in r.warnings)
@@ -276,11 +328,12 @@ Future<void> showDriveSteps(
                     )
                   : null,
             ),
-          const ListTile(
+          ListTile(
             dense: true,
             title: Text(
-              'Roads © OpenStreetMap contributors. Check road and gate '
-              'status with the Forest Service before you go.',
+              '${r.isOnline ? OnlineRouter.attribution : 'Offline route from the roads saved on this phone. Roads © OpenStreetMap contributors.'}\n'
+              'Times are estimates from road speeds (no live traffic). Check '
+              'road and gate status with the Forest Service before you go.',
             ),
           ),
         ],
@@ -458,7 +511,8 @@ class _DriveFollowPageState extends State<DriveFollowPage> {
           subtitle: st == null
               ? null
               : Text(
-                  '${formatDistance(st.offM, imperial: imperial)} from the route',
+                  '${formatDistance(st.offM, imperial: imperial)} from the route'
+                  '${s.notice.isNotEmpty && !s.rerouting ? '\n${s.notice}' : ''}',
                   style: const TextStyle(color: Colors.white),
                 ),
         ),
@@ -609,6 +663,7 @@ class _DriveFollowPageState extends State<DriveFollowPage> {
               key: const Key('driveSummary'),
               style: Theme.of(context).textTheme.titleMedium,
             ),
+            DriveSourceLine(session: s),
             if (soon != null)
               Row(
                 children: [

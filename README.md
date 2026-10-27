@@ -1247,3 +1247,61 @@ battery saver, 3 s in Offline power save (saving roads is off there).
 Pack building: `tool/build_roads.dart` turns an `osmium cat -f opl` extract
 (Geofabrik, highway=motorway..track) into the `.wtr` file (gzip, typed
 arrays, ~42 bytes a road piece).
+
+## v1.9.3: one offline save, online driving with offline fallback
+
+**Offline areas** (Trip tab: the *Offline areas* map button, or the panel
+button; replaces the separate *Offline maps* and *Offline roads*):
+
+- **Save this area offline** → drag the box corners (or the middle), or
+  *Use current view* → pick the map styles (any base map or overlay that may
+  be saved: Topo, USGS Topo / Satellite / Hybrid / Hillshade, land ownership,
+  wilderness, USFS trails / roads, slope) and the detail (zoom range) →
+  switches for *Roads for offline driving*, *Trails and places* and
+  *Elevation* → the size is shown first (map tiles now, roads after asking
+  Overpass) → *Save this area (~X MB)*. Map tiles, elevation, trails and road
+  data are saved together as one area; a part that fails is reported and the
+  rest is kept.
+- Limits: up to 3000 tiles per style; road data up to 1 square degree per
+  piece, a bigger box (up to 2° x 2°) is saved as up to 4 road pieces; beyond
+  that the map and trails still save and it says roads need a smaller box.
+- Duplicate check: a box about the same as a saved area shows *Already
+  saved: … Update it*; tiles already on the phone are never downloaded again.
+- One list: each area (and each ready-made pack: Silver Star, Trapper Creek,
+  Portland to Gifford Pinchot roads) has ⋮ *Show on map*, *Update* (re-check
+  tiles, new roads and trails; untick a style or a part to remove it),
+  *Rename* (names its roads / trails too) and *Delete* (everything in it).
+- Migration: v1.9.1 downloads (one region per style, same name and box) and
+  v1.9.2 road areas are grouped into areas the first time (a road area joins
+  the map area of the same place). Stored in `offline_areas.json`; tile
+  regions and layers carry the area id.
+
+**Driving** (Trip tab: the car **Directions** map button or panel button →
+*Search for a place to drive to* / *The middle of the map* / a pin, with
+*Drive to the trailhead, then hike*; or long-press the map → *Drive here*;
+a search result's sheet also has *Drive here*):
+
+- With signal the route comes from the free OSRM car router on the FOSSGIS
+  server (`routing.openstreetmap.de/routed-car`, then
+  `router.project-osrm.org`), at most one request a second, with the app's
+  User-Agent; 7 s timeout in all, then the on-phone router over the saved
+  roads. Also offline when the server fails, says there is no route, or the
+  start / destination is more than 3 km from a road it knows.
+- Online routes are checked against the saved roads: rough / 4WD stretches,
+  seasonal closures, fords, local-only roads and gates are warned the same as
+  offline; a route through a locked gate in the saved roads switches to the
+  offline route. Where no roads are saved it says gates and road surface
+  were not checked.
+- The active route is kept on the phone (`drive_active.json`, up to 12 h,
+  also across an app restart), so guidance and voice carry on with no
+  signal. Off route: re-routed online with signal, else offline from the
+  saved roads; with neither it says "Off route. No signal and no saved roads
+  here, so I cannot re-route."
+- The card, follow screen and steps show *Online route* / *Offline route*.
+  Attribution and a *fix the map* link are on the steps sheet. No live
+  traffic: times come from road speeds.
+
+Code: `lib/trip/offline_areas.dart`, `lib/trip/drive/online_router.dart`,
+`RoadGraph.check` in `road_router.dart`, `lib/ui/offline_areas_page.dart`.
+Tests: `test/v193_offline_area_drive_test.dart` (`ONLINE=1` also calls the
+real router).

@@ -35,6 +35,16 @@ class DriveSession extends ChangeNotifier {
   double speedMps = 0;
   bool rerouting = false;
   bool arrived = false;
+
+  /// Something to tell the driver about the route (v1.9.3): why it is the
+  /// offline one, or that a re-route was not possible.
+  String notice = '';
+
+  /// [notice] was spoken.
+  String spokenNotice = '';
+
+  /// "Online route" / "Offline route".
+  String get sourceLabel => route.isOnline ? 'Online route' : 'Offline route';
   int _seenOff = 0;
   GeoPoint? _last;
   DateTime? _lastAt;
@@ -81,6 +91,45 @@ class DriveSession extends ChangeNotifier {
     rerouting = false;
     if (me != null) state = follower.update(me!);
     notifyListeners();
+  }
+
+  /// Kept on the phone while driving (v1.9.3): guidance carries on after
+  /// the signal drops, and after an app restart.
+  Map<String, Object?> toJson(DateTime at) => {
+    'at': at.millisecondsSinceEpoch,
+    'to': [target.lat, target.lng],
+    'n': name,
+    if (hikeTo != null) 'h': [hikeTo!.lat, hikeTo!.lng],
+    if (hikeName.isNotEmpty) 'hn': hikeName,
+    'r': route.toJson(),
+  };
+
+  static ({DriveSession session, DateTime at})? fromJson(
+    Object? j, {
+    required bool imperial,
+  }) {
+    if (j is! Map) return null;
+    try {
+      GeoPoint pt(Object? o) => GeoPoint(
+        ((o as List)[0] as num).toDouble(),
+        (o[1] as num).toDouble(),
+      );
+      final r = DriveRoute.fromJson(j['r']);
+      if (r == null) return null;
+      return (
+        session: DriveSession(
+          target: pt(j['to']),
+          name: (j['n'] as String?) ?? 'Destination',
+          route: r,
+          imperial: imperial,
+          hikeTo: j['h'] == null ? null : pt(j['h']),
+          hikeName: (j['hn'] as String?) ?? '',
+        ),
+        at: DateTime.fromMillisecondsSinceEpoch((j['at'] as num).toInt()),
+      );
+    } catch (_) {
+      return null;
+    }
   }
 
   /// The route as trail data (to share like a trail).

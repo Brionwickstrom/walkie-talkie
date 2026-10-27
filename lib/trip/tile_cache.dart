@@ -364,8 +364,12 @@ class OfflineRegion {
     required this.tiles,
     required this.bytes,
     required this.at,
+    this.areaId,
   });
   final String name;
+
+  /// The offline area (v1.9.3) this belongs to.
+  String? areaId;
   final String sourceId;
   final GeoBounds bounds;
   final int minZoom;
@@ -391,6 +395,7 @@ class OfflineRegion {
     't': tiles,
     'by': bytes,
     'at': at.millisecondsSinceEpoch,
+    'ai': ?areaId,
   };
 
   static OfflineRegion? fromJson(Object? j) {
@@ -407,6 +412,7 @@ class OfflineRegion {
         tiles: (j['t'] as num).toInt(),
         bytes: (j['by'] as num).toInt(),
         at: DateTime.fromMillisecondsSinceEpoch((j['at'] as num).toInt()),
+        areaId: j['ai'] as String?,
       );
     } catch (_) {
       return null;
@@ -596,6 +602,8 @@ class TileCache {
     DownloadProgress? progress,
     void Function(DownloadProgress p)? onProgress,
     Duration pause = const Duration(milliseconds: 150),
+    String? areaId,
+    bool refresh = false,
   }) async {
     if (!s.allowsOffline) {
       throw StateError('${s.name} does not allow offline downloads');
@@ -618,6 +626,7 @@ class TileCache {
       tiles: 0,
       bytes: 0,
       at: DateTime.now(),
+      areaId: areaId,
     );
     final it = tilesIn(b, minZoom, maxZ).iterator;
     Future<void> worker() async {
@@ -627,12 +636,33 @@ class TileCache {
         t = it.current;
         final f = _file(s.id, t.z, t.x, t.y);
         var ok = false;
+        var have = false;
         try {
           if (await f.exists()) {
-            p.bytes += await f.length();
-            ok = true;
+            have = true;
+            // Update: tiles fetched in the last [minFresh] are kept as is.
+            final fresh =
+                DateTime.now().difference(await f.lastModified()) < minFresh;
+            if (!refresh || fresh) {
+              p.bytes += await f.length();
+              ok = true;
+            }
           }
         } catch (_) {}
+        if (!ok && have) {
+          // Update: ask the server whether the tile changed (304 = keep).
+          final got = await _fetch(s, t.z, t.x, t.y, conditional: true);
+          try {
+            if (got != null && got.isEmpty) {
+              await f.setLastModified(DateTime.now());
+            }
+            p.bytes += got != null && got.isNotEmpty
+                ? got.length
+                : await f.length();
+          } catch (_) {}
+          ok = true;
+          await Future<void>.delayed(pause);
+        }
         if (!ok) {
           final got = await _fetch(s, t.z, t.x, t.y);
           if (got != null && got.isNotEmpty) {
@@ -662,6 +692,8 @@ class TileCache {
     }
     return region;
   }
+
+  Future<void> saveRegions() => _saveRegions();
 
   Future<void> deleteRegion(OfflineRegion r) async {
     regions.remove(r);
