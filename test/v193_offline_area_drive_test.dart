@@ -216,7 +216,13 @@ void main() {
   });
   tearDown(() {
     t.dispose();
-    tmp.deleteSync(recursive: true);
+    // Windows can still hold a file open from a widget test; the temp
+    // folder is left for the OS to clean then.
+    try {
+      tmp.deleteSync(recursive: true);
+    } on FileSystemException {
+      // ignore
+    }
   });
 
   /// Put tiles on the "phone" so saving needs no tile server.
