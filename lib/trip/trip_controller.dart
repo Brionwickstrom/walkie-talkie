@@ -9,9 +9,12 @@ import '../app/power_plan.dart';
 import '../core/transport.dart';
 import '../core/transport_manager.dart' show InboundTrip;
 import 'geo.dart';
+import 'imports/geo_import.dart' show ImportedData;
 import 'imports/map_layers.dart';
 import 'imports/route_share.dart';
 import 'lost_contact.dart';
+import 'nav/nav_session.dart';
+import 'nav/trail_graph.dart';
 import 'search/fetch.dart';
 import 'search/map_search.dart';
 import 'search/nominatim.dart';
@@ -212,12 +215,18 @@ class TripController extends ChangeNotifier {
       _pins.values.toList()..sort((a, b) => a.at.compareTo(b.at));
 
   MapSource get mapSource => switch (settings.mapSource) {
-    'osm' => MapSource.osm,
     'custom' when settings.customTileUrl.trim().isNotEmpty => MapSource.custom(
       settings.customTileUrl.trim(),
     ),
-    _ => MapSource.topo,
+    final id =>
+      MapSource.bases.where((s) => s.id == id).firstOrNull ?? MapSource.topo,
   };
+
+  /// Overlays switched on (v1.9.1), in drawing order.
+  List<MapSource> get overlays => [
+    for (final o in MapSource.overlays)
+      if (settings.overlays.contains(o.id)) o,
+  ];
 
   /// Selected offline MBTiles base map (`mbtiles:<layer id>`), if any.
   MapLayer? get baseTiles {
@@ -262,8 +271,13 @@ class TripController extends ChangeNotifier {
     notifyListeners();
   }
 
+  bool _disposed = false;
+
   @override
   void dispose() {
+    _disposed = true;
+    nav?.dispose();
+    nav = null;
     _sub?.cancel();
     _timer?.cancel();
     tiles.close();
@@ -303,12 +317,17 @@ class TripController extends ChangeNotifier {
   Future<void> onPowerChanged() => _updateLocationNeed();
 
   bool get _needLocation =>
-      settings.tripMode || recorder.recording || sos.active != null || _visible;
+      settings.tripMode ||
+      recorder.recording ||
+      sos.active != null ||
+      _visible ||
+      nav != null;
 
   Duration get _wantedInterval {
     final now = _clock();
     final p = plan;
     if (sos.active != null) return const Duration(seconds: 5);
+    if (nav != null) return p.navInterval;
     if (recorder.recording) {
       return recorder.interval(now, saver: p.transportSaver);
     }
@@ -331,7 +350,11 @@ class TripController extends ChangeNotifier {
       _locInterval = null;
       await host.stopLocation();
     }
-    final bg = settings.tripMode || recorder.recording || sos.active != null;
+    final bg =
+        settings.tripMode ||
+        recorder.recording ||
+        sos.active != null ||
+        nav != null;
     if (bg != _bgLoc) {
       _bgLoc = bg;
       await host.backgroundLocation(bg);
@@ -349,7 +372,120 @@ class TripController extends ChangeNotifier {
       if (recorder.track!.points.length % 20 == 0) unawaited(_saveTracks());
     }
     _maybeSendLive();
+    _navFix(f.pos);
     notifyListeners();
+  }
+
+  // ------------------------------------------------------------ navigation
+
+  /// "Navigate here" in progress (v1.9.1), null when not navigating.
+  NavSession? nav;
+  final GraphCache _graphs = GraphCache();
+  DateTime? _lastReroute;
+
+  /// The trail network from the trail layers on this phone.
+  Future<TrailGraph> trailGraph() => _graphs.of(layers);
+
+  /// Start navigating to [to]: along trails when there are any (shortest
+  /// path from where you are), else a straight compass line ([compass]
+  /// forces that). Works offline; GPS speeds up while navigating.
+  Future<NavSession> navigateTo(
+    GeoPoint to, {
+    String name = 'Destination',
+    bool compass = false,
+  }) async {
+    final me = myFix?.pos ?? (await host.locateOnce())?.pos;
+    TrailRoute? r;
+    var note = '';
+    if (!compass) {
+      if (me == null) {
+        note = 'Waiting for GPS: showing the straight line.';
+      } else {
+        final g = await trailGraph();
+        r = g.isEmpty ? null : g.route(me, to);
+        if (g.isEmpty) {
+          note = 'No trails on this phone: straight line (compass).';
+        } else if (r == null) {
+          note = 'No trail route found: straight line (compass).';
+        } else {
+          note = await _elevation(r);
+        }
+      }
+    }
+    final s = NavSession(target: to, name: name, route: r, note: note);
+    if (_disposed) return s;
+    nav?.dispose();
+    nav = s;
+    if (me != null) s.update(me);
+    await _updateLocationNeed();
+    notifyListeners();
+    return s;
+  }
+
+  Future<String> _elevation(TrailRoute r) async {
+    final src = await fillElevation(
+      r,
+      (z, x, y) => tiles.get(MapSource.terrarium, z, x, y),
+    );
+    return switch (src) {
+      'dem' => '',
+      'gpx' => 'Elevation from the GPX file.',
+      _ => 'No elevation data here (save the area with Download area).',
+    };
+  }
+
+  /// Route again from where you are now.
+  Future<bool> reroute() async {
+    final s = nav;
+    final me = myFix?.pos;
+    if (s == null || me == null || s.compass) return false;
+    _lastReroute = _clock();
+    final g = await trailGraph();
+    final r = g.route(me, s.target);
+    if (r == null || nav != s) return false;
+    await _elevation(r);
+    if (nav != s || _disposed) return false;
+    s.replaceRoute(r);
+    notifyListeners();
+    return true;
+  }
+
+  Future<void> stopNav() async {
+    nav?.dispose();
+    nav = null;
+    await _updateLocationNeed();
+    notifyListeners();
+  }
+
+  void _navFix(GeoPoint p) {
+    final s = nav;
+    if (s == null) return;
+    final ev = s.update(p);
+    if (ev == 'off') {
+      final st = s.state!;
+      host.notify(
+        'Off route',
+        '${formatDistance(st.offM, imperial: settings.imperial)} off the '
+            'route to ${s.name}. Head ${cardinal(st.bearingToRoute)} to get back.',
+      );
+    } else if (ev == 'arrived') {
+      host.notify('Arrived', 'You reached ${s.name}.');
+    }
+    // Way off for a while: route again from here (at most every 30 s).
+    final st = s.state;
+    if (st != null && st.offRoute && st.offM > 60) {
+      final last = _lastReroute;
+      if (last == null || _clock().difference(last).inSeconds >= 30) {
+        unawaited(reroute());
+      }
+    }
+  }
+
+  /// Send the planned route to the group (same as sharing a trail layer).
+  ({int parts, bool radio}) shareNavRoute() {
+    final s = nav;
+    if (s == null) return (parts: 0, radio: false);
+    return _shareData(s.asData(), s.asData().name, 0xFFE53935);
   }
 
   void onHeading(double h) {
@@ -870,14 +1006,18 @@ class TripController extends ChangeNotifier {
     if (d == null || l.kind != MapLayerKind.trail || d.isEmpty) {
       return (parts: 0, radio: false);
     }
+    return _shareData(d, l.name, l.color);
+  }
+
+  ({int parts, bool radio}) _shareData(ImportedData d, String name, int color) {
     final routeId = _nextId();
-    final parts = routeMessages(d, routeId, _nextId, color: l.color) ?? [];
+    final parts = routeMessages(d, routeId, _nextId, color: color) ?? [];
     for (final m in parts) {
       _send(m, const TripRoute());
     }
     final s = routeRadioSummary(d, routeId, _nextId());
     if (s != null) _send(s, const TripRoute(fast: false, radio: true));
-    _event(host.localId, 'You shared ${l.name}', 'track');
+    _event(host.localId, 'You shared $name', 'track');
     return (parts: parts.length, radio: s != null);
   }
 

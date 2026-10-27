@@ -1,13 +1,16 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
+import '../trip/fires.dart';
 import '../trip/geo.dart';
 import '../trip/imports/georef.dart';
 import '../trip/imports/map_layers.dart';
 import '../trip/imports/mbtiles_provider.dart';
+import '../trip/tile_cache.dart';
 import '../trip/tile_provider.dart';
 import '../trip/trip_controller.dart';
 import 'map_search_page.dart' show placeKindIcon;
@@ -43,7 +46,94 @@ List<Widget> baseTileLayers(TripController trip) {
                 LatLng(mb.bounds!.north, mb.bounds!.east),
               ),
       ),
+    for (final o in trip.overlays) ?overlayLayer(trip, o),
   ];
+}
+
+/// A map overlay (v1.9.1) as a layer: tiles, computed slope shading, or the
+/// live fire perimeters.
+Widget? overlayLayer(TripController trip, MapSource o, {FireService? fires}) {
+  if (o.id == MapSource.fires.id) {
+    return FireLayer(key: const ValueKey('ov_fires'), service: fires);
+  }
+  final tiles = TileLayer(
+    key: ValueKey(o.id),
+    urlTemplate: o.id == MapSource.slope.id ? null : o.urlTemplate,
+    minZoom: o.minZoom.toDouble(),
+    maxNativeZoom: o.maxZoom,
+    userAgentPackageName: 'com.walkie.walkie_talkie',
+    tileProvider: o.id == MapSource.slope.id
+        ? SlopeTileProvider(trip.tiles)
+        : CachedTileProvider(trip.tiles, o),
+    evictErrorTileStrategy: EvictErrorTileStrategy.dispose,
+  );
+  return o.opacity >= 1 ? tiles : Opacity(opacity: o.opacity, child: tiles);
+}
+
+/// Current wildfire perimeters for the area on screen (online only).
+class FireLayer extends StatefulWidget {
+  const FireLayer({super.key, this.service});
+  final FireService? service;
+  @override
+  State<FireLayer> createState() => _FireLayerState();
+}
+
+class _FireLayerState extends State<FireLayer> {
+  static final _shared = FireService();
+  FireService get _svc => widget.service ?? _shared;
+  List<FirePerimeter> _fires = const [];
+  String _asked = '';
+  Timer? _wait;
+
+  @override
+  void dispose() {
+    _wait?.cancel();
+    super.dispose();
+  }
+
+  void _maybeFetch(MapCamera cam) {
+    final v = cam.visibleBounds;
+    // Ask for a bit more than the screen, rounded so small pans reuse it.
+    final step = 360 / (1 << cam.zoom.floor().clamp(3, 14));
+    double r(double x) => (x / step).floorToDouble() * step;
+    final b = GeoBounds(
+      r(v.south) - step,
+      r(v.west) - step,
+      r(v.north) + 2 * step,
+      r(v.east) + 2 * step,
+    );
+    final key = '${b.south},${b.west},${b.north},${b.east}';
+    if (key == _asked) return;
+    _wait?.cancel();
+    _wait = Timer(const Duration(milliseconds: 800), () async {
+      _asked = key;
+      final got = await _svc.inArea(b, zoom: cam.zoom);
+      if (mounted && _asked == key) setState(() => _fires = got);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    _maybeFetch(MapCamera.of(context));
+    return PolygonLayer(
+      polygons: [
+        for (final f in _fires)
+          for (final r in f.rings)
+            Polygon(
+              points: [for (final p in r) _ll(p)],
+              color: Colors.deepOrange.withValues(alpha: 0.25),
+              borderColor: Colors.red.shade700,
+              borderStrokeWidth: 2,
+              label: f.rings.first == r ? f.label : null,
+              labelStyle: const TextStyle(
+                fontSize: 11,
+                color: Colors.black87,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+      ],
+    );
+  }
 }
 
 /// An overlay image placed with [g].

@@ -102,6 +102,14 @@ class PowerPlan {
     return Duration(seconds: saver ? 60 : 20);
   }
 
+  /// GPS fix interval while navigating (v1.9.1): fast enough to follow a
+  /// trail, slower in Offline power save / battery saver.
+  Duration get navInterval => offline
+      ? const Duration(seconds: 10)
+      : saver
+      ? const Duration(seconds: 5)
+      : const Duration(seconds: 2);
+
   /// Check-in period: offline doubles it, capped at 15 min so phones that
   /// only hear us by radio do not raise a lost-contact alert (20 min).
   int checkInMinutes(int every) {

@@ -1159,3 +1159,45 @@ phone.
   when byte-identical layers were imported more than once; one tap keeps one
   of each (the pack copy, else the base map, else a visible one, else the
   oldest) and the base map keeps working. Shared routes are left alone.
+
+## v1.9.1: more map styles, overlays, offline trail navigation
+
+**Map style** (Trip tab, layers button) now lists, each marked *Can be saved
+offline (Download area)* or *Online only*:
+
+| Style | Source | Offline | Max zoom |
+|---|---|---|---|
+| USGS Topo | USGS The National Map (public domain) | yes | 16 |
+| Topo (OpenTopoMap) | OpenTopoMap (CC-BY-SA) | yes | 17 |
+| USGS Satellite | USGS Imagery Only | yes | 16 |
+| USGS Satellite + Topo | USGS Imagery Topo | yes | 16 |
+| USGS Hillshade | USGS Shaded Relief | yes | 16 |
+| Street (OpenStreetMap) | OpenStreetMap | view only (OSM tile policy forbids bulk download) | 19 |
+
+**Overlays** (tick any number, drawn over the base):
+
+| Overlay | Source | Offline |
+|---|---|---|
+| Land ownership | BLM Surface Management Agency (BLM/USFS/NPS/state/...) | yes, to z14 |
+| Wilderness areas | USFS EDW Wilderness | yes |
+| USFS trails | USFS EDW National Forest System trails | yes, z10+ |
+| USFS roads | USFS EDW roads | yes, z10+ |
+| Slope angle | computed on the phone from AWS Terrain Tiles (Terrarium DEM): yellow 27-30 deg, orange 30-35, red 35-45, purple 45+ | yes, z11-14 |
+| Wildfire perimeters | NIFC WFIGS current perimeters (vector) | **online only** |
+
+Download area saves the chosen base plus every offline-capable overlay that
+is on, plus the elevation tiles used for slope and elevation profiles.
+`LIVE_MAPS=1 flutter test test/live_map_sources_test.dart` checks every URL.
+
+**Navigation** (works offline): long-press anywhere on the map, or tap a
+waypoint, trailhead, peak, pin or search result, then **Navigate here**
+(shortest path along the trail layers on the phone, ends and crossings
+snapped) or **Compass to here** (straight line). The map shows the route
+in purple and a card with distance left, Naismith time, climb/descent and a
+heading arrow, with **Follow** and **Stop**. **Follow** opens the follow
+screen: next junction ("Turn left onto ..."), big arrow, elevation profile
+(DEM, else GPX elevations), **Re-route**, **Share route** (sent like any
+shared route) and **Stop**. More than 40 m off the route the phone vibrates
+and shows an arrow back; far off it re-routes by itself. GPS runs every 2 s
+while navigating (5 s with Battery saver, 10 s with Offline power save).
+Code: `lib/trip/nav/` (trail_graph, navigator, nav_session), `lib/ui/nav_page.dart`.

@@ -17,7 +17,25 @@ class MapSource {
     this.maxZoom = 18,
     this.allowsOffline = false,
     this.avgTileBytes = 20000,
+    this.about = '',
+    this.overlay = false,
+    this.opacity = 1,
+    this.minZoom = 0,
+    this.onlineOnly = false,
   });
+
+  /// One line for the style picker ("Satellite photos").
+  final String about;
+
+  /// Drawn on top of any base map (transparent tiles), toggled on/off.
+  final bool overlay;
+  final double opacity;
+
+  /// Not drawn below this zoom (e.g. slope shading needs detail).
+  final int minZoom;
+
+  /// Live data, never cached for offline (e.g. wildfire perimeters).
+  final bool onlineOnly;
   final String id;
   final String name;
   final String urlTemplate;
@@ -59,6 +77,182 @@ class MapSource {
     avgTileBytes: 15000,
   );
 
+  // ---------------------------------------------- v1.9.1: more styles
+  // USGS The National Map, BLM and USFS services are US Government works
+  // (public domain), so areas may be saved for offline use. AWS Terrain
+  // Tiles (Mapzen terrarium) are open data.
+
+  static const _tnm = 'https://basemap.nationalmap.gov/arcgis/rest/services';
+  static const _edw = 'https://apps.fs.usda.gov/arcx/rest/services/EDW';
+  static const _export =
+      '/MapServer/export?bbox={bbox}&bboxSR=3857&imageSR=3857'
+      '&size=256,256&format=png32&transparent=true&f=image';
+
+  /// USGS US Topo style map (contours, trails, names), US only.
+  static const usgsTopo = MapSource(
+    id: 'usgs_topo',
+    name: 'USGS Topo',
+    urlTemplate: '$_tnm/USGSTopo/MapServer/tile/{z}/{y}/{x}',
+    attribution: 'USGS The National Map',
+    maxZoom: 16,
+    allowsOffline: true,
+    avgTileBytes: 25000,
+    about: 'Official US topo map: contours, trails, forest roads.',
+  );
+
+  static const usgsImagery = MapSource(
+    id: 'usgs_imagery',
+    name: 'USGS Satellite',
+    urlTemplate: '$_tnm/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}',
+    attribution: 'USGS The National Map: Orthoimagery (USDA NAIP)',
+    maxZoom: 16,
+    allowsOffline: true,
+    avgTileBytes: 25000,
+    about: 'Aerial photos (US).',
+  );
+
+  static const usgsHybrid = MapSource(
+    id: 'usgs_hybrid',
+    name: 'USGS Satellite + Topo',
+    urlTemplate: '$_tnm/USGSImageryTopo/MapServer/tile/{z}/{y}/{x}',
+    attribution: 'USGS The National Map: Orthoimagery and US Topo',
+    maxZoom: 16,
+    allowsOffline: true,
+    avgTileBytes: 30000,
+    about: 'Aerial photos with contours, roads and names (US).',
+  );
+
+  static const usgsRelief = MapSource(
+    id: 'usgs_relief',
+    name: 'USGS Hillshade',
+    urlTemplate: '$_tnm/USGSShadedReliefOnly/MapServer/tile/{z}/{y}/{x}',
+    attribution: 'USGS The National Map: 3D Elevation Program',
+    maxZoom: 16,
+    allowsOffline: true,
+    avgTileBytes: 9000,
+    about: 'Shaded terrain: ridges, gullies and valleys stand out.',
+  );
+
+  /// Base maps in the style picker (plus imported MBTiles and custom).
+  static const bases = [
+    usgsTopo,
+    topo,
+    usgsImagery,
+    usgsHybrid,
+    usgsRelief,
+    osm,
+  ];
+
+  /// Raw elevation tiles (AWS Terrain Tiles, terrarium PNG): slope shading
+  /// and the elevation profile. Not drawn as is.
+  static const terrarium = MapSource(
+    id: 'terrarium',
+    name: 'Elevation data',
+    urlTemplate: 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png',
+    attribution: 'Elevation: Mapzen Terrain Tiles (AWS Open Data), USGS 3DEP',
+    maxZoom: 15,
+    allowsOffline: true,
+    avgTileBytes: 110000,
+  );
+
+  // Overlays (on top of any base map).
+
+  static const landOwnership = MapSource(
+    id: 'ov_land',
+    name: 'Land ownership',
+    urlTemplate:
+        'https://gis.blm.gov/arcgis/rest/services/lands/'
+        'BLM_Natl_SMA_Cached_without_PriUnk/MapServer/tile/{z}/{y}/{x}',
+    attribution: 'Land: BLM Surface Management Agency',
+    maxZoom: 14,
+    allowsOffline: true,
+    avgTileBytes: 3000,
+    overlay: true,
+    opacity: 0.45,
+    about:
+        'Who manages the land: National Forest (green), BLM (yellow), '
+        'National Park (purple), state (blue); private land is clear.',
+  );
+
+  static const wilderness = MapSource(
+    id: 'ov_wild',
+    name: 'Wilderness areas',
+    urlTemplate: '$_edw/EDW_Wilderness_02$_export',
+    attribution: 'Wilderness: USDA Forest Service',
+    maxZoom: 15,
+    allowsOffline: true,
+    avgTileBytes: 1500,
+    overlay: true,
+    opacity: 0.6,
+    about: 'Designated Wilderness (no bikes or motors).',
+  );
+
+  static const fsTrails = MapSource(
+    id: 'ov_fs_trails',
+    name: 'USFS trails',
+    urlTemplate: '$_edw/EDW_TrailNFSPublish_01$_export',
+    attribution: 'Trails: USDA Forest Service',
+    maxZoom: 16,
+    minZoom: 10,
+    allowsOffline: true,
+    avgTileBytes: 2500,
+    overlay: true,
+    about: 'National Forest System trails (official).',
+  );
+
+  static const fsRoads = MapSource(
+    id: 'ov_fs_roads',
+    name: 'USFS roads',
+    urlTemplate: '$_edw/EDW_RoadBasic_01$_export',
+    attribution: 'Roads: USDA Forest Service',
+    maxZoom: 16,
+    minZoom: 10,
+    allowsOffline: true,
+    avgTileBytes: 2000,
+    overlay: true,
+    about: 'National Forest roads.',
+  );
+
+  /// Slope angle shading, computed on the phone from [terrarium].
+  static const slope = MapSource(
+    id: 'ov_slope',
+    name: 'Slope angle',
+    urlTemplate: 'slope:{z}/{x}/{y}',
+    attribution: 'Slope from Mapzen Terrain Tiles (AWS Open Data)',
+    maxZoom: 14,
+    minZoom: 11,
+    allowsOffline: true,
+    avgTileBytes: 110000,
+    overlay: true,
+    opacity: 0.55,
+    about:
+        'Avalanche terrain: yellow 27-30°, orange 30-35°, red 35-45°, '
+        'purple 45°+.',
+  );
+
+  /// Current wildfire perimeters (NIFC WFIGS), live from the internet.
+  static const fires = MapSource(
+    id: 'ov_fires',
+    name: 'Wildfire perimeters',
+    urlTemplate: 'wfigs:',
+    attribution: 'Fire perimeters: NIFC WFIGS',
+    overlay: true,
+    onlineOnly: true,
+    about: 'Current fire perimeters. Online only, updated every few minutes.',
+  );
+
+  static const overlays = [
+    landOwnership,
+    wilderness,
+    fsTrails,
+    fsRoads,
+    slope,
+    fires,
+  ];
+
+  static MapSource? byId(String id) =>
+      [...bases, ...overlays, terrarium].where((s) => s.id == id).firstOrNull;
+
   /// Your own tile server (e.g. on a Synology), any {z}/{x}/{y} URL.
   static MapSource custom(String url) => MapSource(
     id: 'custom',
@@ -70,7 +264,19 @@ class MapSource {
   );
 
   String urlFor(int z, int x, int y) {
-    var u = urlTemplate
+    var u = urlTemplate;
+    if (u.contains('{bbox}')) {
+      // ArcGIS "export" map services: the tile's Web Mercator box.
+      const r = 20037508.342789244;
+      final size = 2 * r / (1 << z);
+      final x0 = -r + x * size, y1 = r - y * size;
+      String f(double v) => v.toStringAsFixed(2);
+      u = u.replaceAll(
+        '{bbox}',
+        '${f(x0)},${f(y1 - size)},${f(x0 + size)},${f(y1)}',
+      );
+    }
+    u = u
         .replaceAll('{z}', '$z')
         .replaceAll('{x}', '$x')
         .replaceAll('{y}', '$y');

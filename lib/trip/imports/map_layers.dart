@@ -335,6 +335,9 @@ class MapLayers extends ChangeNotifier {
           'p': [
             for (final p in l.points) ...[p.latE5, p.lngE5],
           ],
+          // Elevation in decimetres, null where missing (v1.9.1).
+          if (l.ele != null)
+            'e': [for (final e in l.ele!) e.isFinite ? (e * 10).round() : null],
         },
     ],
     'w': [
@@ -354,11 +357,20 @@ class MapLayers extends ChangeNotifier {
     for (final l in (j['l'] as List? ?? const [])) {
       final m = l as Map;
       final p = (m['p'] as List).cast<num>();
+      final pts = [
+        for (var i = 0; i + 1 < p.length; i += 2)
+          GeoPoint.fromE5(p[i].toInt(), p[i + 1].toInt()),
+      ];
+      final e = m['e'];
       d.lines.add(
-        ImportedLine((m['n'] as String?) ?? '', [
-          for (var i = 0; i + 1 < p.length; i += 2)
-            GeoPoint.fromE5(p[i].toInt(), p[i + 1].toInt()),
-        ], isRoute: m['r'] == true),
+        ImportedLine(
+          (m['n'] as String?) ?? '',
+          pts,
+          isRoute: m['r'] == true,
+          ele: e is List && e.length == pts.length
+              ? [for (final v in e) v is num ? v / 10 : double.nan]
+              : null,
+        ),
       );
     }
     for (final w in (j['w'] as List? ?? const [])) {

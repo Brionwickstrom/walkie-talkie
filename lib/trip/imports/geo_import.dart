@@ -9,9 +9,13 @@ import '../geo.dart';
 /// A line from an imported file (GPX track / route, KML LineString,
 /// gx:Track or polygon outline).
 class ImportedLine {
-  ImportedLine(this.name, this.points, {this.isRoute = false});
+  ImportedLine(this.name, this.points, {this.isRoute = false, this.ele});
   String name;
   final List<GeoPoint> points;
+
+  /// Elevation (m) per point from the file (GPX `<ele>`), NaN where
+  /// missing; null when the file has none (v1.9.1).
+  final List<double>? ele;
 
   /// Planned route (GPX rte) rather than a recorded track.
   final bool isRoute;
@@ -187,24 +191,36 @@ ImportedData parseGpx(String s) {
     final name = _text(_child(t, 'name'));
     d.color ??= _gpxColor(t);
     for (final seg in t.childElements.where((e) => e.name.local == 'trkseg')) {
-      final pts = [
-        for (final p in seg.childElements.where((e) => e.name.local == 'trkpt'))
-          ?_pt(p.getAttribute('lat'), p.getAttribute('lon')),
-      ];
-      if (pts.length > 1) d.lines.add(ImportedLine(name, pts));
+      final (pts, ele) = _gpxPoints(seg, 'trkpt');
+      if (pts.length > 1) d.lines.add(ImportedLine(name, pts, ele: ele));
     }
   }
   for (final r in root.childElements.where((e) => e.name.local == 'rte')) {
-    final pts = [
-      for (final p in r.childElements.where((e) => e.name.local == 'rtept'))
-        ?_pt(p.getAttribute('lat'), p.getAttribute('lon')),
-    ];
+    final (pts, ele) = _gpxPoints(r, 'rtept');
     if (pts.length > 1) {
-      d.lines.add(ImportedLine(_text(_child(r, 'name')), pts, isRoute: true));
+      d.lines.add(
+        ImportedLine(_text(_child(r, 'name')), pts, isRoute: true, ele: ele),
+      );
     }
   }
   if (d.name.isEmpty && d.lines.isNotEmpty) d.name = d.lines.first.name;
   return d;
+}
+
+/// Points of a GPX segment / route and their `<ele>` (null if none).
+(List<GeoPoint>, List<double>?) _gpxPoints(XmlElement parent, String tag) {
+  final pts = <GeoPoint>[];
+  final ele = <double>[];
+  var any = false;
+  for (final p in parent.childElements.where((e) => e.name.local == tag)) {
+    final g = _pt(p.getAttribute('lat'), p.getAttribute('lon'));
+    if (g == null) continue;
+    pts.add(g);
+    final e = double.tryParse(_text(_child(p, 'ele')));
+    if (e != null && e.isFinite) any = true;
+    ele.add(e != null && e.isFinite ? e : double.nan);
+  }
+  return (pts, any ? ele : null);
 }
 
 /// Garmin / Gaia `<extensions><...:DisplayColor>` or `<color>RRGGBB`.
@@ -338,14 +354,23 @@ const int maxTrailFileBytes = 20 * 1024 * 1024;
 /// Total points kept per imported file (simplified at 2 m first).
 const int maxImportPoints = 20000;
 
+List<int> _idx(ImportedLine l) => [for (var k = 0; k < l.points.length; k++) k];
+
+/// [l] with only the points at [keep] (elevations follow).
+ImportedLine _keep(ImportedLine l, List<int> keep) => ImportedLine(
+  l.name,
+  [for (final k in keep) l.points[k]],
+  isRoute: l.isRoute,
+  ele: l.ele == null ? null : [for (final k in keep) l.ele![k]],
+);
+
 /// Drop near-duplicate points (2 m Douglas-Peucker) so huge recordings stay
 /// light to draw and store; then cap the total.
 ImportedData tidyImport(ImportedData d) {
   for (var i = 0; i < d.lines.length; i++) {
     final l = d.lines[i];
     if (l.points.length > 500) {
-      final s = simplify<GeoPoint>(l.points, (p) => p, 2);
-      d.lines[i] = ImportedLine(l.name, s, isRoute: l.isRoute);
+      d.lines[i] = _keep(l, simplify<int>(_idx(l), (k) => l.points[k], 2));
     }
   }
   var total = d.lines.fold<int>(0, (s, l) => s + l.points.length);
@@ -354,11 +379,7 @@ ImportedData tidyImport(ImportedData d) {
     for (var i = 0; i < d.lines.length; i++) {
       final l = d.lines[i];
       final n = (l.points.length * share).floor().clamp(2, l.points.length);
-      d.lines[i] = ImportedLine(
-        l.name,
-        thinTo<GeoPoint>(l.points, (p) => p, n),
-        isRoute: l.isRoute,
-      );
+      d.lines[i] = _keep(l, thinTo<int>(_idx(l), (k) => l.points[k], n));
     }
   }
   if (d.waypoints.length > 2000) {

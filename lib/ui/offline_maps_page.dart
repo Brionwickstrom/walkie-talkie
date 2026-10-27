@@ -56,6 +56,29 @@ class _OfflineMapsPageState extends State<OfflineMapsPage> {
   MapSource get _downloadSource =>
       t.mapSource.allowsOffline ? t.mapSource : MapSource.topo;
 
+  /// What "Download" saves besides the base map: the overlays that are on
+  /// and may be saved, and elevation data (profiles, slope shading).
+  List<({MapSource src, int z0, int z1})> _extras(int z0, int z1) {
+    final out = <({MapSource src, int z0, int z1})>[];
+    for (final o in t.overlays) {
+      if (!o.allowsOffline || o.onlineOnly || o.id == MapSource.slope.id) {
+        continue;
+      }
+      final a = math.max(z0, o.minZoom), b = math.min(z1, o.maxZoom);
+      if (a <= b) out.add((src: o, z0: a, z1: b));
+    }
+    final slope = t.overlays.any((o) => o.id == MapSource.slope.id);
+    // Elevation: zoom 12 for the profile; slope shading needs its zooms.
+    final dz1 = slope ? math.min(z1, MapSource.slope.maxZoom) : 12;
+    final dz0 = slope
+        ? math.max(MapSource.slope.minZoom, math.min(z0, 12))
+        : 12;
+    out.add((src: MapSource.terrarium, z0: math.min(dz0, dz1), z1: dz1));
+    return out;
+  }
+
+  String? _step;
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -95,6 +118,7 @@ class _OfflineMapsPageState extends State<OfflineMapsPage> {
               const Text('Open the map first to pick an area.'),
             if (_progress != null) ...[
               const SizedBox(height: 12),
+              if (_step != null) Text('Saving $_step'),
               LinearProgressIndicator(value: _progress!.fraction),
               Text(
                 '${_progress!.done + _progress!.failed} of ${_progress!.total} tiles · '
@@ -183,7 +207,14 @@ class _OfflineMapsPageState extends State<OfflineMapsPage> {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, set) {
           final est = t.tiles.estimate(src, b, z0, z1);
-          final tooBig = est.tiles > t.tiles.maxDownloadTiles;
+          final extras = _extras(z0, z1);
+          final extraEst = [
+            for (final e in extras) t.tiles.estimate(e.src, b, e.z0, e.z1),
+          ];
+          final tooBig =
+              est.tiles > t.tiles.maxDownloadTiles ||
+              extraEst.any((x) => x.tiles > t.tiles.maxDownloadTiles);
+          final extraBytes = extraEst.fold(0, (s, x) => s + x.bytes);
           return AlertDialog(
             title: const Text('Download this area'),
             content: Column(
@@ -205,7 +236,11 @@ class _OfflineMapsPageState extends State<OfflineMapsPage> {
                   onChanged: (v) => set(() => z1 = v.round()),
                 ),
                 Text(
-                  'About ${est.tiles} tiles, ~${mb(est.bytes)}'
+                  'Saves ${src.name}'
+                  '${extras.isEmpty ? '' : ' + ${extras.map((e) => e.src.name).join(', ')}'}',
+                ),
+                Text(
+                  'About ${est.tiles} tiles, ~${mb(est.bytes + extraBytes)}'
                   '${tooBig ? '\nToo big (limit ${t.tiles.maxDownloadTiles} tiles): zoom the map in or lower the detail.' : ''}',
                   style: TextStyle(
                     color: tooBig ? Theme.of(ctx).colorScheme.error : null,
@@ -233,20 +268,31 @@ class _OfflineMapsPageState extends State<OfflineMapsPage> {
       ),
     );
     if (ok != true || !mounted) return;
-    final p = DownloadProgress(countTiles(b, z0, z1));
-    setState(() => _progress = p);
+    final label = name.text.trim().isEmpty ? 'Trip area' : name.text.trim();
+    final jobs = [(src: src, z0: z0, z1: z1), ..._extras(z0, z1)];
     try {
-      await t.tiles.download(
-        src,
-        b,
-        z0,
-        z1,
-        name: name.text.trim().isEmpty ? 'Trip area' : name.text.trim(),
-        progress: p,
-        onProgress: (_) {
-          if (mounted) setState(() {});
-        },
-      );
+      for (var i = 0; i < jobs.length; i++) {
+        final j = jobs[i];
+        final p = DownloadProgress(countTiles(b, j.z0, j.z1));
+        setState(() {
+          _progress = p;
+          _step = jobs.length > 1
+              ? '${j.src.name} (${i + 1} of ${jobs.length})'
+              : null;
+        });
+        await t.tiles.download(
+          j.src,
+          b,
+          j.z0,
+          j.z1,
+          name: label,
+          progress: p,
+          onProgress: (_) {
+            if (mounted) setState(() {});
+          },
+        );
+        if (p.cancelled || !mounted) break;
+      }
     } on StateError catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context)

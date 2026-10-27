@@ -11,6 +11,7 @@ import '../app/walkie_controller.dart';
 import '../trip/geo.dart';
 import '../trip/imports/map_layers.dart';
 import '../trip/imports/map_packs.dart';
+import '../trip/nav/nav_session.dart';
 import '../trip/search/fetch.dart';
 import '../trip/search/map_search.dart';
 import '../trip/search/nominatim.dart';
@@ -28,6 +29,7 @@ import 'map_layer_widgets.dart';
 import 'map_layers_page.dart';
 import 'map_packs_page.dart';
 import 'map_search_page.dart';
+import 'nav_page.dart';
 import 'network_map_page.dart';
 import 'offline_maps_page.dart';
 import 'sheets.dart';
@@ -150,6 +152,7 @@ class TripPageState extends State<TripPage> {
             }
           });
         }
+        _buzz(trip);
         final active = trip.sos.active;
         return TripLayout(
           full: _full,
@@ -165,6 +168,12 @@ class TripPageState extends State<TripPage> {
           controls: _mapControls(context, trip),
           fullControls: _zoomControls(),
           topLeft: [
+            if (trip.nav != null)
+              NavCard(
+                trip: trip,
+                session: trip.nav!,
+                onFollow: () => _openFollow(trip),
+              ),
             ?_packBanner(context, trip),
             OfflineSaverChip(
               on: c.settings.offlineSaver,
@@ -202,7 +211,24 @@ class TripPageState extends State<TripPage> {
         (trip.pins.isNotEmpty ? trip.pins.first.pos : null);
     final track = _shown ?? trip.currentTrack;
     final hl = _hl;
+    final nav = trip.nav;
+    final navRoute = nav?.route;
     final lines = <Polyline>[
+      if (navRoute != null)
+        Polyline(
+          points: [for (final p in navRoute.points) ll(p)],
+          strokeWidth: 6,
+          color: Colors.deepPurple.withValues(alpha: 0.8),
+          borderStrokeWidth: 1.5,
+          borderColor: Colors.white,
+        ),
+      if (nav != null && nav.compass && me != null)
+        Polyline(
+          points: [ll(me.pos), ll(nav.target)],
+          strokeWidth: 3,
+          color: Colors.deepPurple,
+          pattern: StrokePattern.dashed(segments: const [10, 8]),
+        ),
       if (hl != null && hl.doc.line != null && hl.doc.line!.length > 1)
         Polyline(
           points: [for (final p in hl.doc.line!) ll(p)],
@@ -239,6 +265,14 @@ class TripPageState extends State<TripPage> {
         ),
     ];
     final markers = <Marker>[
+      if (nav != null)
+        Marker(
+          key: const Key('navTarget'),
+          point: ll(nav.target),
+          width: 40,
+          height: 40,
+          child: const Icon(Icons.flag, color: Colors.deepPurple, size: 32),
+        ),
       if (hl != null)
         Marker(
           key: const Key('searchHighlight'),
@@ -246,7 +280,8 @@ class TripPageState extends State<TripPage> {
           width: 160,
           height: 72,
           child: GestureDetector(
-            onTap: () => setState(() => _hl = null),
+            onTap: () =>
+                _pointSheet(context, trip, hl.doc.pos, hl.title, search: true),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -381,13 +416,19 @@ class TripPageState extends State<TripPage> {
             onPositionChanged: (cam, gesture) {
               if (gesture && _follow) setState(() => _follow = false);
             },
-            onLongPress: (_, point) => _addPin(context, trip, gp(point)),
+            onLongPress: (_, point) =>
+                _pointSheet(context, trip, gp(point), 'Dropped point'),
           ),
           children: [
             ...baseTileLayers(trip),
             ...importedLayers(
               trip,
-              onWaypoint: (l, name, at) => _addPin(context, trip, at),
+              onWaypoint: (l, name, at) => _pointSheet(
+                context,
+                trip,
+                at,
+                name.isEmpty ? 'Waypoint' : name,
+              ),
             ),
             PolylineLayer(polylines: lines),
             MarkerLayer(markers: markers),
@@ -400,6 +441,7 @@ class TripPageState extends State<TripPage> {
                   for (final l in trip.layers.trails)
                     if (l.visible && l.attribution.isNotEmpty)
                       'Trails ${l.attribution}',
+                  for (final o in trip.overlays) o.attribution,
                 }.where((x) => x.isNotEmpty).join(' · '),
                 style: const TextStyle(fontSize: 10),
               ),
@@ -867,6 +909,244 @@ class TripPageState extends State<TripPage> {
   }
 
   Future<void> _styleSheet(BuildContext context, TripController trip) async {
+    String saves(MapSource s) => s.onlineOnly
+        ? 'Online only'
+        : s.allowsOffline
+        ? 'Can be saved offline (Download area)'
+        : 'View only: cached as you look, not saved ahead';
+    await showAppSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, set) => SafeArea(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(ctx).size.height * 0.85,
+            ),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text('Map style', style: Theme.of(ctx).textTheme.titleLarge),
+                  for (final s in MapSource.bases)
+                    ListTile(
+                      key: Key('style:${s.id}'),
+                      leading: Icon(
+                        trip.settings.mapSource == s.id
+                            ? Icons.radio_button_checked
+                            : Icons.radio_button_off,
+                      ),
+                      title: Text(s.name),
+                      subtitle: Text(
+                        '${s.about.isNotEmpty
+                            ? s.about
+                            : s.allowsOffline
+                            ? 'Trails and contour lines.'
+                            : 'Streets.'}\n${saves(s)}',
+                      ),
+                      isThreeLine: true,
+                      onTap: () {
+                        trip.update((x) => x.mapSource = s.id);
+                        Navigator.pop(ctx);
+                      },
+                    ),
+                  const Divider(),
+                  Text('Overlays', style: Theme.of(ctx).textTheme.titleMedium),
+                  Text(
+                    'On top of any map. Tap to switch on or off.',
+                    style: Theme.of(ctx).textTheme.bodySmall,
+                  ),
+                  for (final o in MapSource.overlays)
+                    CheckboxListTile(
+                      key: Key('overlay:${o.id}'),
+                      value: trip.settings.overlays.contains(o.id),
+                      title: Text(o.name),
+                      subtitle: Text('${o.about}\n${saves(o)}'),
+                      isThreeLine: true,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      onChanged: (on) async {
+                        await trip.update((x) {
+                          x.overlays.remove(o.id);
+                          if (on == true) x.overlays.add(o.id);
+                        });
+                        set(() {});
+                      },
+                    ),
+                  const Divider(),
+                  for (final l in trip.layers.tileSets)
+                    ListTile(
+                      leading: Icon(
+                        trip.baseTiles?.id == l.id
+                            ? Icons.radio_button_checked
+                            : Icons.radio_button_off,
+                      ),
+                      title: Text(l.name),
+                      subtitle: Text(
+                        'Offline map on this phone · ${l.summary} · ${formatBytes(l.bytes)}',
+                      ),
+                      onTap: () {
+                        trip.update((x) => x.mapSource = 'mbtiles:${l.id}');
+                        Navigator.pop(ctx);
+                      },
+                    ),
+                  ListTile(
+                    leading: const Icon(Icons.terrain),
+                    title: const Text('Ready-made maps'),
+                    subtitle: const Text(
+                      'Silver Star & Trapper Creek, one tap',
+                    ),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      _openPacks(trip);
+                    },
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.file_open),
+                    title: const Text('Import a map or trail…'),
+                    subtitle: const Text(
+                      'GPX, KML, KMZ, MBTiles, or a park map picture / PDF',
+                    ),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      _openLayers(context, trip);
+                    },
+                  ),
+                  ListTile(
+                    leading: Icon(
+                      trip.settings.mapSource == 'custom'
+                          ? Icons.radio_button_checked
+                          : Icons.radio_button_off,
+                    ),
+                    title: const Text('Custom tile server'),
+                    subtitle: Text(
+                      trip.settings.customTileUrl.isEmpty
+                          ? 'Your own server (e.g. on a Synology): https://host/{z}/{x}/{y}.png'
+                          : trip.settings.customTileUrl,
+                    ),
+                    onTap: () async {
+                      final url = await askText(
+                        ctx,
+                        title: 'Tile server URL',
+                        hint: 'https://example.com/tiles/{z}/{x}/{y}.png',
+                        initial: trip.settings.customTileUrl,
+                      );
+                      if (url == null) return;
+                      final ok =
+                          url.contains('{z}') &&
+                          url.contains('{x}') &&
+                          url.contains('{y}') &&
+                          url.startsWith('http');
+                      await trip.update((x) {
+                        x.customTileUrl = url.trim();
+                        if (ok) x.mapSource = 'custom';
+                      });
+                      if (ctx.mounted) Navigator.pop(ctx);
+                    },
+                  ),
+                  const ListTile(
+                    dense: true,
+                    leading: Icon(Icons.info_outline),
+                    title: Text(
+                      'Report a map problem: openstreetmap.org/fixthemap',
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ------------------------------------------------------------ navigate
+
+  int _buzzedOff = 0;
+  NavSession? _buzzSession;
+  bool _buzzedArrived = false;
+
+  /// Vibrate when navigation goes off route / arrives.
+  void _buzz(TripController trip) {
+    final s = trip.nav;
+    if (s != _buzzSession) {
+      _buzzSession = s;
+      _buzzedOff = 0;
+      _buzzedArrived = false;
+    }
+    if (s == null) return;
+    final off = s.follower?.offEvents ?? 0;
+    if (off > _buzzedOff) {
+      _buzzedOff = off;
+      unawaited(navBuzz());
+    }
+    final arrived =
+        s.state?.arrived ?? (s.straightM != null && s.straightM! <= 25);
+    if (arrived && !_buzzedArrived) {
+      _buzzedArrived = true;
+      unawaited(navBuzz(arrived: true));
+    }
+  }
+
+  void _openFollow(TripController trip) => Navigator.of(context)
+      .push(MaterialPageRoute<void>(builder: (_) => NavFollowPage(trip: trip)));
+
+  Future<void> _startNav(
+    TripController trip,
+    GeoPoint to,
+    String name, {
+    bool compass = false,
+  }) async {
+    final m = ScaffoldMessenger.maybeOf(context);
+    m?.showSnackBar(
+      SnackBar(
+        duration: const Duration(seconds: 2),
+        content: Text(compass ? 'Compass to $name' : 'Finding a trail route…'),
+      ),
+    );
+    final s = await trip.navigateTo(to, name: name, compass: compass);
+    if (!mounted) return;
+    setState(() => _follow = false);
+    final r = s.route;
+    final me = trip.myFix?.pos;
+    if (r != null) {
+      final b = boundsOfPoints(r.points);
+      if (b != null) _fit(b, maxZoom: 16);
+      m?.showSnackBar(
+        SnackBar(
+          content: Text(
+            'Route: ${formatDistance(r.lengthM, imperial: trip.settings.imperial)} '
+            'along trails, about ${_dur(s.state?.eta)}'
+            '${r.junctions.isEmpty ? '' : ', ${r.junctions.length} junctions'}.'
+            '${s.note.isEmpty ? '' : ' ${s.note}'}',
+          ),
+        ),
+      );
+    } else {
+      final b = me == null ? null : boundsOfPoints([me, to]);
+      if (b != null) _fit(b, maxZoom: 16);
+      if (s.note.isNotEmpty) {
+        m?.showSnackBar(SnackBar(content: Text(s.note)));
+      }
+    }
+  }
+
+  static String _dur(Duration? d) => d == null
+      ? '?'
+      : d.inHours < 1
+      ? '${d.inMinutes} min'
+      : '${d.inHours} h ${d.inMinutes % 60} min';
+
+  /// Tap a waypoint / long-press the map: navigate, compass or pin.
+  Future<void> _pointSheet(
+    BuildContext context,
+    TripController trip,
+    GeoPoint at,
+    String name, {
+    bool search = false,
+  }) async {
+    final me = trip.myFix?.pos;
     await showAppSheet<void>(
       context: context,
       builder: (ctx) => SafeArea(
@@ -876,100 +1156,50 @@ class TripPageState extends State<TripPage> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text('Map style', style: Theme.of(ctx).textTheme.titleLarge),
-              for (final s in [MapSource.topo, MapSource.osm])
-                ListTile(
-                  leading: Icon(
-                    trip.settings.mapSource == s.id
-                        ? Icons.radio_button_checked
-                        : Icons.radio_button_off,
-                  ),
-                  title: Text(s.name),
-                  subtitle: Text(
-                    s.allowsOffline
-                        ? 'Trails and contour lines. Small areas can be saved for offline use.'
-                        : 'Streets. Cached as you look around; OpenStreetMap does not allow saving areas ahead.',
-                  ),
-                  onTap: () {
-                    trip.update((x) => x.mapSource = s.id);
-                    Navigator.pop(ctx);
-                  },
-                ),
-              for (final l in trip.layers.tileSets)
-                ListTile(
-                  leading: Icon(
-                    trip.baseTiles?.id == l.id
-                        ? Icons.radio_button_checked
-                        : Icons.radio_button_off,
-                  ),
-                  title: Text(l.name),
-                  subtitle: Text(
-                    'Offline map on this phone · ${l.summary} · ${formatBytes(l.bytes)}',
-                  ),
-                  onTap: () {
-                    trip.update((x) => x.mapSource = 'mbtiles:${l.id}');
-                    Navigator.pop(ctx);
-                  },
-                ),
               ListTile(
-                leading: const Icon(Icons.terrain),
-                title: const Text('Ready-made maps'),
-                subtitle: const Text('Silver Star & Trapper Creek, one tap'),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _openPacks(trip);
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.file_open),
-                title: const Text('Import a map or trail…'),
-                subtitle: const Text(
-                  'GPX, KML, KMZ, MBTiles, or a park map picture / PDF',
-                ),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _openLayers(context, trip);
-                },
-              ),
-              ListTile(
-                leading: Icon(
-                  trip.settings.mapSource == 'custom'
-                      ? Icons.radio_button_checked
-                      : Icons.radio_button_off,
-                ),
-                title: const Text('Custom tile server'),
+                leading: const Icon(Icons.place, size: 36),
+                title: Text(name, style: Theme.of(ctx).textTheme.titleLarge),
                 subtitle: Text(
-                  trip.settings.customTileUrl.isEmpty
-                      ? 'Your own server (e.g. on a Synology): https://host/{z}/{x}/{y}.png'
-                      : trip.settings.customTileUrl,
+                  '${at.lat.toStringAsFixed(5)}, ${at.lng.toStringAsFixed(5)}'
+                  '${me == null ? '' : '\n${formatDistanceBearing(me, at, imperial: trip.settings.imperial)} straight line'}',
                 ),
-                onTap: () async {
-                  final url = await askText(
-                    ctx,
-                    title: 'Tile server URL',
-                    hint: 'https://example.com/tiles/{z}/{x}/{y}.png',
-                    initial: trip.settings.customTileUrl,
-                  );
-                  if (url == null) return;
-                  final ok =
-                      url.contains('{z}') &&
-                      url.contains('{x}') &&
-                      url.contains('{y}') &&
-                      url.startsWith('http');
-                  await trip.update((x) {
-                    x.customTileUrl = url.trim();
-                    if (ok) x.mapSource = 'custom';
-                  });
-                  if (ctx.mounted) Navigator.pop(ctx);
+              ),
+              FilledButton.icon(
+                key: const Key('navigateHere'),
+                icon: const Icon(Icons.directions_walk),
+                label: const Text('Navigate here'),
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  _startNav(trip, at, name);
                 },
               ),
-              const ListTile(
-                dense: true,
-                leading: Icon(Icons.info_outline),
-                title: Text(
-                  'Report a map problem: openstreetmap.org/fixthemap',
-                ),
+              const SizedBox(height: 6),
+              OutlinedButton.icon(
+                key: const Key('compassHere'),
+                icon: const Icon(Icons.explore),
+                label: const Text('Compass to here'),
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  _startNav(trip, at, name, compass: true);
+                },
               ),
+              const SizedBox(height: 6),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.push_pin_outlined),
+                label: const Text('Drop a pin here'),
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  _addPin(context, trip, at);
+                },
+              ),
+              if (search)
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    setState(() => _hl = null);
+                  },
+                  child: const Text('Clear search result'),
+                ),
             ],
           ),
         ),
@@ -1092,6 +1322,23 @@ class TripPageState extends State<TripPage> {
                   style: Theme.of(ctx).textTheme.headlineSmall,
                 ),
               const SizedBox(height: 8),
+              FilledButton.icon(
+                key: const Key('pinNavigate'),
+                icon: const Icon(Icons.directions_walk),
+                label: const Text('Navigate here'),
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  _startNav(trip, p.pos, p.title);
+                },
+              ),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.explore),
+                label: const Text('Compass to here'),
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  _startNav(trip, p.pos, p.title, compass: true);
+                },
+              ),
               OutlinedButton.icon(
                 icon: const Icon(Icons.delete_outline),
                 label: Text(

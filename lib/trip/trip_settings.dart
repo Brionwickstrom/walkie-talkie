@@ -17,7 +17,9 @@ class TripSettings {
     this.radioCheckIns = true,
     this.radioTrailMinutes = 15,
     this.packsOffered = false,
-  }) : canned = canned ?? List.of(defaultCustomCanned);
+    List<String>? overlays,
+  }) : overlays = overlays ?? [],
+       canned = canned ?? List.of(defaultCustomCanned);
 
   /// Share my location with the channel and watch for lost contact.
   bool tripMode;
@@ -48,6 +50,9 @@ class TripSettings {
 
   /// The "ready-made maps" banner was answered (v1.9.0).
   bool packsOffered;
+
+  /// Map overlays switched on (v1.9.1), e.g. 'ov_land', 'ov_slope'.
+  List<String> overlays;
   static const radioTrailChoices = [0, 5, 10, 15];
 
   static const defaultCustomCanned = ['Lunch spot', 'Going ahead', 'Found it'];
@@ -66,6 +71,7 @@ class TripSettings {
     'rci': radioCheckIns,
     'rtm': radioTrailMinutes,
     'po': packsOffered,
+    if (overlays.isNotEmpty) 'ov': overlays,
   });
 
   static TripSettings decode(String? s) {
@@ -90,6 +96,10 @@ class TripSettings {
           _ => 15,
         },
         packsOffered: j['po'] == true,
+        overlays: [
+          for (final o in (j['ov'] as List? ?? const []))
+            if (o is String) o,
+        ],
       );
     } catch (_) {
       return TripSettings();
