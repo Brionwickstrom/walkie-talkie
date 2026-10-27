@@ -1150,3 +1150,12 @@ phone.
 * After any import or pack add the map moves to the new layer; the first
   offline MBTiles map becomes the base map automatically.
 * Big park map pictures are decoded at most 4096 px a side (memory).
+* **Copies already on the phone:** before adding a pack file the app looks
+  for the same map already imported by hand (same SHA-256; or GPX of the same
+  size / same trails from KML by their extent; MBTiles of the same size or
+  name over the same area; a picture with the same name and size). It is
+  used instead (marked **Already added**, shown on the map), not copied.
+* **Remove duplicate maps:** Map layers (and Ready-made maps) show a card
+  when byte-identical layers were imported more than once; one tap keeps one
+  of each (the pack copy, else the base map, else a visible one, else the
+  oldest) and the base map keeps working. Shared routes are left alone.

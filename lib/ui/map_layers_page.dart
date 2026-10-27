@@ -66,6 +66,7 @@ class MapLayersPage extends StatelessWidget {
                   ),
                 ),
               ),
+              DuplicateMapsCard(trip: trip),
               ListTile(
                 leading: const Icon(Icons.sd_storage),
                 title: Text(

@@ -47,12 +47,20 @@ class MapLayer {
     this.attribution = '',
     this.pack,
     this.packFile,
+    this.packMatched = false,
+    this.sha,
     DateTime? added,
   }) : added = added ?? DateTime.now();
 
   /// Map pack (v1.9.0) this layer came from, and which of its files.
   String? pack;
   String? packFile;
+
+  /// The pack file was found already imported (no copy was made).
+  bool packMatched;
+
+  /// SHA-256 of the stored file (computed when needed, then kept).
+  String? sha;
 
   final String id;
   final MapLayerKind kind;
@@ -110,6 +118,8 @@ class MapLayer {
     if (attribution.isNotEmpty) 'at': attribution,
     'pk': ?pack,
     'pf': ?packFile,
+    if (packMatched) 'pm': true,
+    'sh': ?sha,
     'a': added.millisecondsSinceEpoch,
   };
 
@@ -139,6 +149,8 @@ class MapLayer {
       attribution: (j['at'] as String?) ?? '',
       pack: j['pk'] as String?,
       packFile: j['pf'] as String?,
+      packMatched: j['pm'] == true,
+      sha: j['sh'] is String ? j['sh'] as String : null,
       added: DateTime.fromMillisecondsSinceEpoch(
         (j['a'] as num?)?.toInt() ?? 0,
       ),
@@ -563,10 +575,17 @@ class MapLayers extends ChangeNotifier {
     l.name = name.trim().isEmpty ? l.name : name.trim();
     index.indexLayer(l);
   });
-  Future<void> tagPack(MapLayer l, String pack, String file) => _edit(() {
+  Future<void> tagPack(
+    MapLayer l,
+    String? pack,
+    String? file, {
+    bool matched = false,
+  }) => _edit(() {
     l.pack = pack;
     l.packFile = file;
+    l.packMatched = pack != null && matched;
   });
+  Future<void> setSha(MapLayer l, String sha) => _edit(() => l.sha = sha);
   Future<void> recolor(MapLayer l, int argb) => _edit(() => l.color = argb);
   Future<void> setOpacity(MapLayer l, double o) =>
       _edit(() => l.opacity = o.clamp(0.1, 1.0));

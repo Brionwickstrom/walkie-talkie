@@ -26,11 +26,128 @@ Future<GeoBounds?> afterAdding(
   List<MapLayer> added,
 ) async {
   for (final l in added) {
+    if (!l.visible) await trip.layers.setVisible(l, true);
     if (l.kind == MapLayerKind.tiles && trip.baseTiles == null) {
       await trip.update((s) => s.mapSource = 'mbtiles:${l.id}');
     }
   }
   return unionBounds([for (final l in added) layerBounds(trip.layers, l)]);
+}
+
+/// "Added 1 map layer; 2 were already on this phone (not copied again)".
+String addedMessage(List<MapLayer> added, String? baseId) {
+  final found = added.where((l) => l.packMatched).length;
+  final fresh = added.length - found;
+  final parts = [
+    if (fresh > 0) 'Added $fresh map ${fresh == 1 ? 'layer' : 'layers'}',
+    if (found > 0)
+      '${fresh > 0 ? '' : 'Already added: '}$found ${found == 1 ? 'was' : 'were'} '
+          'already on this phone (not copied again)',
+    if (baseId != null && added.any((l) => l.id == baseId))
+      'the topo map is the base map',
+  ];
+  final m = parts.join('; ');
+  return '${m[0].toUpperCase()}${m.substring(1)}.';
+}
+
+/// "Remove duplicate maps": shown when the same map or trail was imported
+/// more than once; keeps one copy of each.
+class DuplicateMapsCard extends StatefulWidget {
+  const DuplicateMapsCard({super.key, required this.trip});
+  final TripController trip;
+
+  @override
+  State<DuplicateMapsCard> createState() => _DuplicateMapsCardState();
+}
+
+class _DuplicateMapsCardState extends State<DuplicateMapsCard> {
+  List<List<MapLayer>> _dups = const [];
+  bool _hidden = false, _busy = false;
+  String _seen = '';
+
+  @override
+  Widget build(BuildContext context) {
+    final layers = widget.trip.layers;
+    final key = layers.all.map((l) => l.id).join(',');
+    if (key != _seen) {
+      _seen = key;
+      unawaited(
+        findDuplicates(layers).then((d) {
+          if (mounted) setState(() => _dups = d);
+        }),
+      );
+    }
+    if (_hidden || _dups.isEmpty) return const SizedBox.shrink();
+    final extra = _dups.fold(0, (s, g) => s + g.length - 1);
+    final bytes = _dups.fold(
+      0,
+      (s, g) => s + g.skip(1).fold(0, (t, l) => t + l.bytes),
+    );
+    final names = _dups.map((g) => g.first.name).toSet().join(', ');
+    return Card(
+      key: const Key('duplicateMaps'),
+      margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      color: Theme.of(context).colorScheme.tertiaryContainer,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 8, 4),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '$extra duplicate ${extra == 1 ? 'copy' : 'copies'} '
+              '(${formatBytes(bytes)})',
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+            Text('$names: imported more than once. Keeps one of each.'),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  onPressed: () => setState(() => _hidden = true),
+                  child: const Text('Keep them'),
+                ),
+                FilledButton(
+                  key: const Key('removeDuplicates'),
+                  onPressed: _busy ? null : _clean,
+                  child: const Text('Remove duplicate maps'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _clean() async {
+    setState(() => _busy = true);
+    final trip = widget.trip;
+    final r = await cleanDuplicates(trip);
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _dups = const [];
+    });
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(
+        content: Text(
+          'Removed ${r.removed} duplicate '
+          '${r.removed == 1 ? 'copy' : 'copies'}, freed ${formatBytes(r.freedBytes)}.',
+        ),
+      ),
+    );
+  }
+}
+
+/// Remove duplicate layers, keeping the base map selection working.
+Future<DuplicateCleanup> cleanDuplicates(TripController trip) async {
+  final base = trip.baseTiles?.id;
+  final r = await removeDuplicates(trip.layers, prefer: base);
+  final moved = base == null ? null : r.kept[base];
+  if (moved != null) {
+    await trip.update((s) => s.mapSource = 'mbtiles:${moved.id}');
+  }
+  return r;
 }
 
 /// "Ready-made maps" (v1.9.0): packs that download and add themselves.
@@ -161,12 +278,7 @@ class _MapPacksPageState extends State<MapPacksPage> {
     final b = await afterAdding(trip, added);
     if (!mounted) return;
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-      SnackBar(
-        content: Text(
-          'Added ${added.length} map ${added.length == 1 ? 'layer' : 'layers'}'
-          '${trip.baseTiles != null && added.any((l) => l.id == trip.baseTiles!.id) ? '; the topo map is now the base map' : ''}.',
-        ),
-      ),
+      SnackBar(content: Text(addedMessage(added, trip.baseTiles?.id))),
     );
     if (b != null) widget.onFit?.call(b);
   }
@@ -233,6 +345,7 @@ class _MapPacksPageState extends State<MapPacksPage> {
                 'files to find. Once added they work with no signal.',
               ),
             ),
+            DuplicateMapsCard(trip: trip),
             if (_loading)
               const Padding(
                 padding: EdgeInsets.all(24),
@@ -253,6 +366,32 @@ class _MapPacksPageState extends State<MapPacksPage> {
             for (final p in _packs) _card(context, p),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _fileRow(BuildContext context, MapPack p, PackFile f) {
+    final l = trip.layers.all
+        .where((l) => l.pack == p.id && l.packFile == f.name)
+        .firstOrNull;
+    final status = l == null
+        ? (f.asset != null ? 'in the app' : formatBytes(f.size))
+        : l.packMatched
+        ? 'Already added'
+        : 'Added';
+    return Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: Row(
+        children: [
+          Icon(
+            l != null ? Icons.check : Icons.circle_outlined,
+            size: 16,
+            color: l != null ? Colors.green : null,
+          ),
+          const SizedBox(width: 6),
+          Expanded(child: Text(f.title.isEmpty ? f.name : f.title)),
+          Text(status, style: Theme.of(context).textTheme.bodySmall),
+        ],
       ),
     );
   }
@@ -308,6 +447,7 @@ class _MapPacksPageState extends State<MapPacksPage> {
               '${dl != p.size ? ' (${formatBytes(dl)} to download)' : ''}',
               style: Theme.of(context).textTheme.bodySmall,
             ),
+            for (final f in p.files) _fileRow(context, p, f),
             if (busy) ...[
               const SizedBox(height: 8),
               LinearProgressIndicator(value: pr?.fraction),

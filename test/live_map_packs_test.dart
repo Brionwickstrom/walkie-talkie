@@ -43,4 +43,39 @@ void main() {
         : 'no SQLite',
     timeout: const Timeout(Duration(minutes: 5)),
   );
+
+  // The real Silver Star files imported by hand (box only).
+  final src = Directory('/workspace/silver_star');
+  test(
+    'hand-imported Silver Star files are found, not copied',
+    () async {
+      final tmp = Directory.systemTemp.createTempSync('real');
+      final layers = MapLayers(Directory('${tmp.path}/l'));
+      await layers.importTrail(
+        'Silver_Star_Trails.kml',
+        File('${src.path}/Silver_Star_Trails.kml').readAsBytesSync(),
+      );
+      File('${src.path}/Silver_Star_USGS_Topo.mbtiles')
+          .copySync('${tmp.path}/x.mbtiles');
+      await layers.importMbtiles(File('${tmp.path}/x.mbtiles'));
+      final p = MapPack.parseList(File('map_packs.json').readAsStringSync())
+          .first;
+      final inst = PackInstaller(
+        layers: layers,
+        tempDir: Directory('${tmp.path}/t'),
+        download: (_, _, _) async => fail('no download'),
+      );
+      final out = await inst.add(p);
+      expect(inst.found, hasLength(2));
+      expect(out.every((l) => l.packMatched), isTrue);
+      expect(layers.all, hasLength(2));
+      layers.close();
+      tmp.deleteSync(recursive: true);
+    },
+    skip: !src.existsSync()
+        ? 'no source files'
+        : haveSqlite
+        ? false
+        : 'no SQLite',
+  );
 }

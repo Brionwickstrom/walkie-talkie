@@ -546,7 +546,8 @@ void main() {
       expect(fit, isNotNull);
       expect(fit!.south, closeTo(45.875, 1e-3));
       expect(packAdded(p, t.layers), isTrue);
-      expect(find.text('Added'), findsOneWidget);
+      expect(find.widgetWithText(Chip, 'Added'), findsOneWidget);
+      expect(find.text('Added'), findsNWidgets(3), reason: 'chip + 2 files');
       expect(find.text('Show on map'), findsOneWidget);
       t.dispose();
       tmp.deleteSync(recursive: true);

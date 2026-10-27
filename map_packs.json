@@ -22,7 +22,13 @@
           "asset": "assets/map_packs/Silver_Star_Trails.gpx",
           "size": 387208,
           "sha256": "da6d53f09928d93e797367a0869cb9b7e4734370c39573899ec6d200d5173ffe",
-          "attribution": "Trails \u00a9 OpenStreetMap contributors, ODbL"
+          "attribution": "Trails \u00a9 OpenStreetMap contributors, ODbL",
+          "bounds": {
+            "s": 45.6904,
+            "w": -122.35187,
+            "n": 45.79866,
+            "e": -122.05721
+          }
         },
         {
           "name": "Silver_Star_USGS_Topo.mbtiles",
@@ -55,7 +61,13 @@
           "asset": "assets/map_packs/Trapper_Creek_Trails.gpx",
           "size": 191531,
           "sha256": "60441ba0940073f5d9a7988c1353ff24c4ad2a45496b46acb714d2870dae936c",
-          "attribution": "Trails \u00a9 OpenStreetMap contributors, ODbL"
+          "attribution": "Trails \u00a9 OpenStreetMap contributors, ODbL",
+          "bounds": {
+            "s": 45.87318,
+            "w": -122.08499,
+            "n": 45.94994,
+            "e": -121.96552
+          }
         },
         {
           "name": "Trapper_Creek_USGS_Topo.jpg",
