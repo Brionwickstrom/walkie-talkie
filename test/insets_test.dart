@@ -58,7 +58,7 @@ void main() {
               child: TextButton(
                 onPressed: () => showAppSheet<void>(
                   context: context,
-                  isScrollControlled: true,
+                  scrollable: false,
                   builder: (ctx) => Padding(
                     padding: const EdgeInsets.all(16),
                     child: SingleChildScrollView(

@@ -217,6 +217,7 @@ class _OfflineAreasPageState extends State<OfflineAreasPage> {
         final ok = await showDialog<bool>(
           context: context,
           builder: (ctx) => AlertDialog(
+            scrollable: true,
             title: Text('Delete ${e.name}?'),
             content: Text(
               'Deletes its ${e.parts.isEmpty ? 'files' : 'map, trails and roads'} '

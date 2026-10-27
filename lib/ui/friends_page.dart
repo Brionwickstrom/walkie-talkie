@@ -213,6 +213,7 @@ class FriendsPage extends StatelessWidget {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
+        scrollable: true,
         title: Text('Remove ${f.name}?'),
         content: const Text(
           'You stop seeing each other in Friends. Add them again any time.',
@@ -244,6 +245,7 @@ Future<void> answerFriendRequest(
   await showDialog<void>(
     context: context,
     builder: (ctx) => AlertDialog(
+      scrollable: true,
       title: Text('${r.name} is now your friend'),
       content: Text(
         'Safety code: $code\n\nIt should show the same on both phones. '
@@ -265,6 +267,7 @@ Future<void> showFriendCode(BuildContext context, WalkieController c) async {
   await showDialog<void>(
     context: context,
     builder: (ctx) => AlertDialog(
+      scrollable: true,
       title: const Text('My friend code'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
@@ -350,6 +353,7 @@ Future<String?> _pasteCode(BuildContext context, {String? hint}) {
   return showDialog<String>(
     context: context,
     builder: (ctx) => AlertDialog(
+      scrollable: true,
       title: const Text('Paste a code or link'),
       content: TextField(
         key: const Key('paste-code-field'),

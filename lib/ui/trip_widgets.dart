@@ -552,6 +552,7 @@ class ActiveSosCard extends StatelessWidget {
                 final ok = await showDialog<bool>(
                   context: context,
                   builder: (ctx) => AlertDialog(
+                    scrollable: true,
                     title: const Text('Cancel your SOS?'),
                     content: const Text('Everyone is told you are OK.'),
                     actions: [
@@ -854,6 +855,7 @@ Future<String?> askText(
   final ok = await showDialog<bool>(
     context: context,
     builder: (ctx) => AlertDialog(
+      scrollable: true,
       title: Text(title),
       content: TextField(
         controller: ctrl,

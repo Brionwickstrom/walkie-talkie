@@ -11,6 +11,7 @@ import '../trip/geo.dart';
 import '../trip/trip_controller.dart';
 import 'map_layer_widgets.dart';
 import 'nav_page.dart' show navBuzz;
+import 'sheets.dart';
 
 String driveDuration(Duration d) {
   if (d.inMinutes < 1) return '< 1 min';
@@ -282,9 +283,10 @@ Future<void> showDriveSteps(
   BuildContext context,
   TripController trip,
   DriveSession s,
-) => showModalBottomSheet<void>(
+) => showAppSheet<void>(
   context: context,
-  isScrollControlled: true,
+  scrollable: false,
+  showDragHandle: false,
   builder: (ctx) => DraggableScrollableSheet(
     expand: false,
     initialChildSize: 0.6,

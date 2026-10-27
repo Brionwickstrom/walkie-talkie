@@ -128,7 +128,7 @@ class ControllerSetupHost implements SetupHost {
   @override
   Future<void> pairRadio(BuildContext context) => showAppSheet<void>(
     context: context,
-    isScrollControlled: true,
+    scrollable: false,
     builder: (ctx) => SafeArea(
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(16),

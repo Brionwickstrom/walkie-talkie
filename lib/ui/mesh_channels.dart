@@ -469,7 +469,7 @@ Future<void> showMeshImportSheet(
   final preview = MeshImportPreview.build(set, info);
   final pick = await showAppSheet<(int, bool)>(
     context: context,
-    isScrollControlled: true,
+    scrollable: false,
     builder: (ctx) => SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: MeshImportView(
@@ -485,6 +485,7 @@ Future<void> showMeshImportSheet(
     final sure = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
+        scrollable: true,
         title: const Text('Change your radio\'s settings?'),
         content: Text(
           'Your radio will switch to ${preview.mismatch ?? 'this QR\'s settings'}. '
@@ -605,6 +606,7 @@ Future<void> pickWalkieChannel(
     context: context,
     builder: (ctx) => StatefulBuilder(
       builder: (ctx, set) => AlertDialog(
+        scrollable: true,
         title: const Text('Share with a Walkie channel'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -702,6 +704,7 @@ Future<void> confirmUnlink(
     context: context,
     builder: (ctx) => StatefulBuilder(
       builder: (ctx, set) => AlertDialog(
+        scrollable: true,
         title: Text('Unlink ${_channelLabel(c, ch)}?'),
         content: Column(
           mainAxisSize: MainAxisSize.min,

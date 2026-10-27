@@ -27,7 +27,7 @@ Future<void> showInviteSheet(BuildContext context, WalkieController c) async {
 
   await showAppSheet<void>(
     context: context,
-    isScrollControlled: true,
+    scrollable: false,
     builder: (ctx) => StatefulBuilder(
       builder: (ctx, setSheet) {
         final private = c.isPrivate && withChannel;
@@ -288,6 +288,7 @@ class _InviteConfirmDialogState extends State<InviteConfirmDialog> {
     final inv = widget.invite;
     final from = (inv.name ?? '').isEmpty ? 'Someone' : inv.name!;
     return AlertDialog(
+      scrollable: true,
       title: Text('Invite from $from'),
       content: Column(
         mainAxisSize: MainAxisSize.min,

@@ -55,6 +55,7 @@ class HistoryPage extends StatelessWidget {
               final ok = await showDialog<bool>(
                 context: context,
                 builder: (ctx) => AlertDialog(
+                  scrollable: true,
                   title: const Text('Clear history?'),
                   content: Text(
                     'Deletes every saved transmission on ${c.channelLabel} '

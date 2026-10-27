@@ -168,6 +168,7 @@ Future<bool> confirmMuteChange(
   final r = await showDialog<bool>(
     context: context,
     builder: (ctx) => AlertDialog(
+      scrollable: true,
       key: const Key('muteConfirm'),
       title: Text('$word Walkie?'),
       content: Text(
@@ -396,6 +397,7 @@ Future<void> editQuietSchedule(
         }
 
         return AlertDialog(
+          scrollable: true,
           title: Text(old == null ? 'Add quiet hours' : 'Quiet hours'),
           content: Column(
             mainAxisSize: MainAxisSize.min,

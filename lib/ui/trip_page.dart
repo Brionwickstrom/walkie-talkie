@@ -798,7 +798,6 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
     String? error;
     await showAppSheet<void>(
       context: context,
-      isScrollControlled: true,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, set) {
           Future<void> getTrails({bool onScreen = false}) async {
@@ -1059,7 +1058,7 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
     final pins = trip.pins.reversed.take(5).toList();
     await showAppSheet<void>(
       context: context,
-      isScrollControlled: true,
+      scrollable: false,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, set) {
           void go(GeoPoint at, String name) {
@@ -1160,7 +1159,7 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
         : 'View only: cached as you look, not saved ahead';
     await showAppSheet<void>(
       context: context,
-      isScrollControlled: true,
+      scrollable: false,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, set) => SafeArea(
           child: ConstrainedBox(
@@ -1483,6 +1482,7 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, set) => AlertDialog(
+          scrollable: true,
           title: const Text('Drop a pin'),
           content: SingleChildScrollView(
             child: Column(
@@ -2155,6 +2155,7 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
+        scrollable: true,
         title: const Text('My quick messages'),
         content: TextField(
           controller: ctrl,
@@ -2190,6 +2191,7 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
   Future<void> _settingsSheet(BuildContext context, TripController trip) async {
     await showAppSheet<void>(
       context: context,
+      scrollable: false,
       builder: (ctx) => ListenableBuilder(
         listenable: trip,
         builder: (ctx, _) {

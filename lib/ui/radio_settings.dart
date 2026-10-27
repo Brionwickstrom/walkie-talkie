@@ -367,6 +367,7 @@ Future<String?> askWifiRadio(BuildContext context) {
         }
 
         return AlertDialog(
+          scrollable: true,
           title: const Text('Wi-Fi radio'),
           content: Column(
             mainAxisSize: MainAxisSize.min,

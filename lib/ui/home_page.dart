@@ -20,6 +20,7 @@ import 'friends_page.dart';
 import 'history_page.dart';
 import 'home_view.dart';
 import 'link_sheet.dart';
+import 'person_sheet.dart';
 import 'inbox_page.dart';
 import 'quiet_widgets.dart';
 import 'radio_settings.dart';
@@ -127,6 +128,7 @@ class _HomePageState extends State<HomePage> {
         final ok = await showDialog<bool>(
           context: context,
           builder: (ctx) => AlertDialog(
+            scrollable: true,
             title: Text('${r.name} wants to be friends'),
             content: const Text(
               'Friends can talk and chat with each other privately from '
@@ -256,6 +258,7 @@ class _HomePageState extends State<HomePage> {
     final pick = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
+        scrollable: true,
         key: const Key('setup-prompt'),
         title: const Text('Run setup check?'),
         content: const Text(
@@ -711,194 +714,71 @@ class _HomePageState extends State<HomePage> {
       context: context,
       builder: (ctx) => ListenableBuilder(
         listenable: c,
-        builder: (ctx, _) {
-          final v = c.volumeOf(p.id);
-          return SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Row(
-                    children: [
-                      Avatar(id: p.id, name: p.name),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          p.name,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(ctx).textTheme.titleLarge,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Text('Volume for this person: ${(v * 100).round()}%'),
-                  Row(
-                    children: [
-                      const Icon(Icons.volume_mute),
-                      Expanded(
-                        child: Slider(
-                          value: v,
-                          max: 2,
-                          divisions: 20,
-                          label: '${(v * 100).round()}%',
-                          onChanged: (x) => c.setPeerVolume(p.id, x),
-                        ),
-                      ),
-                      const Icon(Icons.volume_up),
-                    ],
-                  ),
-                  TextButton(
-                    onPressed: () => c.setPeerVolume(p.id, 1),
-                    child: const Text('Reset to 100%'),
-                  ),
-                  SwitchListTile(
-                    key: const Key('alwaysAllow'),
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Always allow rings'),
-                    subtitle: const Text(
-                      'Their rings still sound while you are muted or in '
-                      'quiet hours (with "Let urgent rings through" on).',
-                    ),
-                    value: c.alwaysAllowed(p.id),
-                    onChanged: (v) => c.setAlwaysAllow(p.id, v),
-                  ),
-                  const Divider(),
-                  Wrap(
-                    alignment: WrapAlignment.center,
-                    spacing: 8,
-                    runSpacing: 6,
-                    children: [
-                      OutlinedButton.icon(
-                        icon: const Icon(Icons.ring_volume),
-                        label: const Text('Ring'),
-                        onPressed: () {
-                          Navigator.pop(ctx);
-                          c.ring(toPeer: p.id);
-                        },
-                      ),
-                      OutlinedButton.icon(
-                        icon: const Icon(Icons.notifications_active),
-                        label: const Text('Beep'),
-                        onPressed: () {
-                          Navigator.pop(ctx);
-                          c.ring(toPeer: p.id, beep: true);
-                        },
-                      ),
-                      FilledButton.tonalIcon(
-                        style: FilledButton.styleFrom(
-                          backgroundColor: Theme.of(ctx)
-                              .colorScheme
-                              .errorContainer,
-                          foregroundColor: Theme.of(ctx)
-                              .colorScheme
-                              .onErrorContainer,
-                        ),
-                        icon: const Icon(Icons.campaign),
-                        label: const Text('Urgent ring'),
-                        onPressed: () {
-                          Navigator.pop(ctx);
-                          c.ring(toPeer: p.id, urgent: true);
-                        },
-                      ),
-                      OutlinedButton.icon(
-                        icon: const Icon(Icons.mic),
-                        label: const Text('Voice message'),
-                        onPressed: () {
-                          Navigator.pop(ctx);
-                          _openRecordSheet(context, p.id, p.name);
-                        },
-                      ),
-                    ],
-                  ),
-                  const Divider(),
-                  Wrap(
-                    alignment: WrapAlignment.center,
-                    spacing: 8,
-                    runSpacing: 6,
-                    children: [
-                      if (c.isFriend(p.id))
-                        FilledButton.tonalIcon(
-                          icon: const Icon(Icons.forum),
-                          label: const Text('Private chat'),
-                          onPressed: () {
-                            Navigator.pop(ctx);
-                            _openChat(context, friendConversation(p.id));
-                          },
-                        )
-                      else if (!p.left)
-                        FilledButton.tonalIcon(
-                          icon: const Icon(Icons.person_add),
-                          label: const Text('Add friend'),
-                          onPressed: () {
-                            Navigator.pop(ctx);
-                            c.requestFriend(p.id);
-                          },
-                        ),
-                      OutlinedButton.icon(
-                        icon: Icon(
-                          c.isMuted(p.id) ? Icons.volume_up : Icons.volume_off,
-                        ),
-                        label: Text(c.isMuted(p.id) ? 'Unmute' : 'Mute'),
-                        onPressed: () => c.setMuted(p.id, !c.isMuted(p.id)),
-                      ),
-                      OutlinedButton.icon(
-                        icon: const Icon(Icons.block),
-                        label: const Text('Block'),
-                        onPressed: () async {
-                          final ok = await _confirm(
-                            ctx,
-                            'Block ${p.name}?',
-                            'You will not hear, see or receive anything from '
-                                'them (talk, rings, messages, chats). Undo in '
-                                'Settings > Blocked.',
-                            'Block',
-                          );
-                          if (ok && ctx.mounted) {
-                            Navigator.pop(ctx);
-                            await c.setBlocked(p.id, true, name: p.name);
-                          }
-                        },
-                      ),
-                      if (c.isAdmin && p.here)
-                        OutlinedButton.icon(
-                          icon: const Icon(Icons.person_remove),
-                          label: const Text('Remove from channel'),
-                          onPressed: () async {
-                            final ok = await _confirm(
-                              ctx,
-                              'Remove ${p.name} from ${c.channelTitle}?',
-                              'Everyone else is moved to a new passcode '
-                                  'automatically. ${p.name} keeps the old one '
-                                  'and can no longer hear or see the channel. '
-                                  'Phones out of range right now need the '
-                                  'new passcode from you.',
-                              'Remove',
-                            );
-                            if (ok && ctx.mounted) {
-                              Navigator.pop(ctx);
-                              await c.kick(p.id);
-                            }
-                          },
-                        ),
-                    ],
-                  ),
-                  if (c.isMuted(p.id))
-                    const Padding(
-                      padding: EdgeInsets.only(top: 6),
-                      child: Text(
-                        'Muted: their live talk is not played here.',
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          );
-        },
+        builder: (ctx, _) => PersonSheetView(
+          person: p,
+          volume: c.volumeOf(p.id),
+          alwaysAllow: c.alwaysAllowed(p.id),
+          isFriend: c.isFriend(p.id),
+          muted: c.isMuted(p.id),
+          canRemove: c.isAdmin && p.here,
+          onVolume: (x) => c.setPeerVolume(p.id, x),
+          onAlwaysAllow: (v) => c.setAlwaysAllow(p.id, v),
+          onRing: () {
+            Navigator.pop(ctx);
+            c.ring(toPeer: p.id);
+          },
+          onBeep: () {
+            Navigator.pop(ctx);
+            c.ring(toPeer: p.id, beep: true);
+          },
+          onUrgent: () {
+            Navigator.pop(ctx);
+            c.ring(toPeer: p.id, urgent: true);
+          },
+          onVoiceMessage: () {
+            Navigator.pop(ctx);
+            _openRecordSheet(context, p.id, p.name);
+          },
+          onPrivateChat: () {
+            Navigator.pop(ctx);
+            _openChat(context, friendConversation(p.id));
+          },
+          onAddFriend: () {
+            Navigator.pop(ctx);
+            c.requestFriend(p.id);
+          },
+          onMute: () => c.setMuted(p.id, !c.isMuted(p.id)),
+          onBlock: () async {
+            final ok = await _confirm(
+              ctx,
+              'Block ${p.name}?',
+              'You will not hear, see or receive anything from '
+                  'them (talk, rings, messages, chats). Undo in '
+                  'Settings > Blocked.',
+              'Block',
+            );
+            if (ok && ctx.mounted) {
+              Navigator.pop(ctx);
+              await c.setBlocked(p.id, true, name: p.name);
+            }
+          },
+          onRemove: () async {
+            final ok = await _confirm(
+              ctx,
+              'Remove ${p.name} from ${c.channelTitle}?',
+              'Everyone else is moved to a new passcode '
+                  'automatically. ${p.name} keeps the old one '
+                  'and can no longer hear or see the channel. '
+                  'Phones out of range right now need the '
+                  'new passcode from you.',
+              'Remove',
+            );
+            if (ok && ctx.mounted) {
+              Navigator.pop(ctx);
+              await c.kick(p.id);
+            }
+          },
+        ),
       ),
     );
   }
@@ -1060,7 +940,7 @@ class _HomePageState extends State<HomePage> {
           if (info.setting == PhoneSetting.radioPairing) {
             await showAppSheet<void>(
               context: context,
-              isScrollControlled: true,
+              scrollable: false,
               builder: (ctx2) => SafeArea(
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.all(16),
@@ -1116,7 +996,7 @@ class _HomePageState extends State<HomePage> {
     final relayCtl = TextEditingController(text: c.relayOverride);
     await showAppSheet<void>(
       context: context,
-      isScrollControlled: true,
+      scrollable: false,
       builder: (ctx) => ListenableBuilder(
         listenable: c,
         builder: (ctx, _) => Padding(
@@ -1471,6 +1351,7 @@ class _HomePageState extends State<HomePage> {
                     final ok = await showDialog<bool>(
                       context: ctx,
                       builder: (d) => AlertDialog(
+                        scrollable: true,
                         title: const Text('Clear all messages and queues?'),
                         content: const Text(
                           'Voice messages, missed talk and anything still '
@@ -1998,6 +1879,7 @@ Future<bool> _confirm(
     await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
+        scrollable: true,
         title: Text(title),
         content: Text(text),
         actions: [
@@ -2057,7 +1939,7 @@ Future<void> showPrivacySheet(BuildContext context, WalkieController c) async {
   String? err;
   await showAppSheet<void>(
     context: context,
-    isScrollControlled: true,
+    scrollable: false,
     builder: (ctx) => StatefulBuilder(
       builder: (ctx, setSheet) {
         final pass = c.settings.passcodeFor(ch);

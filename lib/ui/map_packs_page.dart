@@ -287,6 +287,7 @@ class _MapPacksPageState extends State<MapPacksPage> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
+        scrollable: true,
         title: Text('Remove ${p.name}?'),
         content: const Text(
           'Deletes its trails and maps from this phone. You can add the '

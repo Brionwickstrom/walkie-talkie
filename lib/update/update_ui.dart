@@ -167,6 +167,7 @@ class UpdateFlow {
       final go = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
+          scrollable: true,
           title: const Text('Allow installing updates'),
           content: const Text(
             'To install updates, Android needs you to allow Walkie Talkie to '
@@ -192,6 +193,7 @@ class UpdateFlow {
       final again = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
+          scrollable: true,
           title: const Text('Ready to install?'),
           content: const Text(
             'Once you have turned on "Allow from this source", tap Install.',

@@ -307,6 +307,7 @@ class MapLayersPage extends StatelessWidget {
         final ok = await showDialog<bool>(
           context: context,
           builder: (ctx) => AlertDialog(
+            scrollable: true,
             title: Text('Delete ${l.name}?'),
             content: Text('Frees ${formatBytes(l.bytes)} on this phone.'),
             actions: [

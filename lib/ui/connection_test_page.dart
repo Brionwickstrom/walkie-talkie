@@ -216,7 +216,7 @@ class _ConnectionTestPageState extends State<ConnectionTestPage> {
       case CheckFix.radioPairing:
         await showAppSheet<void>(
           context: context,
-          isScrollControlled: true,
+          scrollable: false,
           builder: (ctx) => SafeArea(
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(16),
@@ -233,6 +233,7 @@ class _ConnectionTestPageState extends State<ConnectionTestPage> {
         await showDialog<void>(
           context: context,
           builder: (ctx) => AlertDialog(
+            scrollable: true,
             title: const Text('Internet relay'),
             content: Text(
               c.relayOverride.isEmpty
@@ -271,6 +272,7 @@ Future<void> sendDebugLog(BuildContext context, WalkieController c) async {
   final pick = await showDialog<String>(
     context: context,
     builder: (ctx) => AlertDialog(
+      scrollable: true,
       title: const Text('Send debug log'),
       content: const Text(
         'A text file with connection events from this phone: app version, '

@@ -204,7 +204,7 @@ Future<void> showChannelsSheet(BuildContext context, WalkieController c) async {
   ];
   final pick = await showAppSheet<Object>(
     context: context,
-    isScrollControlled: true,
+    scrollable: false,
     builder: (ctx) => SingleChildScrollView(
       padding: const EdgeInsets.only(top: 12, bottom: 12),
       child: ChannelsView(
@@ -251,7 +251,7 @@ Future<void> showNewPrivateChannelSheet(
   var busy = false;
   final made = await showAppSheet<bool>(
     context: context,
-    isScrollControlled: true,
+    scrollable: false,
     builder: (ctx) => StatefulBuilder(
       builder: (ctx, setSheet) {
         final theme = Theme.of(ctx);
@@ -391,7 +391,7 @@ Future<void> showJoinPrivateSheet(
   String? err;
   final pick = await showAppSheet<String>(
     context: context,
-    isScrollControlled: true,
+    scrollable: false,
     builder: (ctx) => StatefulBuilder(
       builder: (ctx, setSheet) {
         final theme = Theme.of(ctx);
@@ -544,6 +544,7 @@ Future<void> explainUnknownListener(
 }) => showDialog<void>(
   context: context,
   builder: (ctx) => AlertDialog(
+    scrollable: true,
     title: Text(isPrivate ? 'Unknown listener ($count)' : 'Hidden connections'),
     content: Text(
       isPrivate
