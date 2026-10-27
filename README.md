@@ -1130,3 +1130,23 @@ phone.
   relay, the Meshtastic radio, SOS (full speed and priority) and quick
   messages keep working. Stacks with Battery saver. Rough effect: about
   1.5-2x the standby time of Normal (estimate, varies by phone).
+
+## v1.9.0: ready-made maps (one tap, no files to find)
+
+* **Trip map → file button (Imported trails and maps) → Ready-made maps**, or
+  the one-time banner on the Trip map ("Silver Star & Trapper Creek maps are
+  ready" → **Add maps**), or Map style → **Ready-made maps**.
+* **Silver Star Mountain:** trails (GPX, bundled in the APK) + USGS topo
+  offline base map (MBTiles, 24 MB download).
+* **Trapper Creek Wilderness:** trails (GPX, bundled) + USGS topo picture
+  (7.7 MB), placed on the map automatically from its bounds.
+* Files download straight from the GitHub `maps-*` prereleases into the app's
+  map storage, every file is SHA-256 checked, progress and size are shown,
+  Cancel / retry resumes with only the missing files, added packs show
+  **Added** with **Show on map** and **Remove**.
+* The list is `map_packs.json` (bundled copy, replaced by the latest from
+  `raw.githubusercontent.com/.../main/map_packs.json` and cached), so packs can
+  be added without an app update.
+* After any import or pack add the map moves to the new layer; the first
+  offline MBTiles map becomes the base map automatically.
+* Big park map pictures are decoded at most 4096 px a side (memory).

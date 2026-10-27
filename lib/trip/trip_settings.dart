@@ -16,6 +16,7 @@ class TripSettings {
     this.baseCamp = false,
     this.radioCheckIns = true,
     this.radioTrailMinutes = 15,
+    this.packsOffered = false,
   }) : canned = canned ?? List.of(defaultCustomCanned);
 
   /// Share my location with the channel and watch for lost contact.
@@ -44,6 +45,9 @@ class TripSettings {
   /// While a trail is recorded in trip mode, send a thinned summary of it
   /// over the LoRa radio to far phones every N minutes (0 = off), v1.8.3.
   int radioTrailMinutes;
+
+  /// The "ready-made maps" banner was answered (v1.9.0).
+  bool packsOffered;
   static const radioTrailChoices = [0, 5, 10, 15];
 
   static const defaultCustomCanned = ['Lunch spot', 'Going ahead', 'Found it'];
@@ -61,6 +65,7 @@ class TripSettings {
     'bc': baseCamp,
     'rci': radioCheckIns,
     'rtm': radioTrailMinutes,
+    'po': packsOffered,
   });
 
   static TripSettings decode(String? s) {
@@ -84,6 +89,7 @@ class TripSettings {
           final v? when radioTrailChoices.contains(v) => v,
           _ => 15,
         },
+        packsOffered: j['po'] == true,
       );
     } catch (_) {
       return TripSettings();

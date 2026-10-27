@@ -293,7 +293,7 @@ class _OverlayPlacePageState extends State<OverlayPlacePage> {
           OverlayImageLayer(
             overlayImages: [
               placedOverlay(
-                FileImage(trip.layers.fileOf(l)),
+                overlayImage(trip.layers.fileOf(l), l.imageW, l.imageH),
                 g,
                 l.imageW,
                 l.imageH,

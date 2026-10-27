@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -62,6 +64,16 @@ RotatedOverlayImage placedOverlay(
   );
 }
 
+/// A park map picture, decoded at most [maxSide] pixels wide/tall so a big
+/// topo (5565x5120 = ~114 MB decoded) doesn't eat the phone's memory.
+ImageProvider overlayImage(File f, int w, int h, {int maxSide = 4096}) {
+  final img = FileImage(f);
+  if (w <= maxSide && h <= maxSide) return img;
+  return w >= h
+      ? ResizeImage(img, width: maxSide)
+      : ResizeImage(img, height: maxSide);
+}
+
 /// Imported park map overlays, trail lines and waypoints (visible ones).
 List<Widget> importedLayers(
   TripController trip, {
@@ -73,7 +85,7 @@ List<Widget> importedLayers(
     for (final l in layers.overlays.reversed)
       if (l.visible && l.placed && l.id != skipOverlay)
         placedOverlay(
-          FileImage(layers.fileOf(l)),
+          overlayImage(layers.fileOf(l), l.imageW, l.imageH),
           l.georef!,
           l.imageW,
           l.imageH,

@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "packs": [
+    {
+      "id": "silver-star",
+      "name": "Silver Star Mountain",
+      "short": "Silver Star",
+      "area": "Gifford Pinchot NF + Yacolt Burn State Forest, WA",
+      "about": "38 named trails, 26 waypoints (trailheads, summits, waterfalls, springs, camps) and an offline USGS topo base map (zoom 10-16).",
+      "bounds": {
+        "s": 45.695,
+        "w": -122.335,
+        "n": 45.805,
+        "e": -122.115
+      },
+      "files": [
+        {
+          "name": "Silver_Star_Trails.gpx",
+          "kind": "trail",
+          "title": "Silver Star trails",
+          "url": "https://github.com/Brionwickstrom/walkie-talkie/releases/download/maps-silver-star/Silver_Star_Trails.gpx",
+          "asset": "assets/map_packs/Silver_Star_Trails.gpx",
+          "size": 387208,
+          "sha256": "da6d53f09928d93e797367a0869cb9b7e4734370c39573899ec6d200d5173ffe",
+          "attribution": "Trails \u00a9 OpenStreetMap contributors, ODbL"
+        },
+        {
+          "name": "Silver_Star_USGS_Topo.mbtiles",
+          "kind": "tiles",
+          "title": "Silver Star USGS topo",
+          "url": "https://github.com/Brionwickstrom/walkie-talkie/releases/download/maps-silver-star/Silver_Star_USGS_Topo.mbtiles",
+          "size": 25296896,
+          "sha256": "f8fabab57afc4d57f1a9aaf2009057c31789821fda874031dda0d39bd765f3b8"
+        }
+      ]
+    },
+    {
+      "id": "trapper-creek",
+      "name": "Trapper Creek Wilderness",
+      "short": "Trapper Creek",
+      "area": "Gifford Pinchot NF, WA",
+      "about": "17 named trails, the wilderness boundary, 12 waypoints and the USGS topo map of the wilderness, placed on the map for you.",
+      "bounds": {
+        "s": 45.875,
+        "w": -122.08,
+        "n": 45.955,
+        "e": -121.955
+      },
+      "files": [
+        {
+          "name": "Trapper_Creek_Trails.gpx",
+          "kind": "trail",
+          "title": "Trapper Creek trails",
+          "url": "https://github.com/Brionwickstrom/walkie-talkie/releases/download/maps-trapper-creek/Trapper_Creek_Trails.gpx",
+          "asset": "assets/map_packs/Trapper_Creek_Trails.gpx",
+          "size": 191531,
+          "sha256": "60441ba0940073f5d9a7988c1353ff24c4ad2a45496b46acb714d2870dae936c",
+          "attribution": "Trails \u00a9 OpenStreetMap contributors, ODbL"
+        },
+        {
+          "name": "Trapper_Creek_USGS_Topo.jpg",
+          "kind": "overlay",
+          "title": "Trapper Creek USGS topo",
+          "url": "https://github.com/Brionwickstrom/walkie-talkie/releases/download/maps-trapper-creek/Trapper_Creek_USGS_Topo.jpg",
+          "size": 8059990,
+          "sha256": "f307aae5b06e8ff0c6c550c314ba7f6c190306585dc41d815abe3cf5dbd48495",
+          "bounds": {
+            "s": 45.875,
+            "w": -122.08,
+            "n": 45.955,
+            "e": -121.955
+          },
+          "opacity": 0.85
+        }
+      ]
+    }
+  ]
+}

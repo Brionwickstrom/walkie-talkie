@@ -2,8 +2,11 @@ import 'package:flutter/material.dart';
 
 import '../trip/geo.dart';
 import '../trip/imports/map_layers.dart';
+import '../trip/imports/map_packs.dart';
+import '../trip/tile_cache.dart';
 import '../trip/trip_controller.dart';
 import 'map_import.dart';
+import 'map_packs_page.dart';
 import 'overlay_place_page.dart';
 import 'trip_widgets.dart';
 
@@ -12,8 +15,11 @@ import 'trip_widgets.dart';
 /// share, place, set opacity, delete; shows what each one uses on the
 /// device.
 class MapLayersPage extends StatelessWidget {
-  const MapLayersPage({super.key, required this.trip, this.onShow});
+  const MapLayersPage({super.key, required this.trip, this.onShow, this.onFit});
   final TripController trip;
+
+  /// Move the Trip map to a new layer (after an import or a map pack).
+  final void Function(GeoBounds b)? onFit;
 
   /// Centre the Trip map here.
   final void Function(GeoPoint center)? onShow;
@@ -24,7 +30,12 @@ class MapLayersPage extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('Map layers')),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => pickAndImportMap(context, trip),
+        onPressed: () async {
+          final l = await pickAndImportMap(context, trip);
+          if (l == null) return;
+          final b = layerBounds(trip.layers, l);
+          if (b != null) onFit?.call(b);
+        },
         icon: const Icon(Icons.file_open),
         label: const Text('Import'),
       ),
@@ -36,6 +47,25 @@ class MapLayersPage extends StatelessWidget {
           return ListView(
             padding: const EdgeInsets.only(bottom: 96),
             children: [
+              Card(
+                margin: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+                color: Theme.of(context).colorScheme.primaryContainer,
+                child: ListTile(
+                  key: const Key('readyMadeMaps'),
+                  leading: const Icon(Icons.terrain, size: 32),
+                  title: const Text('Ready-made maps'),
+                  subtitle: const Text(
+                    'Silver Star & Trapper Creek trails and topo maps. '
+                    'One tap, no files to find.',
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => MapPacksPage(trip: trip, onFit: onFit),
+                    ),
+                  ),
+                ),
+              ),
               ListTile(
                 leading: const Icon(Icons.sd_storage),
                 title: Text(

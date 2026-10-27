@@ -45,8 +45,14 @@ class MapLayer {
     this.sourceBytes = 0,
     this.summary = '',
     this.attribution = '',
+    this.pack,
+    this.packFile,
     DateTime? added,
   }) : added = added ?? DateTime.now();
+
+  /// Map pack (v1.9.0) this layer came from, and which of its files.
+  String? pack;
+  String? packFile;
 
   final String id;
   final MapLayerKind kind;
@@ -102,6 +108,8 @@ class MapLayer {
     'from': ?from,
     's': summary,
     if (attribution.isNotEmpty) 'at': attribution,
+    'pk': ?pack,
+    'pf': ?packFile,
     'a': added.millisecondsSinceEpoch,
   };
 
@@ -129,6 +137,8 @@ class MapLayer {
       from: (j['from'] as num?)?.toInt(),
       summary: (j['s'] as String?) ?? '',
       attribution: (j['at'] as String?) ?? '',
+      pack: j['pk'] as String?,
+      packFile: j['pf'] as String?,
       added: DateTime.fromMillisecondsSinceEpoch(
         (j['a'] as num?)?.toInt() ?? 0,
       ),
@@ -364,7 +374,11 @@ class MapLayers extends ChangeNotifier {
 
   /// Import a GPX / KML / KMZ file. Throws [ImportFormatException] or
   /// [StorageLimitException].
-  Future<MapLayer> importTrail(String fileName, Uint8List bytes) async {
+  Future<MapLayer> importTrail(
+    String fileName,
+    Uint8List bytes, {
+    String attribution = '',
+  }) async {
     if (bytes.length > maxTrailFileBytes) {
       throw ImportFormatException(
         'File too big (${formatBytes(bytes.length)}; up to '
@@ -374,7 +388,7 @@ class MapLayers extends ChangeNotifier {
     final d = bytes.length > 256 * 1024
         ? await Isolate.run(() => tidyImport(parseTrailFile(fileName, bytes)))
         : tidyImport(parseTrailFile(fileName, bytes));
-    return addTrail(d, sourceBytes: bytes.length);
+    return addTrail(d, sourceBytes: bytes.length, attribution: attribution);
   }
 
   /// Store parsed trail data as a layer (an import or a shared route).
@@ -548,6 +562,10 @@ class MapLayers extends ChangeNotifier {
   Future<void> rename(MapLayer l, String name) => _edit(() {
     l.name = name.trim().isEmpty ? l.name : name.trim();
     index.indexLayer(l);
+  });
+  Future<void> tagPack(MapLayer l, String pack, String file) => _edit(() {
+    l.pack = pack;
+    l.packFile = file;
   });
   Future<void> recolor(MapLayer l, int argb) => _edit(() => l.color = argb);
   Future<void> setOpacity(MapLayer l, double o) =>

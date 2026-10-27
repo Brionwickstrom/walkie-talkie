@@ -10,6 +10,7 @@ import 'package:sensors_plus/sensors_plus.dart';
 import '../app/walkie_controller.dart';
 import '../trip/geo.dart';
 import '../trip/imports/map_layers.dart';
+import '../trip/imports/map_packs.dart';
 import '../trip/search/fetch.dart';
 import '../trip/search/map_search.dart';
 import '../trip/search/nominatim.dart';
@@ -25,6 +26,7 @@ import 'home_view.dart';
 import 'map_import.dart';
 import 'map_layer_widgets.dart';
 import 'map_layers_page.dart';
+import 'map_packs_page.dart';
 import 'map_search_page.dart';
 import 'network_map_page.dart';
 import 'offline_maps_page.dart';
@@ -163,6 +165,7 @@ class TripPageState extends State<TripPage> {
           controls: _mapControls(context, trip),
           fullControls: _zoomControls(),
           topLeft: [
+            ?_packBanner(context, trip),
             OfflineSaverChip(
               on: c.settings.offlineSaver,
               onTap: () => _toggleOffline(context),
@@ -536,6 +539,86 @@ class TripPageState extends State<TripPage> {
               _map.move(ll(p), _map.camera.zoom < 12 ? 14 : _map.camera.zoom);
             }
           },
+          onFit: _showNewLayer,
+        ),
+      ),
+    );
+  }
+
+  /// After an import or a map pack: back to the map, moved to the layer.
+  void _showNewLayer(GeoBounds b) {
+    if (!mounted) return;
+    Navigator.of(context).popUntil((r) => r.isFirst);
+    setState(() => _follow = false);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _fit(b, maxZoom: 15);
+    });
+  }
+
+  void _openPacks(TripController trip, {Set<String> add = const {}}) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            MapPacksPage(trip: trip, onFit: _showNewLayer, autoAdd: add),
+      ),
+    );
+  }
+
+  /// Packs offered by the one-time "maps are ready" banner.
+  List<MapPack>? _offer;
+
+  Future<void> _loadOffer(TripController trip) async {
+    if (_offer != null || trip.settings.packsOffered) return;
+    _offer = const [];
+    try {
+      final all = await packCatalog(trip).load(refresh: false);
+      if (mounted) setState(() => _offer = all);
+    } catch (_) {}
+  }
+
+  Widget? _packBanner(BuildContext context, TripController trip) {
+    if (trip.settings.packsOffered) return null;
+    unawaited(_loadOffer(trip));
+    final todo = [
+      for (final p in _offer ?? const <MapPack>[])
+        if (!packAdded(p, trip.layers)) p,
+    ];
+    if (todo.isEmpty) return null;
+    final names = todo.map((p) => p.short).join(' & ');
+    Future<void> answered() => trip.update((s) => s.packsOffered = true);
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 300),
+      child: Card(
+        key: const Key('packBanner'),
+        margin: EdgeInsets.zero,
+        color: Theme.of(context).colorScheme.primaryContainer,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 8, 4),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '$names maps are ready',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              const Text('Trails and topo maps, added with one tap.'),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextButton(onPressed: answered, child: const Text('Not now')),
+                  FilledButton(
+                    key: const Key('packBannerAdd'),
+                    onPressed: () {
+                      unawaited(answered());
+                      _openPacks(trip, add: {for (final p in todo) p.id});
+                    },
+                    child: const Text('Add maps'),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -545,7 +628,15 @@ class TripPageState extends State<TripPage> {
   Future<void> importShared(String path, String name) async {
     final trip = t;
     if (trip == null || !mounted) return;
-    await importMapFile(context, trip, File(path), name, temporary: true);
+    final l = await importMapFile(
+      context,
+      trip,
+      File(path),
+      name,
+      temporary: true,
+    );
+    final b = l == null ? null : layerBounds(trip.layers, l);
+    if (b != null) _showNewLayer(b);
   }
 
   // ------------------------------------------------------------ search
@@ -820,6 +911,15 @@ class TripPageState extends State<TripPage> {
                     Navigator.pop(ctx);
                   },
                 ),
+              ListTile(
+                leading: const Icon(Icons.terrain),
+                title: const Text('Ready-made maps'),
+                subtitle: const Text('Silver Star & Trapper Creek, one tap'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _openPacks(trip);
+                },
+              ),
               ListTile(
                 leading: const Icon(Icons.file_open),
                 title: const Text('Import a map or trail…'),
