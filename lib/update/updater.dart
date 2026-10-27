@@ -13,6 +13,15 @@ const String kReleasesRepo = 'Brionwickstrom/walkie-talkie';
 const String kLatestReleaseApi =
     'https://api.github.com/repos/$kReleasesRepo/releases/latest';
 
+/// Release assets: the Android app (what phones update to, and what the
+/// is.gd/getwalkie short link downloads) and the Windows app (v1.9.6).
+const String kApkAsset = 'WalkieTalkie.apk';
+const String kWindowsAsset = 'WalkieTalkie-Windows.zip';
+
+/// Always the newest Windows download.
+const String kWindowsLatestUrl =
+    'https://github.com/$kReleasesRepo/releases/latest/download/$kWindowsAsset';
+
 /// A GitHub release that has an installable APK attached.
 class ReleaseInfo {
   const ReleaseInfo({
@@ -35,18 +44,41 @@ class ReleaseInfo {
 
   /// Parses GitHub's `releases/latest` JSON. Returns null if there is no
   /// usable version tag or no .apk asset. Prefers an asset named
-  /// `WalkieTalkie.apk`, else the first `.apk`.
-  static ReleaseInfo? fromGitHubJson(Map<String, dynamic> j) {
+  /// `WalkieTalkie.apk`, else the first `.apk`. Never picks the Windows zip
+  /// (v1.9.6 attaches `WalkieTalkie-Windows.zip` to the same release).
+  static ReleaseInfo? fromGitHubJson(Map<String, dynamic> j) =>
+      _fromGitHubJson(j, ext: '.apk', preferred: kApkAsset);
+
+  /// The Windows desktop download (v1.9.6) of the same release JSON:
+  /// `WalkieTalkie-Windows.zip`, else the first `.zip` with "windows" in
+  /// its name; null when the release has none. [apkUrl] is the zip.
+  static ReleaseInfo? windowsFromGitHubJson(Map<String, dynamic> j) =>
+      _fromGitHubJson(
+        j,
+        ext: '.zip',
+        preferred: kWindowsAsset,
+        nameFilter: (n) => n.contains('windows'),
+      );
+
+  static ReleaseInfo? _fromGitHubJson(
+    Map<String, dynamic> j, {
+    required String ext,
+    required String preferred,
+    bool Function(String lowerName)? nameFilter,
+  }) {
     final tag = j['tag_name'] as String?;
     final version = AppVersion.tryParse(tag);
     if (tag == null || version == null) return null;
     final assets = (j['assets'] as List? ?? const [])
         .whereType<Map<String, dynamic>>()
-        .where((a) => (a['name'] as String? ?? '').toLowerCase().endsWith('.apk'))
+        .where((a) {
+          final n = (a['name'] as String? ?? '').toLowerCase();
+          return n.endsWith(ext) && (nameFilter == null || nameFilter(n));
+        })
         .toList();
     if (assets.isEmpty) return null;
     final asset = assets.firstWhere(
-      (a) => a['name'] == 'WalkieTalkie.apk',
+      (a) => a['name'] == preferred,
       orElse: () => assets.first,
     );
     final url = Uri.tryParse(asset['browser_download_url'] as String? ?? '');
@@ -75,6 +107,10 @@ class Updater {
 
   static bool get supported => !kIsWeb && Platform.isAndroid;
 
+  /// Windows desktop app (v1.9.6): checks and offers the download link (no
+  /// in-place install; the zip is unpacked over the old folder).
+  static bool get desktopSupported => !kIsWeb && Platform.isWindows;
+
   AppVersion? _current;
   String _currentLabel = '';
 
@@ -97,7 +133,7 @@ class Updater {
   /// Returns the latest release if it is newer than the running app, else
   /// null. Throws on network / API errors.
   Future<ReleaseInfo?> checkForUpdate() async {
-    if (!supported) return null;
+    if (!supported && !desktopSupported) return null;
     final current = await _loadCurrent();
     final client = _newClient()..connectionTimeout = const Duration(seconds: 10);
     try {
@@ -111,9 +147,10 @@ class Updater {
       if (res.statusCode != 200) {
         throw HttpException('GitHub returned ${res.statusCode}');
       }
-      final rel = ReleaseInfo.fromGitHubJson(
-        jsonDecode(body) as Map<String, dynamic>,
-      );
+      final json = jsonDecode(body) as Map<String, dynamic>;
+      final rel = supported
+          ? ReleaseInfo.fromGitHubJson(json)
+          : ReleaseInfo.windowsFromGitHubJson(json);
       if (rel == null) return null;
       if (current != null && !rel.version.isNewerThan(current)) return null;
       return rel;
@@ -173,6 +210,20 @@ class Updater {
 
   /// Opens the "Install unknown apps" settings page for this app.
   Future<void> openInstallSettings() => _ch.invokeMethod('openInstallSettings');
+
+  /// Desktop: open [url] in the default browser.
+  Future<void> openInBrowser(Uri url) async {
+    if (Platform.isWindows) {
+      await Process.start('rundll32', [
+        'url.dll,FileProtocolHandler',
+        url.toString(),
+      ]);
+    } else if (Platform.isMacOS) {
+      await Process.start('open', [url.toString()]);
+    } else {
+      await Process.start('xdg-open', [url.toString()]);
+    }
+  }
 
   /// Launches the system installer for [apk].
   Future<void> install(File apk) =>

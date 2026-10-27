@@ -1418,3 +1418,50 @@ conflict). The join tone plays only while the app is on screen.
   Everything is saved across app restarts (`app/quiet.dart`).
 
 Tests: `test/v195_gateway_test.dart`, `test/v195_quiet_test.dart`.
+
+## v1.9.6: tablet layout and the Windows desktop app
+
+* **Tablets (and wide windows):** from 700 dp wide (with at least 560 dp
+  of height, or 1000 dp wide) Talk and the Trip map sit side by side: the
+  Talk pane (people, rings, recent talk, the big Talk button) keeps a
+  phone-like width (40%, 340–460 dp) on the left, the map and Trip panel
+  get the rest. No bottom tabs there. The map's full-screen button still
+  covers the whole screen. Phones, also in landscape, keep the two tabs.
+  Works in both orientations (`isTwoPane` / `TwoPaneHome` in
+  `lib/ui/adaptive_layout.dart`).
+* **Space bar push-to-talk:** hold Space to talk (tap it when "Tap to
+  talk" is on), on desktop and on tablets with a keyboard. Ignored while
+  typing and under dialogs / other screens (`PushToTalkKeys`).
+* **Windows app** (`windows/`, `WalkieTalkie-Windows.zip` on the release
+  next to `WalkieTalkie.apk`): internet relays, direct UDP links, the
+  local network (Wi-Fi LAN + mDNS), chat, friends, private channels, voice
+  messages, rings, Trip map / offline areas / map packs, driving and trail
+  directions with spoken turns (Windows voices), the error log in
+  `%APPDATA%\Walkie Talkie\Walkie Talkie\logs`. Audio: mic through
+  `record` (Windows Media Foundation), speaker through the Windows waveOut
+  API (`lib/audio/pcm_speaker.dart`, flutter_pcm_sound has no Windows
+  version), Opus as on phones.
+  * **Meshtastic radio:** USB cable (COM port, `lib/lora/win_serial.dart`,
+    kernel32 directly) or Wi-Fi (TCP 4403), same stream framing as the
+    Synology gateway (`StreamWire`). Settings > Long-range radio: **Find
+    USB radio** or **Wi-Fi radio** (type its address). Saved as
+    `serial:COM3` / `tcp:host:4403`.
+  * **Not on desktop** (`PlatformCaps`): Bluetooth phone links and
+    Bluetooth radios, Wi-Fi Direct, camera QR scanning (paste the code or
+    invite link instead) and taking photos (pick a file instead), GPS and
+    compass (the map has no "you are here"), the background listening
+    service and notifications, battery settings, the in-app installer
+    (the update check opens the zip download in the browser instead),
+    voice messages over the LoRa radio (no Codec 2 library for Windows).
+  * Build: `tool\release.ps1` first (version, analyze, tests, APK), then
+    `tool\release_windows.ps1` (needs Visual Studio's C++ workload and
+    `C:\src\nuget\nuget.exe` for flutter_tts), then on the box
+    `gh release upload vX.Y.Z WalkieTalkie-Windows.zip`.
+  * The exe is not signed: SmartScreen says "Windows protected your PC"
+    the first time (More info > Run anyway), and Windows Firewall asks to
+    allow network access (allow it, or phones on the same Wi-Fi cannot
+    reach the PC directly; the internet relays work either way).
+* The Android updater only ever picks `.apk` assets
+  (`ReleaseInfo.fromGitHubJson`), so the zip next to it changes nothing for
+  phones; `releases/latest/download/WalkieTalkie.apk` (and is.gd/getwalkie)
+  keep working.

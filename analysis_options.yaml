@@ -16,6 +16,7 @@ analyzer:
     - ios/**
     - relay/**
     - gateway/**
+    - windows/**
 
 linter:
   # The lint rules applied to this project can be customized in the

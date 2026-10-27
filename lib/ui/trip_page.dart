@@ -35,6 +35,7 @@ import 'network_map_page.dart';
 import 'offline_areas_page.dart';
 import 'sheets.dart';
 import 'trip_widgets.dart';
+import '../platform/platform_caps.dart';
 
 LatLng ll(GeoPoint p) => LatLng(p.lat, p.lng);
 GeoPoint gp(LatLng p) => GeoPoint(p.latitude, p.longitude);
@@ -103,6 +104,7 @@ class TripPageState extends State<TripPage> {
   }
 
   void _startCompass() {
+    if (!PlatformCaps.sensors) return; // desktop: no compass
     try {
       _sensors.add(
         accelerometerEventStream(samplingPeriod: SensorInterval.uiInterval)

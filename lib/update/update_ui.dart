@@ -16,7 +16,7 @@ class UpdateFlow {
   /// Checks GitHub and, if a newer release exists, offers it.
   /// [userInitiated] also reports "up to date" and errors.
   Future<void> check(BuildContext context, {bool userInitiated = false}) async {
-    if (!Updater.supported) {
+    if (!Updater.supported && !Updater.desktopSupported) {
       if (userInitiated && context.mounted) {
         _snack(context, 'Updates are installed from the App Store on this device.');
       }
@@ -46,6 +46,22 @@ class UpdateFlow {
       final ok = await _offer(context, rel);
       if (ok != true) {
         _dismissedTag = rel.tag;
+        return;
+      }
+      if (!Updater.supported) {
+        // Windows: the browser downloads the new zip.
+        try {
+          await updater.openInBrowser(rel.apkUrl);
+          if (context.mounted) {
+            _snack(
+              context,
+              'Downloading in your browser. Close Walkie Talkie, unzip it '
+              'over the old folder and start WalkieTalkie.exe again.',
+            );
+          }
+        } catch (e) {
+          if (context.mounted) _snack(context, 'Open ${rel.apkUrl} to download it.');
+        }
         return;
       }
       if (context.mounted) await _downloadAndInstall(context, rel);
@@ -86,7 +102,7 @@ class UpdateFlow {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: Text('Update$size'),
+            child: Text(Updater.supported ? 'Update$size' : 'Download$size'),
           ),
         ],
       ),

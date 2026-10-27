@@ -1,13 +1,15 @@
 import 'dart:async';
-import 'dart:io' show Platform;
+import 'dart:io' show Platform, SocketException;
 import 'dart:typed_data';
 
 import 'package:flutter_blue_plus/flutter_blue_plus.dart' as fbp;
 
+import '../platform/platform_caps.dart';
 import '../transports/ble_scan_lock.dart';
 import 'lora_transport.dart';
 import 'meshtastic_proto.dart';
 import 'meshtastic_session.dart';
+import 'stream_radio.dart';
 
 /// Connection state of the paired LoRa radio.
 enum RadioState {
@@ -35,6 +37,9 @@ class FoundRadio {
   final String id;
   final String name;
   final int rssi;
+
+  /// USB serial or Wi-Fi (TCP) radio (desktop app), not Bluetooth.
+  bool get isStream => StreamRadioId.isStream(id);
 }
 
 class _BleWire implements MeshtasticWire {
@@ -77,6 +82,19 @@ class MeshtasticRadio implements RadioLink {
   final _ready = StreamController<bool>.broadcast();
   final List<StreamSubscription<dynamic>> _linkSubs = [];
   fbp.BluetoothDevice? _device;
+
+  /// USB / Wi-Fi link (desktop app, v1.9.6) while connected.
+  StreamRadioConnection? _stream;
+
+  /// The saved radio is on USB serial or Wi-Fi (TCP), not Bluetooth.
+  bool get isStream => StreamRadioId.isStream(deviceId);
+
+  /// Tests: open a USB / Wi-Fi radio link.
+  Future<StreamRadioConnection> Function(String id) openStream =
+      openStreamRadio;
+
+  /// Tests: list USB radios.
+  List<String> Function() usbRadios = usbRadioIds;
   bool _wanted = false;
   bool _looping = false;
   Completer<void>? _lost;
@@ -121,6 +139,13 @@ class MeshtasticRadio implements RadioLink {
   Future<List<FoundRadio>> scan({
     Duration timeout = const Duration(seconds: 10),
   }) async {
+    if (PlatformCaps.streamRadios) {
+      // Desktop: radios plugged in over USB (Wi-Fi radios are typed in).
+      return [
+        for (final id in usbRadios())
+          FoundRadio(id, StreamRadioId.label(id), 0),
+      ];
+    }
     if (fbp.FlutterBluePlus.adapterStateNow != fbp.BluetoothAdapterState.on) {
       throw StateError('Turn Bluetooth on first.');
     }
@@ -211,8 +236,9 @@ class MeshtasticRadio implements RadioLink {
     _looping = true;
     try {
       while (_wanted && deviceId != null) {
-        if (fbp.FlutterBluePlus.adapterStateNow !=
-            fbp.BluetoothAdapterState.on) {
+        if (!isStream &&
+            fbp.FlutterBluePlus.adapterStateNow !=
+                fbp.BluetoothAdapterState.on) {
           _set(RadioState.bluetoothOff, 'Bluetooth is off');
           await fbp.FlutterBluePlus.adapterState
               .where((s) => s == fbp.BluetoothAdapterState.on)
@@ -254,6 +280,15 @@ class MeshtasticRadio implements RadioLink {
 
   String _explain(Object e) {
     final s = e.toString();
+    if (isStream) {
+      if (e is StateError && e.message.isNotEmpty) return e.message;
+      if (e is SocketException) {
+        return 'No answer from the radio on Wi-Fi: check the address and that '
+            'its Wi-Fi is on (Meshtastic: Network > WiFi enabled)';
+      }
+      if (e is TimeoutException) return 'No answer from the radio';
+      return 'Not connected: $s';
+    }
     if (s.contains('bond') || s.contains('Bond') || s.contains('auth')) {
       return 'Pairing failed: check the PIN and try again';
     }
@@ -264,6 +299,7 @@ class MeshtasticRadio implements RadioLink {
   }
 
   Future<void> _connectOnce(String id) async {
+    if (StreamRadioId.isStream(id)) return _connectStream(id);
     _set(RadioState.connecting);
     final dev = fbp.BluetoothDevice.fromId(id);
     _device = dev;
@@ -336,6 +372,38 @@ class MeshtasticRadio implements RadioLink {
     _set(RadioState.ready);
   }
 
+  /// USB serial / Wi-Fi radio: same session as Bluetooth over the stream
+  /// framing ([StreamWire]); the link ends when the wire does.
+  Future<void> _connectStream(String id) async {
+    _set(RadioState.connecting, StreamRadioId.label(id));
+    final conn = await openStream(id);
+    _stream = conn;
+    _set(RadioState.configuring);
+    final s = MeshtasticSession(conn.wire);
+    session = s;
+    _linkSubs.add(
+      s.packets.listen((p) {
+        if (!_packets.isClosed) _packets.add(p);
+      }),
+    );
+    _linkSubs.add(
+      s.changes.listen((_) {
+        if (!_changes.isClosed) _changes.add(null);
+      }),
+    );
+    unawaited(
+      conn.wire.done.then((_) {
+        if (identical(_stream, conn)) unawaited(_onLost());
+      }),
+    );
+    await s.start(timeout: const Duration(seconds: 30));
+    if (s.myNodeNum == null) throw StateError('No answer from the radio');
+    final me = s.nodes[s.myNodeNum];
+    final n = me?.longName ?? '';
+    if (n.isNotEmpty) deviceName = n;
+    _set(RadioState.ready);
+  }
+
   Future<void> _onLost() async {
     final wasUp = session != null;
     await _teardown();
@@ -352,6 +420,13 @@ class MeshtasticRadio implements RadioLink {
     final s = session;
     session = null;
     await s?.close();
+    final st = _stream;
+    _stream = null;
+    if (st != null) {
+      try {
+        await st.close();
+      } catch (_) {}
+    }
     if (ready) _set(RadioState.reconnecting);
   }
 

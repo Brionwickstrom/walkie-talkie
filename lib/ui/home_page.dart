@@ -10,6 +10,7 @@ import '../app/passcodes.dart';
 import '../app/walkie_controller.dart';
 import '../core/peer.dart';
 import '../core/transport.dart';
+import '../platform/platform_caps.dart';
 import '../update/update_ui.dart';
 import '../chat/chat_store.dart';
 import '../trip/geo.dart';
@@ -29,6 +30,7 @@ import '../app/power_plan.dart';
 import '../app/link_settings.dart';
 import '../app/invite.dart';
 import '../app/setup.dart';
+import 'adaptive_layout.dart';
 import 'battery_help.dart';
 import 'channels_sheet.dart';
 import 'connection_test_page.dart';
@@ -62,7 +64,8 @@ class _HomePageState extends State<HomePage> {
   /// Trip map is full screen: no app bar or tab bar (status / navigation
   /// bar insets are kept by the SafeArea).
   bool _tripFull = false;
-  bool get _hideBars => _tab == 1 && _tripFull;
+  bool _hideBarsFor(bool wide) => _tripFull && (wide || _tab == 1);
+
   final GlobalKey<TripPageState> _tripKey = GlobalKey();
   final Set<String> _sosShown = {};
   bool _tripWired = false;
@@ -294,303 +297,329 @@ class _HomePageState extends State<HomePage> {
       builder: (context, _) {
         final mq = MediaQuery.of(context);
         final pttSize = (mq.size.height * 0.17).clamp(104.0, 160.0);
-        return Scaffold(
-          appBar: _hideBars
-              ? null
-              : AppBar(
-                  titleSpacing: 8,
-                  title: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _ChannelPicker(
-                        channel: c.channel,
-                        isPrivate: c.isPrivate,
-                        emoji: c.channelName?.emoji ?? '',
-                        onTap: () => showChannelsSheet(context, c),
-                      ),
-                      IconButton(
-                        tooltip: c.isPrivate
-                            ? 'Private channel (tap for passcode)'
-                            : 'Make this channel private',
-                        icon: c.switchingChannel
-                            ? const SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : Icon(c.isPrivate ? Icons.lock : Icons.lock_open),
-                        onPressed: () => showPrivacySheet(context, c),
-                      ),
-                    ],
+        // v1.9.6: tablets and the desktop window get Talk and the Trip map
+        // side by side; phones keep the two tabs.
+        final wide = isTwoPane(mq.size.width, mq.size.height);
+        if (wide) _wireTrip();
+        final hideBars = _hideBarsFor(wide);
+        final trip = TripPage(
+          key: _tripKey,
+          controller: c,
+          onFullScreen: (v) => setState(() => _tripFull = v),
+        );
+        final talk = HomeBody(
+          banners: [
+            if (c.quietStatus != null)
+              QuietBanner(
+                text: c.quietStatus!,
+                muted: c.quiet.muted,
+                onUnmute: c.unmute,
+                onSettings: () => _openSettings(context),
+              ),
+            if (c.playingSomething)
+              Card(
+                margin: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+                color: Theme.of(context).colorScheme.tertiaryContainer,
+                child: ListTile(
+                  dense: true,
+                  leading: const Icon(Icons.volume_up),
+                  title: Text(
+                    c.playingTake != null
+                        ? 'Replaying ${c.playingTake!.name}'
+                              '${c.playingAll ? ' (all missed)' : ''}'
+                        : c.playingKey != null
+                        ? 'Playing a voice message'
+                        : 'Playing live talk',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                  actions: [
-                    IconButton(
-                      tooltip: 'Chat on this channel',
-                      icon: Badge(
-                        isLabelVisible: c.unreadChannelChat > 0,
-                        label: Text('${c.unreadChannelChat}'),
-                        child: const Icon(Icons.chat_bubble_outline),
-                      ),
-                      onPressed: () => _openChat(context, c.channelChat),
-                    ),
-                    IconButton(
-                      tooltip: 'Friends',
-                      icon: Badge(
-                        isLabelVisible:
-                            c.unreadFriendChats + c.friendRequests.length > 0,
-                        label: Text(
-                          '${c.unreadFriendChats + c.friendRequests.length}',
-                        ),
-                        child: Icon(
-                          c.onlineFriends > 0
-                              ? Icons.people
-                              : Icons.people_outline,
-                        ),
-                      ),
-                      onPressed: () => _openFriends(context),
-                    ),
-                    IconButton(
-                      tooltip: 'Voice messages',
-                      icon: Badge(
-                        isLabelVisible: c.unplayedMessages > 0,
-                        label: Text('${c.unplayedMessages}'),
-                        child: const Icon(Icons.voicemail),
-                      ),
-                      onPressed: () => _openInbox(context),
-                    ),
-                    IconButton(
-                      tooltip: 'Settings',
-                      icon: const Icon(Icons.settings),
-                      onPressed: () => _openSettings(context),
-                    ),
-                  ],
+                  trailing: FilledButton.icon(
+                    icon: const Icon(Icons.stop),
+                    label: const Text('Stop'),
+                    onPressed: c.stopAllAudio,
+                  ),
                 ),
-          bottomNavigationBar: _hideBars
-              ? null
-              : NavigationBar(
-                  key: const Key('mainTabs'),
-                  height: 60,
-                  labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-                  selectedIndex: _tab,
-                  onDestinationSelected: (i) {
-                    _wireTrip();
-                    setState(() {
-                      _tab = i;
-                      _tripFull = false;
-                    });
-                  },
-                  destinations: [
-                    const NavigationDestination(
-                      icon: Icon(Icons.record_voice_over_outlined),
-                      selectedIcon: Icon(Icons.record_voice_over),
-                      label: 'Talk',
-                    ),
-                    NavigationDestination(
-                      icon: Badge(
-                        isLabelVisible: _tripAlerts > 0,
-                        label: Text('$_tripAlerts'),
-                        child: Icon(
-                          c.trip?.sos.active != null
-                              ? Icons.sos
-                              : Icons.terrain_outlined,
-                          color: c.trip?.sos.active != null ? Colors.red : null,
-                        ),
-                      ),
-                      selectedIcon: const Icon(Icons.terrain),
-                      label: 'Trip',
-                    ),
-                  ],
-                ),
-          body: _tab == 1
-              ? SafeArea(
-                  child: TripPage(
-                    key: _tripKey,
-                    controller: c,
-                    onFullScreen: (v) => setState(() => _tripFull = v),
+              ),
+            for (final r in List.of(c.activeRings))
+              _RingBanner(
+                urgent: r.urgent,
+                name: c.nameOf(r.from),
+                channel: c.labelFor(r.channel),
+                onAnswer: () => c.answerRing(r),
+                onDismiss: () => c.dismissRing(r),
+              ),
+          ],
+          links: [
+            for (final t in c.transports)
+              if (t.kind != TransportKind.lora || c.radioPaired)
+                (t.kind, t.status),
+          ],
+          internet: c.internetStatus,
+          showDetails: c.settings.showDiagnostics,
+          onToggleDetails: c.setShowDiagnostics,
+          details: _detailLines(),
+          channelLabel: c.channelName == null
+              ? 'CH ${c.channel}'
+              : '${c.channelTitle} (CH ${c.channel})',
+          isPrivate: c.isPrivate,
+          listenerWarning: c.hiddenListeners > 0
+              ? UnknownListenerCard(
+                  count: c.hiddenListeners,
+                  isPrivate: c.isPrivate,
+                  onTap: () => explainUnknownListener(
+                    context,
+                    isPrivate: c.isPrivate,
+                    count: c.hiddenListeners,
+                    isAdmin: c.isAdmin,
                   ),
                 )
-              : SafeArea(
-                  child: HomeBody(
-                    banners: [
-                      if (c.quietStatus != null)
-                        QuietBanner(
-                          text: c.quietStatus!,
-                          muted: c.quiet.muted,
-                          onUnmute: c.unmute,
-                          onSettings: () => _openSettings(context),
-                        ),
-                      if (c.playingSomething)
-                        Card(
-                          margin: const EdgeInsets.fromLTRB(8, 4, 8, 0),
-                          color: Theme.of(context)
-                              .colorScheme
-                              .tertiaryContainer,
-                          child: ListTile(
-                            dense: true,
-                            leading: const Icon(Icons.volume_up),
-                            title: Text(
-                              c.playingTake != null
-                                  ? 'Replaying ${c.playingTake!.name}'
-                                        '${c.playingAll ? ' (all missed)' : ''}'
-                                  : c.playingKey != null
-                                  ? 'Playing a voice message'
-                                  : 'Playing live talk',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            trailing: FilledButton.icon(
-                              icon: const Icon(Icons.stop),
-                              label: const Text('Stop'),
-                              onPressed: c.stopAllAudio,
-                            ),
-                          ),
-                        ),
-                      for (final r in List.of(c.activeRings))
-                        _RingBanner(
-                          urgent: r.urgent,
-                          name: c.nameOf(r.from),
-                          channel: c.labelFor(r.channel),
-                          onAnswer: () => c.answerRing(r),
-                          onDismiss: () => c.dismissRing(r),
-                        ),
-                    ],
-                    links: [
-                      for (final t in c.transports)
-                        if (t.kind != TransportKind.lora || c.radioPaired)
-                          (t.kind, t.status),
-                    ],
-                    internet: c.internetStatus,
-                    showDetails: c.settings.showDiagnostics,
-                    onToggleDetails: c.setShowDiagnostics,
-                    details: _detailLines(),
-                    channelLabel: c.channelName == null
-                        ? 'CH ${c.channel}'
-                        : '${c.channelTitle} (CH ${c.channel})',
-                    isPrivate: c.isPrivate,
-                    listenerWarning: c.hiddenListeners > 0
-                        ? UnknownListenerCard(
-                            count: c.hiddenListeners,
-                            isPrivate: c.isPrivate,
-                            onTap: () => explainUnknownListener(
-                              context,
-                              isPrivate: c.isPrivate,
-                              count: c.hiddenListeners,
-                              isAdmin: c.isAdmin,
-                            ),
-                          )
-                        : null,
-                    me: PersonView(
-                      id: c.nodeId,
-                      name: c.name,
-                      me: true,
-                      talking: c.transmitting,
+              : null,
+          me: PersonView(
+            id: c.nodeId,
+            name: c.name,
+            me: true,
+            talking: c.transmitting,
+          ),
+          people: _people(),
+          onRing: (p) => c.ring(toPeer: p.id),
+          onBeep: (p) => c.ring(toPeer: p.id, beep: true),
+          onMessage: (p) => _openRecordSheet(context, p.id, p.name),
+          onVolume: (p) => _openPersonSheet(context, p),
+          onRefresh: ({required bool radio}) => c.refreshPeople(radio: radio),
+          radioAvailable: () => c.radioConnected,
+          onLinkTap: (k) => _openLinkSheet(context, k),
+          mobileDataHint: c.mobileDataHint,
+          cell: c.cellStatus,
+          cellLevel: c.cellInfo?.level,
+          onCellTap: () => _openCellSheet(context),
+          alone: c.aloneReason,
+          onAloneFix: c.openPhoneSettings,
+          onConnectionTest: () => openConnectionTest(context, c),
+          notice: c.announcementMode && !c.isAdmin
+              ? Card(
+                  margin: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+                  child: ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.campaign),
+                    title: Text(
+                      'Announcement mode: only '
+                      '${c.adminId == null ? 'the admin' : c.nameOf(c.adminId!)}'
+                      ' can talk here.',
                     ),
-                    people: _people(),
-                    onRing: (p) => c.ring(toPeer: p.id),
-                    onBeep: (p) => c.ring(toPeer: p.id, beep: true),
-                    onMessage: (p) => _openRecordSheet(context, p.id, p.name),
-                    onVolume: (p) => _openPersonSheet(context, p),
-                    onRefresh: ({required bool radio}) =>
-                        c.refreshPeople(radio: radio),
-                    radioAvailable: () => c.radioConnected,
-                    onLinkTap: (k) => _openLinkSheet(context, k),
-                    mobileDataHint: c.mobileDataHint,
-                    cell: c.cellStatus,
-                    cellLevel: c.cellInfo?.level,
-                    onCellTap: () => _openCellSheet(context),
-                    alone: c.aloneReason,
-                    onAloneFix: c.openPhoneSettings,
-                    onConnectionTest: () => openConnectionTest(context, c),
-                    notice: c.announcementMode && !c.isAdmin
-                        ? Card(
-                            margin: const EdgeInsets.fromLTRB(8, 4, 8, 0),
-                            child: ListTile(
-                              dense: true,
-                              leading: const Icon(Icons.campaign),
-                              title: Text(
-                                'Announcement mode: only '
-                                '${c.adminId == null ? 'the admin' : c.nameOf(c.adminId!)}'
-                                ' can talk here.',
-                              ),
-                            ),
-                          )
-                        : (c.mediaVolume ?? 1) < 0.3
-                        ? Card(
-                            margin: const EdgeInsets.fromLTRB(8, 4, 8, 0),
-                            color: Theme.of(context).colorScheme.errorContainer,
-                            child: Padding(
-                              padding: const EdgeInsets.all(10),
-                              child: Row(
-                                children: [
-                                  const Icon(Icons.volume_down),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Text(
-                                      'Media volume is low '
-                                      '(${((c.mediaVolume ?? 0) * 100).round()}%). '
-                                      'Press volume up to hear others clearly.',
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          )
-                        : null,
-                    onEditMe: () => _openSettings(context),
-                    error: c.error,
-                    queued:
-                        c.outgoing.isNotEmpty || c.waitingForAnyone.isNotEmpty
-                        ? TextButton.icon(
-                            icon: const Icon(Icons.schedule_send, size: 18),
-                            label: Text(
-                              _queuedLabel(),
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            onPressed: () => _openInbox(context),
-                          )
-                        : null,
-                    recent: c.takes.isEmpty
-                        ? null
-                        : RecentStrip(
-                            takes: [
-                              for (final t in c.takes.take(8)) takeView(c, t),
-                            ],
-                            unheard: c.unheardTakes,
-                            onPlay: (v) {
-                              final t = c.takes.where((x) => x.id == v.id);
-                              if (t.isNotEmpty) c.playTake(t.first);
-                            },
-                            onPlayMissed: c.playAllMissed,
-                            onOpenHistory: () => _openHistory(context),
-                          ),
-                    headerAction: WhosWhereButton(
-                      count: c.whosWhereElsewhereCount,
-                      onPressed: () => _openWhosWhere(context),
-                    ),
-                    actions: ChannelActions(
-                      onRingAll: () => c.ring(),
-                      onBeepAll: () => c.ring(beep: true),
-                      record: _RecordButton(controller: c),
-                      mute: MuteButton(
-                        muted: c.quiet.muted,
-                        onMute: () async {
-                          await c.muteFor(null);
-                          if (context.mounted) {
-                            await showMuteDurationSheet(context, c);
-                          }
-                        },
-                        onUnmute: c.unmute,
-                      ),
-                    ),
-                    ptt: _mainTalk(context, pttSize),
                   ),
+                )
+              : (c.mediaVolume ?? 1) < 0.3
+              ? Card(
+                  margin: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+                  color: Theme.of(context).colorScheme.errorContainer,
+                  child: Padding(
+                    padding: const EdgeInsets.all(10),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.volume_down),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Media volume is low '
+                            '(${((c.mediaVolume ?? 0) * 100).round()}%). '
+                            'Press volume up to hear others clearly.',
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              : null,
+          onEditMe: () => _openSettings(context),
+          error: c.error,
+          queued: c.outgoing.isNotEmpty || c.waitingForAnyone.isNotEmpty
+              ? TextButton.icon(
+                  icon: const Icon(Icons.schedule_send, size: 18),
+                  label: Text(
+                    _queuedLabel(),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  onPressed: () => _openInbox(context),
+                )
+              : null,
+          recent: c.takes.isEmpty
+              ? null
+              : RecentStrip(
+                  takes: [for (final t in c.takes.take(8)) takeView(c, t)],
+                  unheard: c.unheardTakes,
+                  onPlay: (v) {
+                    final t = c.takes.where((x) => x.id == v.id);
+                    if (t.isNotEmpty) c.playTake(t.first);
+                  },
+                  onPlayMissed: c.playAllMissed,
+                  onOpenHistory: () => _openHistory(context),
                 ),
+          headerAction: WhosWhereButton(
+            count: c.whosWhereElsewhereCount,
+            onPressed: () => _openWhosWhere(context),
+          ),
+          actions: ChannelActions(
+            onRingAll: () => c.ring(),
+            onBeepAll: () => c.ring(beep: true),
+            record: _RecordButton(controller: c),
+            mute: MuteButton(
+              muted: c.quiet.muted,
+              onMute: () async {
+                await c.muteFor(null);
+                if (context.mounted) {
+                  await showMuteDurationSheet(context, c);
+                }
+              },
+              onUnmute: c.unmute,
+            ),
+          ),
+          ptt: _mainTalk(context, pttSize),
+        );
+        return PushToTalkKeys(
+          onTalk: _pttKey,
+          child: Scaffold(
+            appBar: hideBars
+                ? null
+                : AppBar(
+                    titleSpacing: 8,
+                    title: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _ChannelPicker(
+                          channel: c.channel,
+                          isPrivate: c.isPrivate,
+                          emoji: c.channelName?.emoji ?? '',
+                          onTap: () => showChannelsSheet(context, c),
+                        ),
+                        IconButton(
+                          tooltip: c.isPrivate
+                              ? 'Private channel (tap for passcode)'
+                              : 'Make this channel private',
+                          icon: c.switchingChannel
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : Icon(
+                                  c.isPrivate ? Icons.lock : Icons.lock_open,
+                                ),
+                          onPressed: () => showPrivacySheet(context, c),
+                        ),
+                      ],
+                    ),
+                    actions: [
+                      IconButton(
+                        tooltip: 'Chat on this channel',
+                        icon: Badge(
+                          isLabelVisible: c.unreadChannelChat > 0,
+                          label: Text('${c.unreadChannelChat}'),
+                          child: const Icon(Icons.chat_bubble_outline),
+                        ),
+                        onPressed: () => _openChat(context, c.channelChat),
+                      ),
+                      IconButton(
+                        tooltip: 'Friends',
+                        icon: Badge(
+                          isLabelVisible:
+                              c.unreadFriendChats + c.friendRequests.length > 0,
+                          label: Text(
+                            '${c.unreadFriendChats + c.friendRequests.length}',
+                          ),
+                          child: Icon(
+                            c.onlineFriends > 0
+                                ? Icons.people
+                                : Icons.people_outline,
+                          ),
+                        ),
+                        onPressed: () => _openFriends(context),
+                      ),
+                      IconButton(
+                        tooltip: 'Voice messages',
+                        icon: Badge(
+                          isLabelVisible: c.unplayedMessages > 0,
+                          label: Text('${c.unplayedMessages}'),
+                          child: const Icon(Icons.voicemail),
+                        ),
+                        onPressed: () => _openInbox(context),
+                      ),
+                      IconButton(
+                        tooltip: 'Settings',
+                        icon: const Icon(Icons.settings),
+                        onPressed: () => _openSettings(context),
+                      ),
+                    ],
+                  ),
+            bottomNavigationBar: hideBars || wide
+                ? null
+                : NavigationBar(
+                    key: const Key('mainTabs'),
+                    height: 60,
+                    labelBehavior:
+                        NavigationDestinationLabelBehavior.alwaysShow,
+                    selectedIndex: _tab,
+                    onDestinationSelected: (i) {
+                      _wireTrip();
+                      setState(() {
+                        _tab = i;
+                        _tripFull = false;
+                      });
+                    },
+                    destinations: [
+                      const NavigationDestination(
+                        icon: Icon(Icons.record_voice_over_outlined),
+                        selectedIcon: Icon(Icons.record_voice_over),
+                        label: 'Talk',
+                      ),
+                      NavigationDestination(
+                        icon: Badge(
+                          isLabelVisible: _tripAlerts > 0,
+                          label: Text('$_tripAlerts'),
+                          child: Icon(
+                            c.trip?.sos.active != null
+                                ? Icons.sos
+                                : Icons.terrain_outlined,
+                            color: c.trip?.sos.active != null
+                                ? Colors.red
+                                : null,
+                          ),
+                        ),
+                        selectedIcon: const Icon(Icons.terrain),
+                        label: 'Trip',
+                      ),
+                    ],
+                  ),
+            body: wide
+                ? _tripFull
+                      ? SafeArea(child: trip)
+                      : TwoPaneHome(
+                          width: mq.size.width,
+                          talk: talk,
+                          trip: trip,
+                        )
+                : _tab == 1
+                ? SafeArea(child: trip)
+                : SafeArea(child: talk),
+          ),
         );
       },
     );
+  }
+
+  void _pttKey(bool down) {
+    final reply = c.replyTarget;
+    if (reply != null) {
+      c.talkToFriend(reply, down);
+      return;
+    }
+    if (c.settings.toggleTalk) {
+      if (down) c.toggleTalk();
+      return;
+    }
+    c.mainTalk(down);
   }
 
   void _openWhosWhere(BuildContext context) {
@@ -930,7 +959,8 @@ class _HomePageState extends State<HomePage> {
         private: reply != null,
         caption: name != null
             ? 'Reply privately to $name'
-            : 'Talk to CH ${c.channel} ($n ${n == 1 ? 'person' : 'people'})',
+            : 'Talk to CH ${c.channel} ($n ${n == 1 ? 'person' : 'people'})'
+                  '${PlatformCaps.desktop ? ' · or hold Space' : ''}',
       ),
     );
   }

@@ -5,6 +5,8 @@ import '../core/gateway_protocol.dart' show GatewayInfo;
 import '../lora/meshtastic_ble.dart';
 import '../lora/meshtastic_proto.dart';
 import '../lora/meshtastic_session.dart';
+import '../lora/stream_radio.dart';
+import '../platform/platform_caps.dart';
 
 /// How to pair, shown before and while pairing.
 const radioPinHelp =
@@ -109,6 +111,14 @@ class _RadioSettingsState extends State<RadioSettings> {
     });
   }
 
+  Future<void> _addWifiRadio(BuildContext context) async {
+    final id = await askWifiRadio(context);
+    if (id == null) return;
+    await widget.controller.pairRadio(
+      FoundRadio(id, StreamRadioId.label(id), 0),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = widget.controller;
@@ -129,6 +139,19 @@ class _RadioSettingsState extends State<RadioSettings> {
           ),
           const SizedBox(height: 8),
         ];
+        final desktop = PlatformCaps.streamRadios;
+        if (desktop) {
+          children.add(
+            Text(
+              'On this computer the radio connects by USB cable or over '
+              'Wi-Fi (radios with Wi-Fi, set to Wi-Fi mode in the Meshtastic '
+              'app). Close the Meshtastic app / web client first: only one '
+              'program can use the radio at a time.',
+              style: theme.textTheme.bodySmall,
+            ),
+          );
+          children.add(const SizedBox(height: 8));
+        }
         if (!c.radioPaired) {
           children.addAll([
             Wrap(
@@ -138,9 +161,22 @@ class _RadioSettingsState extends State<RadioSettings> {
                 FilledButton.icon(
                   key: const Key('radioScan'),
                   icon: const Icon(Icons.settings_input_antenna),
-                  label: Text(_scanning ? 'Looking...' : 'Find my radio'),
+                  label: Text(
+                    _scanning
+                        ? 'Looking...'
+                        : desktop
+                        ? 'Find USB radio'
+                        : 'Find my radio',
+                  ),
                   onPressed: _scanning ? null : _scan,
                 ),
+                if (desktop)
+                  OutlinedButton.icon(
+                    key: const Key('radioWifi'),
+                    icon: const Icon(Icons.wifi),
+                    label: const Text('Wi-Fi radio'),
+                    onPressed: () => _addWifiRadio(context),
+                  ),
                 if (_scanning)
                   const SizedBox(
                     width: 18,
@@ -150,11 +186,16 @@ class _RadioSettingsState extends State<RadioSettings> {
               ],
             ),
             if (_found != null && _found!.isEmpty)
-              const Padding(
-                padding: EdgeInsets.only(top: 8),
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
                 child: Text(
-                  'No radio found. Turn it on, keep it close, and make sure '
-                  'the official Meshtastic app is not connected to it.',
+                  desktop
+                      ? 'No USB radio found. Plug it in with a data USB cable '
+                            '(some cables only charge), wait a few seconds and '
+                            'try again.'
+                      : 'No radio found. Turn it on, keep it close, and make '
+                            'sure the official Meshtastic app is not connected '
+                            'to it.',
                 ),
               ),
             for (final r in _found ?? const <FoundRadio>[])
@@ -162,14 +203,18 @@ class _RadioSettingsState extends State<RadioSettings> {
                 contentPadding: EdgeInsets.zero,
                 leading: const Icon(Icons.settings_input_antenna),
                 title: Text(r.name),
-                subtitle: Text('Signal ${r.rssi} dBm'),
+                subtitle: Text(
+                  r.isStream ? 'USB serial' : 'Signal ${r.rssi} dBm',
+                ),
                 trailing: FilledButton.tonal(
                   onPressed: () => c.pairRadio(r),
-                  child: const Text('Pair'),
+                  child: Text(r.isStream ? 'Connect' : 'Pair'),
                 ),
               ),
-            const SizedBox(height: 4),
-            Text(radioPinHelp, style: theme.textTheme.bodySmall),
+            if (!desktop) ...[
+              const SizedBox(height: 4),
+              Text(radioPinHelp, style: theme.textTheme.bodySmall),
+            ],
           ]);
         } else {
           final ok = dev.state == RadioState.ready;
@@ -189,8 +234,9 @@ class _RadioSettingsState extends State<RadioSettings> {
               ),
             ),
           );
-          if (dev.state == RadioState.pairing ||
-              dev.state == RadioState.connecting) {
+          if (!dev.isStream &&
+              (dev.state == RadioState.pairing ||
+                  dev.state == RadioState.connecting)) {
             children.add(Text(radioPinHelp, style: theme.textTheme.bodySmall));
           }
           if (s != null) {
@@ -222,7 +268,8 @@ class _RadioSettingsState extends State<RadioSettings> {
             children.add(
               Text(
                 'Voice messages over the radio are not available on this '
-                'phone (texts, locations and rings still work).',
+                '${desktop ? 'computer' : 'phone'} (texts, locations and rings '
+                'still work).',
                 style: theme.textTheme.bodySmall,
               ),
             );
@@ -232,7 +279,7 @@ class _RadioSettingsState extends State<RadioSettings> {
               alignment: Alignment.centerLeft,
               child: TextButton.icon(
                 icon: const Icon(Icons.link_off),
-                label: const Text('Forget radio'),
+                label: Text(dev.isStream ? 'Disconnect radio' : 'Forget radio'),
                 onPressed: c.forgetRadio,
               ),
             ),
@@ -297,4 +344,57 @@ class _RadioSettingsState extends State<RadioSettings> {
       },
     );
   }
+}
+
+/// Asks for a Wi-Fi radio's address; a "tcp:host:port" radio id or null.
+Future<String?> askWifiRadio(BuildContext context) {
+  final ctl = TextEditingController();
+  String? error;
+  return showDialog<String>(
+    context: context,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setState) {
+        void done() {
+          final id = StreamRadioId.fromTyped(ctl.text);
+          if (id == null) {
+            setState(() => error = 'Type an address like 192.168.1.40');
+            return;
+          }
+          Navigator.pop(ctx, id);
+        }
+
+        return AlertDialog(
+          title: const Text('Wi-Fi radio'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'The radio\'s address on your network. The Meshtastic app '
+                'shows it under Settings > Network once Wi-Fi is on, or try '
+                'meshtastic.local.',
+              ),
+              TextField(
+                key: const Key('wifiRadioAddress'),
+                controller: ctl,
+                autofocus: true,
+                decoration: InputDecoration(
+                  hintText: '192.168.1.40',
+                  errorText: error,
+                ),
+                onSubmitted: (_) => done(),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(onPressed: done, child: const Text('Connect')),
+          ],
+        );
+      },
+    ),
+  );
 }

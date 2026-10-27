@@ -10,6 +10,7 @@ import '../chat/chat_body.dart';
 import '../chat/chat_store.dart';
 import 'chat_page.dart';
 import 'invite_sheet.dart';
+import '../platform/platform_caps.dart';
 
 /// One row of the friends list.
 class FriendItem {
@@ -323,6 +324,8 @@ Future<String?> scanCode(
   BuildContext context, {
   String title = 'Scan a code',
 }) async {
+  // Desktop (v1.9.6): no camera scanning, paste the code or link instead.
+  if (!PlatformCaps.camera) return _pasteCode(context);
   final granted = (await Permission.camera.request()).isGranted;
   if (!context.mounted) return null;
   if (granted) {

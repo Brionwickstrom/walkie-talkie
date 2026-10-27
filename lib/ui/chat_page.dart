@@ -6,6 +6,7 @@ import '../app/walkie_controller.dart';
 import 'chat_view.dart';
 import 'home_view.dart';
 import 'sheets.dart';
+import '../platform/platform_caps.dart';
 
 /// Chat for the current channel, or with one friend (private, with a
 /// hold-to-talk button and voice messages).
@@ -46,20 +47,25 @@ class _ChatPageState extends State<ChatPage> {
           children: [
             ListTile(
               leading: const Icon(Icons.photo_library),
-              title: const Text('Photo from gallery'),
+              title: Text(
+                PlatformCaps.desktop
+                    ? 'Photo from this computer'
+                    : 'Photo from gallery',
+              ),
               onTap: () {
                 Navigator.pop(ctx);
                 _pick(ImageSource.gallery);
               },
             ),
-            ListTile(
-              leading: const Icon(Icons.photo_camera),
-              title: const Text('Take a photo'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _pick(ImageSource.camera);
-              },
-            ),
+            if (PlatformCaps.camera)
+              ListTile(
+                leading: const Icon(Icons.photo_camera),
+                title: const Text('Take a photo'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _pick(ImageSource.camera);
+                },
+              ),
             ListTile(
               leading: const Icon(Icons.location_on),
               title: const Text('Send my location'),

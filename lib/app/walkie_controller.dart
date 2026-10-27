@@ -56,6 +56,7 @@ import '../messaging/ringer.dart';
 import '../messaging/storage.dart';
 import '../messaging/voice_clip.dart';
 import '../platform/background_bridge.dart';
+import '../platform/platform_caps.dart';
 import '../transports/ble_transport.dart';
 import '../transports/lan_transport.dart';
 import '../transports/mdns_discovery.dart';
@@ -133,13 +134,14 @@ class WalkieController extends ChangeNotifier {
         ? (WifiDirectTransport()..enabled = settings.wifiDirect)
         : null;
     _wifiDirect = wd;
-    final ble = BleTransport();
+    // v1.9.6: no Bluetooth phone links in the desktop app.
+    final ble = PlatformCaps.bluetooth ? BleTransport() : null;
     radioDevice.deviceId = settings.radioId;
     radioDevice.deviceName = settings.radioName;
-    if (settings.radioId != null) ble.ignoreDevices.add(settings.radioId!);
+    if (settings.radioId != null) ble?.ignoreDevices.add(settings.radioId!);
     radioDevice.onDevice = (id) {
-      ble.ignoreDevices.clear();
-      if (id != null) ble.ignoreDevices.add(id);
+      ble?.ignoreDevices.clear();
+      if (id != null) ble?.ignoreDevices.add(id);
     };
     manager = TransportManager(
       transports: [
@@ -151,7 +153,7 @@ class WalkieController extends ChangeNotifier {
           store: const SharedPrefsLanPeerStore(),
         ),
         ?wd,
-        ble,
+        ?ble,
         _relay,
         loraTransport,
       ],
@@ -410,6 +412,7 @@ class WalkieController extends ChangeNotifier {
 
   /// Bluetooth adapter on (null: unknown / unsupported).
   Future<bool?> bluetoothOn() async {
+    if (!PlatformCaps.bluetooth) return null;
     try {
       if (!await fbp.FlutterBluePlus.isSupported) return null;
       final s = fbp.FlutterBluePlus.adapterStateNow;

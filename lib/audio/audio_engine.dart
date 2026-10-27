@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 import 'dart:isolate';
 import 'dart:typed_data';
 
@@ -11,14 +12,20 @@ import 'clip_player.dart';
 import 'codec.dart';
 import 'mic_gate.dart';
 import 'opus_voice_codec.dart';
+import 'pcm_speaker.dart';
 import 'playout_buffer.dart';
 import 'time_stretch.dart';
 import 'voice_pipeline.dart';
 
 /// Mic capture (record, raw PCM16 stream) and speaker playback
-/// (flutter_pcm_sound), with Opus in between.
+/// ([PcmSpeaker]: flutter_pcm_sound on phones, waveOut on Windows), with
+/// Opus in between.
 class AudioEngine {
   final _recorder = AudioRecorder();
+  final PcmSpeaker _speaker = PcmSpeaker.platform();
+
+  /// Android / iOS audio focus and categories (no audio_session on desktop).
+  static bool get _mobile => Platform.isAndroid || Platform.isIOS;
   late final VoicePipeline _pipeline;
   late final MicGate _mic = MicGate(
     open: _openMic,
@@ -69,6 +76,12 @@ class AudioEngine {
       playbackAgc: true,
       volumeOf: (id) => _volumes[id] ?? 1.0,
     );
+    if (_mobile) await _configureSession();
+    await _setupSpeaker();
+    _ready = true;
+  }
+
+  Future<void> _configureSession() async {
     final session = await AudioSession.instance;
     _session = session;
     await session.configure(
@@ -86,26 +99,21 @@ class AudioEngine {
             AndroidAudioFocusGainType.gainTransientMayDuck,
       ),
     );
-    // The plugin logs every feed() call by default (50 per second).
-    await FlutterPcmSound.setLogLevel(LogLevel.error);
-    await _setupSpeaker();
-    _ready = true;
   }
 
   Future<void> _setupSpeaker() async {
-    await FlutterPcmSound.setup(
+    await _speaker.setup(
       sampleRate: VoiceFormat.sampleRate,
-      channelCount: VoiceFormat.channels,
-      iosAudioCategory: IosAudioCategory.playAndRecord,
-      iosAllowBackgroundAudio: true,
+      channels: VoiceFormat.channels,
     );
-    await FlutterPcmSound.setFeedThreshold(VoiceFormat.samplesPerFrame * 4);
     _speakerOk = true;
   }
 
   void _feed(PcmArrayInt16 pcm) {
     if (!_speakerOk) return;
-    FlutterPcmSound.feed(pcm).catchError((_) {});
+    try {
+      _speaker.feed(pcm);
+    } catch (_) {}
   }
 
   Future<void>? _flushing;
@@ -118,7 +126,7 @@ class AudioEngine {
       _speakerOk = false;
       _playout.reset();
       try {
-        await FlutterPcmSound.release();
+        await _speaker.release();
       } catch (_) {}
       try {
         await _setupSpeaker();
@@ -295,7 +303,7 @@ class AudioEngine {
     await _recorder.dispose();
     if (_ready) {
       _pipeline.dispose();
-      await FlutterPcmSound.release();
+      await _speaker.release();
     }
   }
 }
