@@ -3,9 +3,10 @@ import 'package:flutter/material.dart';
 import '../app/quiet.dart';
 import '../app/walkie_controller.dart';
 
-/// Mute button on the talk screen (v1.9.5): hold about 1 s to mute (a
-/// ring fills up while you hold), a plain tap only shows "Hold to mute".
-/// While muted a single tap turns sound back on.
+/// Mute button on the talk screen (v1.9.7): a plain on/off switch, no
+/// time limit. Both ways need a deliberate hold of about 1 s (a ring fills
+/// up while you hold); a quick tap only shows "Hold to mute" / "Hold to
+/// unmute". Also used, [compact], as the banner's Unmute button.
 class MuteButton extends StatefulWidget {
   const MuteButton({
     super.key,
@@ -13,14 +14,20 @@ class MuteButton extends StatefulWidget {
     required this.onMute,
     required this.onUnmute,
     this.hold = QuietHours.holdToMute,
+    this.compact = false,
+    this.buttonKey = const Key('muteButton'),
   });
 
   final bool muted;
 
-  /// Called when the hold completes.
+  /// Called when the hold completes (not muted / muted).
   final VoidCallback onMute;
   final VoidCallback onUnmute;
   final Duration hold;
+
+  /// Short label ("Unmute") for the banner.
+  final bool compact;
+  final Key buttonKey;
 
   @override
   State<MuteButton> createState() => _MuteButtonState();
@@ -38,7 +45,11 @@ class _MuteButtonState extends State<MuteButton>
     if (s == AnimationStatus.completed && !_fired) {
       _fired = true;
       _ring.value = 0;
-      widget.onMute();
+      if (widget.muted) {
+        widget.onUnmute();
+      } else {
+        widget.onMute();
+      }
     }
   }
 
@@ -52,9 +63,9 @@ class _MuteButtonState extends State<MuteButton>
     final m = ScaffoldMessenger.maybeOf(context);
     m?.hideCurrentSnackBar();
     m?.showSnackBar(
-      const SnackBar(
-        content: Text('Hold to mute'),
-        duration: Duration(milliseconds: 1500),
+      SnackBar(
+        content: Text(widget.muted ? 'Hold to unmute' : 'Hold to mute'),
+        duration: const Duration(milliseconds: 1500),
       ),
     );
   }
@@ -62,20 +73,58 @@ class _MuteButtonState extends State<MuteButton>
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    if (widget.muted) {
-      return FilledButton.tonalIcon(
-        key: const Key('muteButton'),
-        style: FilledButton.styleFrom(
-          visualDensity: VisualDensity.compact,
-          padding: const EdgeInsets.symmetric(horizontal: 10),
-          backgroundColor: cs.errorContainer,
-          foregroundColor: cs.onErrorContainer,
-        ),
-        icon: const Icon(Icons.volume_off, size: 18),
-        label: const Text('Muted · tap to unmute'),
-        onPressed: widget.onUnmute,
-      );
-    }
+    final muted = widget.muted;
+    final ring = SizedBox(
+      width: 20,
+      height: 20,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          AnimatedBuilder(
+            animation: _ring,
+            builder: (_, _) => CircularProgressIndicator(
+              key: Key('${(widget.buttonKey as ValueKey).value}Progress'),
+              value: _ring.value,
+              strokeWidth: 2.5,
+              color: muted ? cs.primary : cs.error,
+              backgroundColor: Colors.transparent,
+            ),
+          ),
+          Icon(muted ? Icons.volume_off : Icons.volume_up, size: 14),
+        ],
+      ),
+    );
+    final label = Text(
+      muted ? (widget.compact ? 'Unmute' : 'Muted · hold to unmute') : 'Mute',
+    );
+    final style = ButtonStyle(
+      visualDensity: VisualDensity.compact,
+      padding: const WidgetStatePropertyAll(
+        EdgeInsets.symmetric(horizontal: 10),
+      ),
+      backgroundColor: muted && !widget.compact
+          ? WidgetStatePropertyAll(cs.errorContainer)
+          : null,
+      foregroundColor: muted && !widget.compact
+          ? WidgetStatePropertyAll(cs.onErrorContainer)
+          : null,
+    );
+    // Taps are handled by the Listener (hint / hold), never the button.
+    final button = muted && !widget.compact
+        ? FilledButton.tonalIcon(
+            key: widget.buttonKey,
+            style: style,
+            icon: ring,
+            label: label,
+            onPressed: () {},
+          )
+        : OutlinedButton.icon(
+            key: widget.buttonKey,
+            style: style,
+            icon: ring,
+            label: label,
+            onPressed: () {},
+          );
     return Listener(
       onPointerDown: (_) {
         _fired = false;
@@ -93,85 +142,13 @@ class _MuteButtonState extends State<MuteButton>
         _ring.stop();
         _ring.value = 0;
       },
-      child: OutlinedButton.icon(
-        key: const Key('muteButton'),
-        style: OutlinedButton.styleFrom(
-          visualDensity: VisualDensity.compact,
-          padding: const EdgeInsets.symmetric(horizontal: 10),
-        ),
-        icon: SizedBox(
-          width: 20,
-          height: 20,
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              AnimatedBuilder(
-                animation: _ring,
-                builder: (_, _) => CircularProgressIndicator(
-                  key: const Key('muteProgress'),
-                  value: _ring.value,
-                  strokeWidth: 2.5,
-                  color: cs.error,
-                  backgroundColor: Colors.transparent,
-                ),
-              ),
-              const Icon(Icons.volume_up, size: 14),
-            ],
-          ),
-        ),
-        label: const Text('Mute'),
-        // Taps are handled by the Listener (hint / hold).
-        onPressed: () {},
-      ),
+      child: button,
     );
   }
 }
 
-/// "For how long?" right after the hold (mute is already on, until I turn
-/// it off, if this is dismissed).
-Future<void> showMuteDurationSheet(
-  BuildContext context,
-  WalkieController c,
-) async {
-  final picked = await showModalBottomSheet<Duration?>(
-    context: context,
-    showDragHandle: true,
-    builder: (ctx) {
-      Widget opt(String label, Duration? d, {Key? key}) => ListTile(
-        key: key,
-        leading: const Icon(Icons.timer_outlined),
-        title: Text(label),
-        onTap: () => Navigator.pop(ctx, d ?? Duration.zero),
-      );
-      return SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const ListTile(
-              leading: Icon(Icons.volume_off),
-              title: Text('Muted. For how long?'),
-              subtitle: Text(
-                'Talk, rings and voice messages are saved for later.',
-              ),
-            ),
-            opt(
-              '30 minutes',
-              const Duration(minutes: 30),
-              key: const Key('mute30'),
-            ),
-            opt('1 hour', const Duration(hours: 1), key: const Key('mute60')),
-            opt('2 hours', const Duration(hours: 2), key: const Key('mute120')),
-            opt('Until I turn it off', null, key: const Key('muteOff')),
-          ],
-        ),
-      );
-    },
-  );
-  if (picked == null || picked == Duration.zero) return; // stays "until off"
-  await c.muteFor(picked);
-}
-
-/// Banner under the header while muted or in quiet hours.
+/// Banner under the header while muted or in quiet hours. Its Unmute
+/// button needs the same hold as the Mute button (v1.9.7).
 class QuietBanner extends StatelessWidget {
   const QuietBanner({
     super.key,
@@ -199,7 +176,13 @@ class QuietBanner extends StatelessWidget {
         title: Text(text),
         subtitle: const Text('Missed talk, rings and voice messages are kept.'),
         trailing: muted
-            ? TextButton(onPressed: onUnmute, child: const Text('Unmute'))
+            ? MuteButton(
+                muted: true,
+                compact: true,
+                buttonKey: const Key('bannerUnmute'),
+                onMute: () {},
+                onUnmute: onUnmute,
+              )
             : TextButton(onPressed: onSettings, child: const Text('Change')),
       ),
     );
@@ -236,10 +219,11 @@ class QuietSettings extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Mute: hold the Mute button on the Talk screen for a second. '
-              'Quiet hours do the same on a schedule. Either way incoming '
-              'talk is kept in Missed, and rings, beeps, join tones and '
-              'notification sounds stay silent.',
+              'Mute: hold the Mute button on the Talk screen for a second; '
+              'it stays on until you hold it again to unmute. Quiet hours '
+              'do the same on a schedule. Either way incoming talk is kept '
+              'in Missed, and rings, beeps, join tones and notification '
+              'sounds stay silent.',
             ),
             if (c.quietStatus != null)
               Padding(
@@ -256,6 +240,7 @@ class QuietSettings extends StatelessWidget {
                 key: Key('quietSchedule$i'),
                 contentPadding: EdgeInsets.zero,
                 leading: Switch(
+                  key: Key('quietSwitch$i'),
                   value: q.schedules[i].enabled,
                   onChanged: (v) {
                     q.schedules[i].enabled = v;
@@ -263,14 +248,44 @@ class QuietSettings extends StatelessWidget {
                   },
                 ),
                 title: Text(label(context, q.schedules[i])),
+                subtitle: Text(q.schedules[i].enabled ? 'On' : 'Off'),
                 onTap: () => editQuietSchedule(context, c, index: i),
-                trailing: IconButton(
-                  tooltip: 'Delete',
-                  icon: const Icon(Icons.delete_outline),
-                  onPressed: () {
-                    q.schedules.removeAt(i);
-                    c.saveQuietHours();
-                  },
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      key: Key('quietEdit$i'),
+                      tooltip: 'Edit',
+                      icon: const Icon(Icons.edit_outlined),
+                      onPressed: () => editQuietSchedule(context, c, index: i),
+                    ),
+                    IconButton(
+                      key: Key('quietDelete$i'),
+                      tooltip: 'Delete',
+                      icon: const Icon(Icons.delete_outline),
+                      onPressed: () {
+                        final removed = q.schedules.removeAt(i);
+                        c.saveQuietHours();
+                        final m = ScaffoldMessenger.maybeOf(context);
+                        m?.hideCurrentSnackBar();
+                        m?.showSnackBar(
+                          SnackBar(
+                            content: const Text('Quiet hours deleted'),
+                            action: SnackBarAction(
+                              label: 'Undo',
+                              onPressed: () {
+                                q.schedules.insert(
+                                  i.clamp(0, q.schedules.length),
+                                  removed,
+                                );
+                                c.saveQuietHours();
+                              },
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ],
                 ),
               ),
             Align(

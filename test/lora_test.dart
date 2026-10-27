@@ -61,6 +61,7 @@ class FakeRadio implements RadioLink {
     int to = meshBroadcast,
     bool wantAck = false,
     int priority = 0,
+    int channel = 0,
   }) async {
     sent.add(RadioSend(payload, to, wantAck, priority));
   }

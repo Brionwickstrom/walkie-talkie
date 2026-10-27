@@ -113,8 +113,7 @@ enum QuietBypass { none, urgent, repeated, alwaysAllow }
 /// [repeatWindow], or a ring from an "Always allow" person still sounds.
 class QuietHours {
   QuietHours({
-    this.mutedUntil,
-    this.mutedForever = false,
+    this.muted = false,
     List<QuietSchedule>? schedules,
     this.letUrgentThrough = true,
     Set<int>? alwaysAllow,
@@ -123,14 +122,16 @@ class QuietHours {
        alwaysAllow = alwaysAllow ?? {},
        _clock = clock ?? DateTime.now;
 
-  /// Hold this long on the mute button to turn mute on.
+  /// Hold this long on the mute button to turn mute on or off (v1.9.7:
+  /// both ways, a quick tap only shows a hint).
   static const holdToMute = Duration(milliseconds: 1000);
 
   /// A second ring from the same person within this gets through.
   static const repeatWindow = Duration(minutes: 2);
 
-  DateTime? mutedUntil;
-  bool mutedForever;
+  /// Manual mute (v1.9.7: a plain on/off switch, no time limit; stays on
+  /// until turned off, also across restarts).
+  bool muted;
   final List<QuietSchedule> schedules;
   bool letUrgentThrough;
 
@@ -142,13 +143,6 @@ class QuietHours {
   final Map<int, List<(int, DateTime)>> _rings = {};
 
   DateTime get now => _clock();
-
-  /// Manual mute is on.
-  bool get muted {
-    if (mutedForever) return true;
-    final u = mutedUntil;
-    return u != null && now.isBefore(u);
-  }
 
   /// A quiet-hours schedule covers now.
   bool get inQuietHours => schedules.any((s) => s.covers(now));
@@ -174,21 +168,10 @@ class QuietHours {
     return until;
   }
 
-  /// Mute for [d] (null = until turned off).
-  void mute([Duration? d]) {
-    if (d == null) {
-      mutedForever = true;
-      mutedUntil = null;
-    } else {
-      mutedForever = false;
-      mutedUntil = now.add(d);
-    }
-  }
+  /// Mute until turned off.
+  void mute() => muted = true;
 
-  void unmute() {
-    mutedForever = false;
-    mutedUntil = null;
-  }
+  void unmute() => muted = false;
 
   /// 24 h clock ("7:00", "15:30") for [statusText].
   static String clockFor24(DateTime t) =>
@@ -197,10 +180,7 @@ class QuietHours {
   /// Short status for the banner / notification, null when not silenced.
   /// [fmt] formats a time ("7:00", "3:45 PM").
   String? statusText(String Function(DateTime) fmt) {
-    if (muted) {
-      if (mutedForever) return 'Muted';
-      return 'Muted until ${fmt(mutedUntil!)}';
-    }
+    if (muted) return 'Muted';
     if (inQuietHours) {
       final u = quietUntil;
       return u == null ? 'Quiet hours' : 'Quiet hours until ${fmt(u)}';
@@ -235,8 +215,7 @@ class QuietHours {
   // ------------------------------------------------------------ storage
 
   String encode() => jsonEncode({
-    if (mutedForever) 'mf': 1,
-    if (mutedUntil != null) 'mu': mutedUntil!.millisecondsSinceEpoch,
+    if (muted) 'mf': 1,
     'sc': [for (final s in schedules) s.toJson()],
     'ut': letUrgentThrough,
     'aa': alwaysAllow.toList(),
@@ -246,12 +225,15 @@ class QuietHours {
     if (text == null || text.isEmpty) return QuietHours(clock: clock);
     try {
       final j = jsonDecode(text) as Map<String, dynamic>;
+      // v1.9.5/1.9.6 timed mute ("mu": end time): still running -> plain
+      // mute (on until turned off); already over -> not muted.
       final mu = j['mu'];
+      final now = (clock ?? DateTime.now)();
+      final timed =
+          mu is num &&
+          now.isBefore(DateTime.fromMillisecondsSinceEpoch(mu.toInt()));
       return QuietHours(
-        mutedForever: j['mf'] == 1,
-        mutedUntil: mu is num
-            ? DateTime.fromMillisecondsSinceEpoch(mu.toInt())
-            : null,
+        muted: j['mf'] == 1 || timed,
         schedules: [
           for (final s in (j['sc'] as List? ?? const []))
             ?QuietSchedule.fromJson(s),

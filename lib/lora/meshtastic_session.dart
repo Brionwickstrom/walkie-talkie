@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'meshtastic_channels.dart';
 import 'meshtastic_proto.dart';
 
 /// The three Meshtastic BLE characteristics, abstracted so the protocol can
@@ -71,8 +72,20 @@ class MeshtasticSession {
   bool configured = false;
   int? region;
   int? modemPreset;
+
+  /// LoRaConfig.use_preset / channel_num (v1.9.7).
+  bool? usePreset;
+  int? channelNum;
   int? hopLimit;
   bool? txEnabled;
+
+  /// The radio's channels by slot (v1.9.7), keys dropped
+  /// ([MeshRadioChannel] keeps only their kind and hash part).
+  final Map<int, MeshRadioChannel> channels = {};
+
+  /// Times the radio said it restarted / finished sending its settings.
+  int rebootCount = 0;
+  int configCount = 0;
 
   /// BluetoothConfig.mode: 0 random PIN, 1 fixed PIN, 2 no PIN.
   int? pairingMode;
@@ -96,6 +109,7 @@ class MeshtasticSession {
   int received = 0;
 
   final _packets = StreamController<MeshPacketPb>.broadcast();
+  final _admin = StreamController<MeshPacketPb>.broadcast();
   final _changes = StreamController<void>.broadcast();
   final List<StreamSubscription<dynamic>> _subs = [];
   Timer? _poll;
@@ -108,6 +122,44 @@ class MeshtasticSession {
   /// Packets from other nodes (any port).
   Stream<MeshPacketPb> get packets => _packets.stream;
   Stream<void> get changes => _changes.stream;
+
+  /// Admin (and routing) answers from our own radio (v1.9.7).
+  Stream<MeshPacketPb> get adminReplies => _admin.stream;
+
+  /// Name the radio gives unnamed channels (its preset, e.g. "LongFast").
+  String get presetDisplayName =>
+      meshPresetDisplayName(modemPreset ?? 0, usePreset: usePreset ?? true);
+
+  MeshRadioChannel? get primaryChannel {
+    for (final c in channels.values) {
+      if (c.isPrimary) return c;
+    }
+    return null;
+  }
+
+  /// [c]'s link on this radio (name + hash as the firmware computes them).
+  MeshChannelRef refOf(MeshRadioChannel c) =>
+      c.ref(presetDisplayName, primaryKeyXor: primaryChannel?.keyXor ?? 0);
+
+  /// Slot of the channel [ref] on this radio (primary or secondary), or
+  /// null when it is not on it.
+  int? indexOf(MeshChannelRef ref) {
+    final list = channels.values.toList()
+      ..sort((a, b) => a.index.compareTo(b.index));
+    for (final c in list) {
+      if (c.isDisabled) continue;
+      if (refOf(c) == ref) return c.index;
+    }
+    return null;
+  }
+
+  /// Slot of the channel called "admin" (legacy admin channel), else 0.
+  int get adminChannelIndex {
+    for (final c in channels.values) {
+      if (!c.isDisabled && c.name.toLowerCase() == 'admin') return c.index;
+    }
+    return 0;
+  }
 
   /// Other nodes in the radio's DB.
   int get nodeCount => nodes.keys.where((n) => n != myNodeNum).length;
@@ -201,6 +253,8 @@ class MeshtasticSession {
       if (c.region != null) {
         region = c.region;
         modemPreset = c.modemPreset;
+        usePreset = c.usePreset;
+        channelNum = c.channelNum;
         hopLimit = c.hopLimit;
         txEnabled = c.txEnabled;
       }
@@ -211,6 +265,16 @@ class MeshtasticSession {
       changed = true;
     }
     final ch = m.channel;
+    if (ch != null && ch.index >= 0 && ch.index < meshMaxChannels) {
+      channels[ch.index] = MeshRadioChannel.fromChannel(
+        index: ch.index,
+        role: ch.role,
+        name: ch.name,
+        psk: ch.psk,
+        uplinkEnabled: ch.uplink,
+      );
+      changed = true;
+    }
     if (ch != null && ch.isPrimary) {
       primaryChannelName = ch.name;
       primaryUsesDefaultKey = ch.usesDefaultKey;
@@ -224,6 +288,7 @@ class MeshtasticSession {
     }
     if (m.configCompleteId != null && m.configCompleteId == _nonce) {
       configured = true;
+      configCount++;
       final done = _configDone;
       if (done != null && !done.isCompleted) done.complete();
       changed = true;
@@ -231,6 +296,7 @@ class MeshtasticSession {
     if (m.rebooted) {
       // The radio restarted: ask for the configuration again.
       configured = false;
+      rebootCount++;
       _nonce = _rng.nextInt(0x7FFFFFF0) + 1;
       unawaited(wire.write(ToRadio.wantConfig(_nonce!)).catchError((_) {}));
       changed = true;
@@ -242,6 +308,12 @@ class MeshtasticSession {
 
   bool _onPacket(MeshPacketPb p) {
     final d = p.decoded;
+    if (d != null &&
+        (d.portnum == PortNum.admin || d.portnum == PortNum.routing) &&
+        (p.from == myNodeNum || p.from == 0)) {
+      if (!_admin.isClosed) _admin.add(p);
+      return false;
+    }
     if (p.from == myNodeNum) {
       // Our own radio's telemetry (battery).
       if (d != null && d.portnum == PortNum.telemetry) {
@@ -278,6 +350,7 @@ class MeshtasticSession {
     int to = meshBroadcast,
     int port = PortNum.privateApp,
     bool wantAck = false,
+    bool wantResponse = false,
     int priority = 0,
     int channel = 0,
   }) async {
@@ -294,12 +367,51 @@ class MeshtasticSession {
       // times); 3 is the firmware default.
       hopLimit: (hopLimit ?? 0) > 0 ? hopLimit! : 3,
       priority: priority,
-      decoded: MeshData(portnum: port, payload: payload),
+      decoded: MeshData(
+        portnum: port,
+        payload: payload,
+        wantResponse: wantResponse,
+      ),
     );
     await wire.write(ToRadio.packet(pkt));
+    if (port == PortNum.admin) return id;
     sent++;
     if (queueFree != null && queueFree! > 0) queueFree = queueFree! - 1;
     return id;
+  }
+
+  /// One AdminMessage to our own radio (v1.9.7), on its admin channel.
+  Future<int> sendAdmin(Uint8List admin, {bool wantResponse = true}) {
+    final me = myNodeNum;
+    if (me == null) throw StateError('radio not configured');
+    return send(
+      admin,
+      to: me,
+      port: PortNum.admin,
+      wantAck: true,
+      wantResponse: wantResponse,
+      channel: adminChannelIndex,
+    );
+  }
+
+  /// Download the radio's settings again (after a change that did not
+  /// restart it). Completes when done or after [timeout].
+  Future<void> requestConfig({
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    if (_closed) return;
+    configured = false;
+    _nonce = _rng.nextInt(0x7FFFFFF0) + 1;
+    if (_nonce == 69420 || _nonce == 69421) _nonce = _nonce! + 7;
+    final done = Completer<void>();
+    _configDone = done;
+    await wire.write(ToRadio.wantConfig(_nonce!));
+    await drain();
+    try {
+      await done.future.timeout(timeout);
+    } on TimeoutException {
+      // Carry on with what we have.
+    }
   }
 
   Future<void> close() async {
@@ -314,6 +426,7 @@ class MeshtasticSession {
     final done = _configDone;
     if (done != null && !done.isCompleted) done.complete();
     await _packets.close();
+    await _admin.close();
     await _changes.close();
   }
 }

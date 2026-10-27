@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import '../lora/meshtastic_channels.dart' show MeshChannelRef;
 import 'frame.dart';
 import 'mesh.dart' show meshPacketId;
 
@@ -17,6 +18,12 @@ import 'mesh.dart' show meshPacketId;
 /// kind   1 B
 ///  1 fromRadio: hops 1 B, radio node 4 B, snr 1 B (signed, x4), inner
 ///  2 toRadio:   priority 1 B (LoraPriority index), to 4 B (0 = all), inner
+///  3 toRadio on a linked Meshtastic channel (v1.9.7): priority 1 B, to
+///               4 B, channel hash 1 B, name length 1 B, name (UTF-8),
+///               inner. Decoded as [GatewayKind.toRadio] with [mesh] set;
+///               phones send it right before the plain kind 2 copy (older
+///               gateways only know that one, newer ones drop it as a
+///               duplicate).
 ///  4 announce:  UTF-8 JSON {"n": name, "r": radios up, "t": radios,
 ///               "v": 1, "ph": 1 for a phone}
 /// ```
@@ -60,6 +67,7 @@ class GatewayEnvelope {
     this.priority = 2,
     this.to = 0,
     this.info = const {},
+    this.mesh,
   });
 
   factory GatewayEnvelope.fromRadio(
@@ -79,11 +87,13 @@ class GatewayEnvelope {
     Uint8List inner, {
     int priority = 2,
     int to = 0,
+    MeshChannelRef? mesh,
   }) => GatewayEnvelope._(
     GatewayKind.toRadio,
     inner: inner,
     priority: priority,
     to: to,
+    mesh: mesh,
   );
 
   factory GatewayEnvelope.announce({
@@ -105,6 +115,10 @@ class GatewayEnvelope {
   final int to;
   final Map<String, Object?> info;
 
+  /// toRadio: the Meshtastic channel to send it on (v1.9.7), null for
+  /// the radio's primary channel.
+  final MeshChannelRef? mesh;
+
   String get name => (info['n'] as String?) ?? 'Gateway';
   int get radiosUp => (info['r'] as num?)?.toInt() ?? 0;
   int get radios => (info['t'] as num?)?.toInt() ?? 0;
@@ -125,6 +139,19 @@ class GatewayEnvelope {
         ByteData.sublistView(out).setUint32(2, radioNode & 0xFFFFFFFF);
         out[6] = (snr * 4).round().clamp(-128, 127) & 0xFF;
         out.setRange(7, out.length, i);
+        return out;
+      case GatewayKind.toRadio when mesh != null:
+        final i = inner!;
+        var name = utf8.encode(mesh!.name);
+        if (name.length > 32) name = name.sublist(0, 32);
+        final out = Uint8List(8 + name.length + i.length);
+        out[0] = 3;
+        out[1] = priority.clamp(0, 255);
+        ByteData.sublistView(out).setUint32(2, to & 0xFFFFFFFF);
+        out[6] = mesh!.hash & 0xFF;
+        out[7] = name.length;
+        out.setRange(8, 8 + name.length, name);
+        out.setRange(8 + name.length, out.length, i);
         return out;
       case GatewayKind.toRadio:
         final i = inner!;
@@ -158,6 +185,7 @@ class GatewayEnvelope {
     if (f.type != FrameType.gateway) return null;
     final p = f.payload;
     if (p.isEmpty) return null;
+    if (p[0] == 3) return _decodeMesh(p);
     final kind = GatewayKind.fromCode(p[0]);
     if (kind == null) return null;
     try {
@@ -196,6 +224,28 @@ class GatewayEnvelope {
     } catch (_) {
       return null;
     }
+  }
+}
+
+GatewayEnvelope? _decodeMesh(Uint8List p) {
+  try {
+    if (p.length < 8) return null;
+    final n = p[7];
+    if (n > 32 || p.length < 8 + n + Frame.headerSize) return null;
+    final name = utf8.decode(p.sublist(8, 8 + n));
+    final inner = Uint8List.fromList(p.sublist(8 + n));
+    final f2 = Frame.tryDecode(inner);
+    if (f2 == null || f2.type == FrameType.gateway) return null;
+    if (f2.type == FrameType.mesh) return null;
+    return GatewayEnvelope._(
+      GatewayKind.toRadio,
+      inner: inner,
+      priority: p[1],
+      to: ByteData.sublistView(p).getUint32(2),
+      mesh: MeshChannelRef(name, p[6]),
+    );
+  } catch (_) {
+    return null;
   }
 }
 

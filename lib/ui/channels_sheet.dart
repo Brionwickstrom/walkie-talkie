@@ -3,12 +3,21 @@ import 'package:flutter/material.dart';
 import '../app/passcodes.dart';
 import '../app/walkie_controller.dart';
 import 'invite_sheet.dart';
+import 'mesh_channels.dart';
 import 'sheets.dart';
 
 /// One channel row in [ChannelsView].
 class ChannelRow {
-  const ChannelRow(this.channel, {this.title = '', this.emoji = ''});
+  const ChannelRow(
+    this.channel, {
+    this.title = '',
+    this.emoji = '',
+    this.meshName,
+  });
   final int channel;
+
+  /// Shared with this Meshtastic channel (v1.9.7), null if not.
+  final String? meshName;
 
   /// Channel name, '' for none.
   final String title;
@@ -32,6 +41,7 @@ class ChannelsView extends StatelessWidget {
     required this.onPick,
     required this.onNewPrivate,
     required this.onJoinPrivate,
+    this.onMeshImport,
   });
   final int current;
   final List<ChannelRow> privateRows;
@@ -39,6 +49,9 @@ class ChannelsView extends StatelessWidget {
   final ValueChanged<int> onPick;
   final VoidCallback onNewPrivate;
   final VoidCallback onJoinPrivate;
+
+  /// "Share with Meshtastic" (import a Meshtastic channel QR), v1.9.7.
+  final VoidCallback? onMeshImport;
 
   @override
   Widget build(BuildContext context) {
@@ -51,6 +64,25 @@ class ChannelsView extends StatelessWidget {
         color: private ? theme.colorScheme.primary : null,
       ),
       title: Text(r.label),
+      subtitle: r.meshName == null
+          ? null
+          : Row(
+              key: Key('mesh-badge-${r.channel}'),
+              children: [
+                Icon(
+                  Icons.hub_outlined,
+                  size: 14,
+                  color: theme.colorScheme.primary,
+                ),
+                const SizedBox(width: 4),
+                Flexible(
+                  child: Text(
+                    'Shared with Meshtastic · ${r.meshName}',
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
       trailing: r.channel == current
           ? Icon(Icons.check, color: theme.colorScheme.primary)
           : null,
@@ -135,6 +167,19 @@ class ChannelsView extends StatelessWidget {
           ),
         ),
         for (final r in openRows) row(r, private: false),
+        if (onMeshImport != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton.icon(
+                key: const Key('mesh-import-picker'),
+                icon: const Icon(Icons.hub_outlined),
+                label: const Text('Share with Meshtastic'),
+                onPressed: onMeshImport,
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -142,7 +187,12 @@ class ChannelsView extends StatelessWidget {
 
 ChannelRow _rowFor(WalkieController c, int ch) {
   final n = c.nameForChannel(ch);
-  return ChannelRow(ch, title: n?.name ?? '', emoji: n?.emoji ?? '');
+  return ChannelRow(
+    ch,
+    title: n?.name ?? '',
+    emoji: n?.emoji ?? '',
+    meshName: c.meshLinkOf(ch)?.ref.name,
+  );
 }
 
 /// Open the channel picker.
@@ -164,6 +214,7 @@ Future<void> showChannelsSheet(BuildContext context, WalkieController c) async {
         onPick: (ch) => Navigator.pop(ctx, ch),
         onNewPrivate: () => Navigator.pop(ctx, 'new'),
         onJoinPrivate: () => Navigator.pop(ctx, 'join'),
+        onMeshImport: c.radioPaired ? () => Navigator.pop(ctx, 'mesh') : null,
       ),
     ),
   );
@@ -174,6 +225,8 @@ Future<void> showChannelsSheet(BuildContext context, WalkieController c) async {
     await showNewPrivateChannelSheet(context, c);
   } else if (pick == 'join') {
     await showJoinPrivateSheet(context, c);
+  } else if (pick == 'mesh') {
+    await startMeshImport(context, c);
   }
 }
 

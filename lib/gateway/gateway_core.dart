@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import '../core/frame.dart';
 import '../core/gateway_protocol.dart';
 import '../lora/lora_transport.dart' show LoraRateLimiter, LoraPriority;
+import '../lora/meshtastic_channels.dart' show MeshChannelRef;
 import '../lora/meshtastic_proto.dart';
 
 /// One radio as the gateway sees it (a USB / TCP [GatewayRadio] in the
@@ -22,12 +23,18 @@ abstract class GatewayRadioLink {
   /// Decoded packets from other nodes.
   Stream<MeshPacketPb> get packets;
 
+  /// [channel]: Meshtastic channel slot on this radio (0 = primary).
   Future<void> send(
     Uint8List payload, {
     int to = meshBroadcast,
     bool wantAck = false,
     int priority = 0,
+    int channel = 0,
   });
+
+  /// Slot of the linked Meshtastic channel [ref] on this radio (by name
+  /// and hash), null when it does not have it (v1.9.7).
+  int? meshChannelIndex(MeshChannelRef ref);
 }
 
 /// One relay room socket (WebSocket in the container, a fake in tests).
@@ -50,9 +57,13 @@ class GatewayTxItem {
     this.priority,
     this.at,
     this.seq,
-    this.sender,
-  );
+    this.sender, [
+    this.mesh,
+  ]);
   final Uint8List bytes;
+
+  /// Linked Meshtastic channel to send it on (resolved per radio).
+  final MeshChannelRef? mesh;
   final int to; // Meshtastic node (broadcast = meshBroadcast)
   final LoraPriority priority;
   final DateTime at;
@@ -175,6 +186,16 @@ class GatewayCore {
   final Map<String, _RoomState> _rooms = {};
   final Map<int, LoraHeard> loraPeers = {};
   final Map<int, OtherGateway> others = {};
+
+  /// Walkie channel number -> linked Meshtastic channel (v1.9.7, from
+  /// gateway.json "meshChannels"), for requests from phones that do not
+  /// name one. Open channels only (sealed frames never use it).
+  Map<int, MeshChannelRef> meshLinks = {};
+
+  /// Sent on a linked channel / linked channel not on that radio (primary
+  /// used instead).
+  int sentOnLinked = 0;
+  int linkMissing = 0;
   final Map<int, List<DateTime>> _requests = {};
   final Map<String, DateTime> _presenceSent = {};
   int _seq = 0;
@@ -415,6 +436,8 @@ class GatewayCore {
         _presenceSent.remove(_presenceSent.keys.first);
       }
     }
+    final mesh =
+        env.mesh ?? (f.type == FrameType.sealed ? null : meshLinks[f.channel]);
     final targets = <GatewayRadioSlot, int>{};
     if (env.to != 0) {
       final h = loraPeers[env.to];
@@ -441,7 +464,7 @@ class GatewayCore {
           (i) => i.priority == LoraPriority.presence && i.sender == f.senderId,
         );
       }
-      q.add(GatewayTxItem(inner, e.value, pr, now, _txSeq++, f.senderId));
+      q.add(GatewayTxItem(inner, e.value, pr, now, _txSeq++, f.senderId, mesh));
       while (q.length > maxQueue) {
         GatewayTxItem? worst;
         for (final i in q) {
@@ -495,10 +518,22 @@ class GatewayCore {
             return p != 0 ? p : a.seq.compareTo(b.seq);
           });
           final i = s.queue.removeAt(0);
+          var slot = 0;
+          final mesh = i.mesh;
+          if (mesh != null) {
+            final idx = s.link.meshChannelIndex(mesh);
+            if (idx != null) {
+              slot = idx;
+              sentOnLinked++;
+            } else {
+              linkMissing++;
+            }
+          }
           try {
             await s.link.send(
               i.bytes,
               to: i.to,
+              channel: slot,
               wantAck: i.to != meshBroadcast,
               priority:
                   i.priority == LoraPriority.urgent ||
@@ -593,6 +628,11 @@ class GatewayCore {
       'queueOverflow': overflow,
       'rejected': rejected,
       'noRoute': noRoute,
+      'sentOnLinkedMeshChannel': sentOnLinked,
+      'linkedMeshChannelMissing': linkMissing,
+      'meshChannelLinks': {
+        for (final e in meshLinks.entries) '${e.key}': e.value.toJson(),
+      },
       'loraPhones': loraPeers.length,
       'rooms': [
         for (final e in _rooms.entries)

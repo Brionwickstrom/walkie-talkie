@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import '../core/frame.dart';
 import '../core/transport.dart';
+import 'meshtastic_channels.dart';
 import 'meshtastic_proto.dart';
 
 /// What the LoRa transport needs from a paired Meshtastic radio
@@ -19,11 +20,15 @@ abstract class RadioLink {
   /// Free slots in the radio's transmit queue, null if unknown.
   int? get queueFree;
 
+  /// [channel]: the radio's Meshtastic channel slot (0 = primary). Walkie
+  /// traffic of a Walkie channel linked to a Meshtastic channel (v1.9.7)
+  /// goes out on that channel's slot, still as PRIVATE_APP.
   Future<void> send(
     Uint8List payload, {
     int to = meshBroadcast,
     bool wantAck = false,
     int priority = 0,
+    int channel = 0,
   });
 }
 
@@ -84,12 +89,15 @@ class LoraRateLimiter {
 }
 
 class _Queued {
-  _Queued(this.bytes, this.peers, this.priority, this.at, this.seq);
+  _Queued(this.bytes, this.peers, this.priority, this.at, this.seq, this.mesh);
   final Uint8List bytes;
   final Set<int>? peers;
   final LoraPriority priority;
   final DateTime at;
   final int seq;
+
+  /// Linked Meshtastic channel (resolved to a slot when it goes out).
+  final MeshChannelRef? mesh;
 }
 
 /// Signal of the last LoRa packet heard from an app phone.
@@ -149,6 +157,19 @@ class LoraTransport extends Transport {
   Timer? _pump;
   bool _started = false;
   int _seq = 0;
+
+  /// Meshtastic channel a frame should go out on (v1.9.7): its Walkie
+  /// channel's link, null for the radio's primary channel. Set by the app.
+  MeshChannelRef? Function(Frame frame)? meshLinkFor;
+
+  /// The slot of a linked channel on the paired radio, null when the
+  /// radio does not have it (then the primary channel is used).
+  int? Function(MeshChannelRef ref)? meshIndexOf;
+
+  /// Packets sent on a linked Meshtastic channel / on the primary because
+  /// the radio did not have the linked one.
+  int sentOnLinked = 0;
+  int linkMissing = 0;
 
   int sentPackets = 0;
   int receivedPackets = 0;
@@ -259,10 +280,13 @@ class LoraTransport extends Transport {
   /// Queue an encoded frame for [peerIds] (null = every app phone in radio
   /// range). Returns false if it does not fit a LoRa packet or the radio is
   /// not connected.
+  /// [meshChannel]: send on this Meshtastic channel (a gateway request
+  /// that names it); else [meshLinkFor] decides.
   bool sendRadio(
     Uint8List frame, {
     Set<int>? peerIds,
     LoraPriority priority = LoraPriority.normal,
+    MeshChannelRef? meshChannel,
   }) {
     if (status != TransportStatus.running) return false;
     if (frame.length > loraPayloadBudget) return false;
@@ -274,7 +298,15 @@ class LoraTransport extends Transport {
     if (priority == LoraPriority.presence) {
       _queue.removeWhere((q) => q.priority == LoraPriority.presence);
     }
-    _queue.add(_Queued(frame, peerIds, priority, now, _seq++));
+    var mesh = meshChannel;
+    if (mesh == null) {
+      final link = meshLinkFor;
+      if (link != null) {
+        final f = Frame.tryDecode(frame);
+        if (f != null) mesh = link(f);
+      }
+    }
+    _queue.add(_Queued(frame, peerIds, priority, now, _seq++, mesh));
     while (_queue.length > maxQueue) {
       // Drop the least important, oldest packet.
       _Queued? worst;
@@ -333,11 +365,23 @@ class LoraTransport extends Transport {
             ack = true;
           }
         }
+        var slot = 0;
+        final mesh = q.mesh;
+        if (mesh != null) {
+          final i = meshIndexOf?.call(mesh);
+          if (i != null) {
+            slot = i;
+            sentOnLinked++;
+          } else {
+            linkMissing++;
+          }
+        }
         try {
           await radio.send(
             q.bytes,
             to: to,
             wantAck: ack,
+            channel: slot,
             priority:
                 q.priority == LoraPriority.urgent ||
                     q.priority == LoraPriority.sos
@@ -358,5 +402,7 @@ class LoraTransport extends Transport {
   String? get debugInfo =>
       '${radio.ready ? 'radio ready' : 'no radio'} · sent $sentPackets · '
       'rx $receivedPackets · queue ${_queue.length}'
-      '${expired > 0 ? ' · expired $expired' : ''}';
+      '${expired > 0 ? ' · expired $expired' : ''}'
+      '${sentOnLinked > 0 ? ' · on linked Meshtastic channel $sentOnLinked' : ''}'
+      '${linkMissing > 0 ? ' · linked channel missing on radio $linkMissing' : ''}';
 }

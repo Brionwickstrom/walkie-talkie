@@ -465,12 +465,7 @@ class _HomePageState extends State<HomePage> {
             record: _RecordButton(controller: c),
             mute: MuteButton(
               muted: c.quiet.muted,
-              onMute: () async {
-                await c.muteFor(null);
-                if (context.mounted) {
-                  await showMuteDurationSheet(context, c);
-                }
-              },
+              onMute: c.mute,
               onUnmute: c.unmute,
             ),
           ),

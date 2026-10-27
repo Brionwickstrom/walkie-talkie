@@ -7,6 +7,7 @@ import '../lora/meshtastic_proto.dart';
 import '../lora/meshtastic_session.dart';
 import '../lora/stream_radio.dart';
 import '../platform/platform_caps.dart';
+import 'mesh_channels.dart';
 
 /// How to pair, shown before and while pairing.
 const radioPinHelp =
@@ -337,6 +338,8 @@ class _RadioSettingsState extends State<RadioSettings> {
             ),
           );
         }
+        // v1.9.7: Meshtastic channels shared with Walkie channels.
+        children.add(MeshChannelsSection(controller: c));
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: children,

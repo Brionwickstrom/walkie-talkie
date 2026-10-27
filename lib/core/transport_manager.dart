@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import '../app/power_plan.dart';
 import '../lora/lora_transport.dart';
 import '../lora/meshtastic_proto.dart' show loraPayloadBudget;
+import '../lora/meshtastic_channels.dart' show MeshChannelRef;
 
 import 'channel_crypto.dart';
 import 'lobby.dart';
@@ -746,6 +747,10 @@ class TransportManager {
       radioReachable(peerId) ||
       gatewayReachable(peerId);
 
+  /// Meshtastic channel linked to an inner frame's Walkie channel
+  /// (v1.9.7; open channels only, never sealed frames), set by the app.
+  MeshChannelRef? Function(Frame inner)? meshLinkFor;
+
   /// The paired LoRa radio transport, if any.
   LoraTransport? get radio {
     for (final t in _transports) {
@@ -984,6 +989,21 @@ class TransportManager {
     if (net == null || net.status != TransportStatus.running) return false;
     if (bytes.length > loraPayloadBudget) return false;
     gatewaySeenIds.add(gatewayPacketId(bytes));
+    // v1.9.7: a Walkie channel linked to a Meshtastic channel asks for that
+    // channel first (newer gateways), then the plain request (older ones;
+    // newer gateways drop it as a duplicate).
+    final link = meshLinkFor;
+    final inner = link == null ? null : Frame.tryDecode(bytes);
+    final mesh = inner == null ? null : link!(inner);
+    if (mesh != null) {
+      final m = GatewayEnvelope.toRadio(
+        bytes,
+        priority: priority.index,
+        to: to ?? 0,
+        mesh: mesh,
+      ).toFrame(senderId: localNodeId, channel: _wireChannel, seq: _nextSeq());
+      unawaited(_safeSend(net, m.encode(), null));
+    }
     final env = GatewayEnvelope.toRadio(
       bytes,
       priority: priority.index,
@@ -1055,7 +1075,12 @@ class TransportManager {
     final pr = env.priority < LoraPriority.values.length
         ? LoraPriority.values[env.priority]
         : LoraPriority.normal;
-    if (r.sendRadio(env.inner!, peerIds: to == 0 ? null : {to}, priority: pr)) {
+    if (r.sendRadio(
+      env.inner!,
+      peerIds: to == 0 ? null : {to},
+      priority: pr,
+      meshChannel: env.mesh,
+    )) {
       gatewayTransmitted++;
     }
   }

@@ -17,6 +17,7 @@ import 'package:walkie_talkie/gateway/gateway_core.dart';
 import 'package:walkie_talkie/gateway/gateway_io.dart';
 import 'package:walkie_talkie/gateway/stream_wire.dart';
 import 'package:walkie_talkie/lora/lora_transport.dart';
+import 'package:walkie_talkie/lora/meshtastic_channels.dart';
 import 'package:walkie_talkie/lora/meshtastic_proto.dart';
 import 'package:walkie_talkie/lora/protobuf.dart';
 
@@ -87,10 +88,18 @@ class AirRadio implements GatewayRadioLink, RadioLink {
     int to = meshBroadcast,
     bool wantAck = false,
     int priority = 0,
+    int channel = 0,
   }) async {
     sent.add(RadioTx(payload, to, wantAck));
+    channels.add(channel);
     air?.transmit(this, payload, to);
   }
+
+  /// Slots used by [send] (v1.9.7) and this radio's linked channels.
+  final channels = <int>[];
+  final meshSlots = <MeshChannelRef, int>{};
+  @override
+  int? meshChannelIndex(MeshChannelRef ref) => meshSlots[ref];
 
   void hear(Uint8List payload, {required int from, int to = meshBroadcast}) =>
       _packets.add(

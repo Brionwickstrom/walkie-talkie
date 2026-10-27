@@ -30,6 +30,9 @@ class PortNum {
   static const routing = 5;
   static const telemetry = 67;
 
+  /// AdminMessage (settings / channels of a radio), v1.9.7.
+  static const admin = 6;
+
   /// "Private applications should use portnums >= 256": the stock apps
   /// ignore it, the firmware still relays it.
   static const privateApp = 256;
@@ -392,6 +395,8 @@ class RadioConfigPb {
   RadioConfigPb({
     this.region,
     this.modemPreset,
+    this.usePreset,
+    this.channelNum,
     this.hopLimit,
     this.txEnabled,
     this.btMode,
@@ -399,6 +404,12 @@ class RadioConfigPb {
   });
   final int? region;
   final int? modemPreset;
+
+  /// LoRaConfig.use_preset (false: custom bandwidth / spread factor).
+  final bool? usePreset;
+
+  /// LoRaConfig.channel_num (frequency slot, 0 = from the channel name).
+  final int? channelNum;
   final int? hopLimit;
   final bool? txEnabled;
 
@@ -410,10 +421,14 @@ class RadioConfigPb {
     for (final f in pbDecode(b)) {
       if (f.wireType != 2) continue;
       if (f.number == 6) {
-        var region = 0, preset = 0, hop = 0;
-        var tx = false;
+        var region = 0, preset = 0, hop = 0, slot = 0;
+        var tx = false, use = false;
         for (final l in pbDecode(f.asBytes)) {
           switch (l.number) {
+            case 1:
+              use = l.asBool;
+            case 11:
+              slot = l.asInt;
             case 2:
               preset = l.asInt;
             case 7:
@@ -427,6 +442,8 @@ class RadioConfigPb {
         return RadioConfigPb(
           region: region,
           modemPreset: preset,
+          usePreset: use,
+          channelNum: slot,
           hopLimit: hop,
           txEnabled: tx,
         );
@@ -444,13 +461,19 @@ class RadioConfigPb {
   }
 }
 
-/// `Channel`: index=1, settings=2 (psk=2, name=3), role=3 (1 = primary).
+/// `Channel`: index=1, settings=2 (psk=2, name=3, uplink_enabled=5),
+/// role=3 (0 disabled, 1 primary, 2 secondary). The key ([psk]) is never
+/// printed ([toString]) and the session drops it right away.
 class ChannelPb {
-  ChannelPb(this.index, this.name, this.psk, this.role);
+  ChannelPb(this.index, this.name, this.psk, this.role, {this.uplink = false});
   final int index;
   final String name;
   final Uint8List psk;
   final int role;
+  final bool uplink;
+
+  @override
+  String toString() => 'ChannelPb($index, role $role, "$name")';
 
   bool get isPrimary => role == 1;
 
@@ -462,6 +485,7 @@ class ChannelPb {
     var index = 0, role = 0;
     var name = '';
     var psk = Uint8List(0);
+    var up = false;
     for (final f in pbDecode(b)) {
       switch (f.number) {
         case 1:
@@ -470,12 +494,13 @@ class ChannelPb {
           for (final s in pbDecode(f.asBytes)) {
             if (s.number == 2) psk = Uint8List.fromList(s.asBytes);
             if (s.number == 3) name = s.asString;
+            if (s.number == 5) up = s.asBool;
           }
         case 3:
           role = f.asInt;
       }
     }
-    return ChannelPb(index, name, psk, role);
+    return ChannelPb(index, name, psk, role, uplink: up);
   }
 }
 

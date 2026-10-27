@@ -4,13 +4,14 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
+import '../lora/meshtastic_channels.dart';
 import '../lora/meshtastic_proto.dart';
 import '../lora/meshtastic_session.dart';
 import 'gateway_core.dart';
 import 'stream_wire.dart';
 
 /// Gateway container version (shown in /healthz).
-const String gatewayVersion = '1.0.0';
+const String gatewayVersion = '1.1.0';
 
 void gwLog(String msg) {
   final t = DateTime.now().toIso8601String().substring(0, 19);
@@ -53,9 +54,15 @@ class GatewayConfig {
     required this.healthPort,
     required this.rooms,
     required this.radios,
+    this.meshChannels = const {},
   });
 
   final String name;
+
+  /// Walkie channel -> linked Meshtastic channel (v1.9.7):
+  /// "meshChannels": {"5": {"name": "Trail", "hash": 123}}. Optional: the
+  /// v1.9.7 app names the channel in its requests anyway.
+  final Map<int, MeshChannelRef> meshChannels;
   final Uri relay;
   final int healthPort;
   final Set<String> rooms;
@@ -74,7 +81,8 @@ class GatewayConfig {
     "Radios: add one entry per radio. USB: {\\"name\\": \\"...\\", \\"serial\\": \\"auto\\"} or a path like /dev/ttyACM0.",
     "Wi-Fi / network radio: {\\"name\\": \\"Van radio\\", \\"tcp\\": \\"192.168.1.50:4403\\"}.",
     "Turn one off without deleting it: \\"enabled\\": false.",
-    "Radios and rooms are picked up within 15 s, no restart needed. Private channels join on their own when their LoRa traffic is heard."
+    "Radios and rooms are picked up within 15 s, no restart needed. Private channels join on their own when their LoRa traffic is heard.",
+    "Optional meshChannels: {\\"5\\": {\\"name\\": \\"Trail\\", \\"hash\\": 123}} sends open Walkie channel 5 on that Meshtastic channel of each radio (the app shows name and hash under Meshtastic channels). Phones with v1.9.7 tell the gateway themselves."
   ]
 }
 ''';
@@ -86,7 +94,17 @@ class GatewayConfig {
       final c = RadioConfig.fromJson(r);
       if (c != null) radios.add(c);
     }
+    final mesh = <int, MeshChannelRef>{};
+    final mc = j['meshChannels'];
+    if (mc is Map) {
+      mc.forEach((k, v) {
+        final ch = int.tryParse('$k');
+        final ref = MeshChannelRef.fromJson(v);
+        if (ch != null && ch >= 1 && ch <= 16 && ref != null) mesh[ch] = ref;
+      });
+    }
     return GatewayConfig(
+      meshChannels: mesh,
       name: (j['name'] as String?) ?? 'Home gateway',
       relay: Uri.parse((j['relay'] as String?) ?? 'ws://127.0.0.1:47480/ws'),
       healthPort: (j['healthPort'] as num?)?.toInt() ?? 47481,
@@ -136,11 +154,21 @@ class GatewayRadio implements GatewayRadioLink {
     int to = meshBroadcast,
     bool wantAck = false,
     int priority = 0,
+    int channel = 0,
   }) async {
     final s = session;
     if (s == null || !ready) throw StateError('radio not ready');
-    await s.send(payload, to: to, wantAck: wantAck, priority: priority);
+    await s.send(
+      payload,
+      to: to,
+      wantAck: wantAck,
+      priority: priority,
+      channel: channel,
+    );
   }
+
+  @override
+  int? meshChannelIndex(MeshChannelRef ref) => session?.indexOf(ref);
 
   void start() => unawaited(_loop());
 
@@ -308,6 +336,20 @@ class GatewayRadio implements GatewayRadioLink {
         'nodesInRadioDb': s.nodeCount,
         'channelName': s.primaryChannelName,
         'channelUsesDefaultKey': s.primaryUsesDefaultKey,
+        // Names and hashes only, never keys.
+        'meshChannels': [
+          for (final c
+              in (s.channels.values.toList()
+                ..sort((a, b) => a.index.compareTo(b.index))))
+            if (!c.isDisabled)
+              {
+                'index': c.index,
+                'role': c.isPrimary ? 'primary' : 'secondary',
+                'name': s.refOf(c).name,
+                'hash': s.refOf(c).hash,
+                'key': c.keyKind.name,
+              },
+        ],
         'battery': s.battery,
         'channelUtilization': s.channelUtilization,
         'txEnabled': s.txEnabled,
@@ -458,7 +500,7 @@ class GatewayService {
       nodeId: id,
       roomFactory: (room) => WsRoom(config.relay, room, id),
       rooms: config.rooms,
-    );
+    )..meshLinks = config.meshChannels;
     _applyRadios(config.radios);
     _timers.addAll([
       Timer.periodic(const Duration(milliseconds: 500), (_) => core.tick()),
@@ -497,6 +539,7 @@ class GatewayService {
       final c = await _readConfig();
       _applyRadios(c.radios);
       core.setRooms(c.rooms);
+      core.meshLinks = c.meshChannels;
       config = c;
       gwLog('config reloaded');
     } catch (e) {

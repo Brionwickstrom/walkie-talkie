@@ -54,6 +54,7 @@ class AirRadio implements RadioLink {
     int to = meshBroadcast,
     bool wantAck = false,
     int priority = 0,
+    int channel = 0,
   }) async {
     sent.add((payload, to, wantAck));
     final o = other;

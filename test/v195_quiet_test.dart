@@ -67,16 +67,15 @@ void main() {
   });
 
   group('mute', () {
-    test('timed mute runs out, forever mute stays, unmute', () {
+    test('v1.9.7: mute is on/off, no time limit, until unmuted', () {
       var now = mon(15);
       final q = QuietHours(clock: () => now);
       expect(q.silenced, isFalse);
-      q.mute(const Duration(minutes: 30));
-      expect(q.muted, isTrue);
-      expect(q.statusText(QuietHours.clockFor24), 'Muted until 15:30');
-      now = mon(15, 30);
-      expect(q.muted, isFalse);
       q.mute();
+      expect(q.muted, isTrue);
+      expect(q.statusText(QuietHours.clockFor24), 'Muted');
+      now = mon(18);
+      expect(q.muted, isTrue);
       now = day(3, 9);
       expect(q.muted, isTrue);
       expect(q.statusText(QuietHours.clockFor24), 'Muted');
@@ -137,7 +136,7 @@ void main() {
   group('persistence', () {
     test('encode / decode round trip', () {
       final q = QuietHours(
-        mutedUntil: DateTime(2026, 10, 27, 15, 45),
+        muted: true,
         schedules: [
           QuietSchedule(start: 22 * 60, end: 7 * 60, days: {1, 2, 3}),
           QuietSchedule(start: 60, end: 120, enabled: false),
@@ -146,8 +145,7 @@ void main() {
         alwaysAllow: {0xBEEF},
       );
       final r = QuietHours.decode(q.encode());
-      expect(r.mutedUntil, q.mutedUntil);
-      expect(r.mutedForever, isFalse);
+      expect(r.muted, isTrue);
       expect(r.schedules.length, 2);
       expect(r.schedules[0].days, {1, 2, 3});
       expect(r.schedules[0].start, 22 * 60);
@@ -168,7 +166,7 @@ void main() {
       s.shareRadio = false;
       await store.save(s);
       final again = await store.load(defaultChannel: 1);
-      expect(again.quiet.mutedForever, isTrue);
+      expect(again.quiet.muted, isTrue);
       expect(again.quiet.schedules.single.label, '22:00–7:00 · Every day');
       expect(again.shareRadio, isFalse);
     });
@@ -217,7 +215,7 @@ void main() {
       await t.pump();
       await t.pump(const Duration(milliseconds: 500));
       final ring = t.widget<CircularProgressIndicator>(
-        find.byKey(const Key('muteProgress')),
+        find.byKey(const Key('muteButtonProgress')),
       );
       expect(ring.value, closeTo(0.5, 0.1));
       expect(log, isEmpty);
@@ -241,12 +239,34 @@ void main() {
       expect(log, isEmpty);
     });
 
-    testWidgets('muted: one tap unmutes', (t) async {
+    testWidgets('v1.9.7 muted: a tap only shows "Hold to unmute"', (t) async {
       final log = <String>[];
       await pump(t, muted: true, log: log);
-      expect(find.text('Muted · tap to unmute'), findsOneWidget);
+      expect(find.text('Muted · hold to unmute'), findsOneWidget);
       await t.tap(find.byKey(const Key('muteButton')));
+      await t.pump(const Duration(milliseconds: 100));
+      expect(find.text('Hold to unmute'), findsOneWidget);
+      expect(log, isEmpty);
+      await t.pump(const Duration(seconds: 2));
+    });
+
+    testWidgets('v1.9.7 muted: holding about a second unmutes', (t) async {
+      final log = <String>[];
+      await pump(t, muted: true, log: log);
+      final g = await t.startGesture(
+        t.getCenter(find.byKey(const Key('muteButton'))),
+      );
+      await t.pump();
+      await t.pump(const Duration(milliseconds: 500));
+      final ring = t.widget<CircularProgressIndicator>(
+        find.byKey(const Key('muteButtonProgress')),
+      );
+      expect(ring.value, closeTo(0.5, 0.1));
+      expect(log, isEmpty);
+      await t.pump(const Duration(milliseconds: 600));
       expect(log, ['unmute']);
+      await g.up();
+      await t.pump();
     });
   });
 }

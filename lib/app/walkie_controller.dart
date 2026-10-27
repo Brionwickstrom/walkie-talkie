@@ -21,6 +21,7 @@ import 'conn_probes.dart';
 import 'connection_test.dart';
 import 'debug_log.dart';
 import 'invite.dart';
+import 'mesh_links.dart';
 import 'setup.dart';
 import 'people_refresh.dart';
 import 'power_plan.dart';
@@ -48,6 +49,8 @@ import '../friends/friend_ring_link.dart';
 import '../history/talk_history.dart';
 import '../lora/lora_transport.dart';
 import '../lora/meshtastic_ble.dart';
+import '../lora/meshtastic_admin.dart';
+import '../lora/meshtastic_channels.dart';
 import '../lora/radio_clip.dart';
 import '../messaging/inbox.dart';
 import '../messaging/messenger.dart';
@@ -164,6 +167,12 @@ class WalkieController extends ChangeNotifier {
     );
     manager.relayForOthers = settings.relayForOthers;
     manager.shareRadio = settings.shareRadio;
+    // v1.9.7: open Walkie channels linked to a Meshtastic channel go out
+    // on that channel's slot of the paired radio (looked up by name +
+    // hash on whichever radio is paired).
+    loraTransport.meshLinkFor = meshLinkForFrame;
+    loraTransport.meshIndexOf = (ref) => radioDevice.session?.indexOf(ref);
+    manager.meshLinkFor = meshLinkForFrame;
     // Only form a Wi-Fi Direct group with phones we cannot already reach
     // over a shared Wi-Fi / hotspot.
     wd?.sharedNetworkWith = (id) {
@@ -1899,7 +1908,7 @@ class WalkieController extends ChangeNotifier {
   bool get silenced => quiet.silenced;
   String? _lastQuietStatus;
 
-  /// "Muted until 3:45", "Quiet hours until 7:00", or null.
+  /// "Muted", "Quiet hours until 7:00", or null.
   String? get quietStatus => quiet.statusText(quietClock);
 
   static String quietClock(DateTime t) {
@@ -1908,9 +1917,9 @@ class WalkieController extends ChangeNotifier {
         '${t.hour < 12 ? 'AM' : 'PM'}';
   }
 
-  /// Mute for [d] (null = until I turn it off).
-  Future<void> muteFor(Duration? d) async {
-    quiet.mute(d);
+  /// Mute until turned off (v1.9.7: no time limit).
+  Future<void> mute() async {
+    quiet.mute();
     _lastQuietStatus = quietStatus;
     debugLog.add('quiet', _lastQuietStatus ?? 'muted');
     // Whatever live talk is still in the speaker stops now.
@@ -2622,6 +2631,120 @@ class WalkieController extends ChangeNotifier {
     settings.radioName = null;
     await settingsStore.save(settings);
     notifyListeners();
+  }
+
+  // ----------------------------------- Meshtastic channels (v1.9.7)
+
+  /// Link of an inner frame's Walkie channel: open channels only (sealed
+  /// frames, private channels, friends, gateways and the lobby never).
+  MeshChannelRef? meshLinkForFrame(Frame f) {
+    if (f.type == FrameType.sealed ||
+        f.type == FrameType.gateway ||
+        f.type == FrameType.lobby ||
+        f.type == FrameType.mesh) {
+      return null;
+    }
+    final ch = f.channel;
+    if (ch < 1 || ch > 16 || settings.isPrivate(ch)) return null;
+    return settings.meshLinks[ch]?.ref;
+  }
+
+  /// The Meshtastic channel [ch] is shared with, or null.
+  MeshLink? meshLinkOf(int ch) =>
+      settings.isPrivate(ch) ? null : settings.meshLinks[ch];
+
+  /// The paired radio's channels (primary and secondary, by slot).
+  List<MeshRadioChannel> get radioChannels {
+    final s = radioDevice.session;
+    if (s == null) return const [];
+    return s.channels.values.where((c) => !c.isDisabled).toList()
+      ..sort((a, b) => a.index.compareTo(b.index));
+  }
+
+  MeshChannelRef? radioChannelRef(MeshRadioChannel c) =>
+      radioDevice.session?.refOf(c);
+
+  /// Walkie channel linked to [ref], or null.
+  int? walkieChannelFor(MeshChannelRef ref) {
+    for (final e in settings.meshLinks.entries) {
+      if (e.value.ref == ref && !settings.isPrivate(e.key)) return e.key;
+    }
+    return null;
+  }
+
+  /// Open channel numbers that can be linked (not private, not linked).
+  List<int> get linkableChannels => [
+    for (var ch = 1; ch <= 16; ch++)
+      if (!settings.isPrivate(ch) && !settings.meshLinks.containsKey(ch)) ch,
+  ];
+
+  MeshChannelWriter meshWriter() =>
+      MeshChannelWriter(() => radioDevice.session);
+
+  /// Link open Walkie channel [ch] to [ref]; [name] names a new channel
+  /// ("Shared with Meshtastic" when the user made one). Null when done,
+  /// else what is wrong.
+  Future<String?> linkMeshChannel(int ch, MeshLink link, {String? name}) async {
+    if (ch < 1 || ch > 16) return 'Pick a channel 1-16.';
+    if (settings.isPrivate(ch)) {
+      return 'Private Walkie channels cannot be shared with Meshtastic.';
+    }
+    final other = walkieChannelFor(link.ref);
+    if (other != null && other != ch) {
+      return 'That Meshtastic channel is already shared with CH $other.';
+    }
+    settings.meshLinks[ch] = link;
+    if (name != null && name.trim().isNotEmpty) {
+      settings.channelNames[ch] = ChannelName(
+        name.trim().length > 30 ? name.trim().substring(0, 30) : name.trim(),
+        settings.channelNames[ch]?.emoji ?? '',
+        DateTime.now().millisecondsSinceEpoch,
+      );
+    }
+    await settingsStore.save(settings);
+    debugLog.add('mesh', 'CH $ch shared with a Meshtastic channel');
+    notifyListeners();
+    return null;
+  }
+
+  /// Unlink CH [ch]; [removeFromRadio] also turns that channel off on the
+  /// paired radio (secondary channels only). Null when done.
+  Future<String?> unlinkMeshChannel(
+    int ch, {
+    bool removeFromRadio = false,
+    void Function(MeshWriteStep step)? onStep,
+  }) async {
+    final link = settings.meshLinks[ch];
+    if (link == null) return null;
+    String? err;
+    if (removeFromRadio) {
+      final s = radioDevice.session;
+      final i = s?.indexOf(link.ref);
+      if (s == null) {
+        err =
+            'Unlinked, but the radio is not connected, so the channel is '
+            'still on it.';
+      } else if (i == null) {
+        // Not on this radio: nothing to remove.
+      } else if (i == 0) {
+        err =
+            'Unlinked. That is your radio\'s main channel, so it stays on '
+            'the radio.';
+      } else {
+        try {
+          await meshWriter().removeChannel(i, onStep: onStep);
+        } on MeshWriteException catch (e) {
+          err = 'Unlinked, but: ${e.message}';
+        } catch (_) {
+          err = 'Unlinked, but the radio did not take the change.';
+        }
+      }
+    }
+    settings.meshLinks.remove(ch);
+    await settingsStore.save(settings);
+    debugLog.add('mesh', 'CH $ch no longer shared with Meshtastic');
+    notifyListeners();
+    return err;
   }
 
   /// App phones heard over the radio recently (for Settings).

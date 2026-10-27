@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../friends/friend_links.dart';
 import '../trip/trip_settings.dart';
 import 'call_signs.dart';
+import 'mesh_links.dart';
 import 'quiet.dart';
 
 /// A channel's display name and emoji (shared with the others on it via
@@ -72,6 +73,7 @@ class AppSettings {
     Set<int>? announceScopes,
     Set<int>? muted,
     Map<int, String>? blocked,
+    Map<int, MeshLink>? meshLinks,
   }) : quiet = quiet ?? QuietHours(),
        trip = trip ?? TripSettings(),
        privateChannels = privateChannels ?? {},
@@ -81,7 +83,8 @@ class AppSettings {
        channelAdmins = channelAdmins ?? {},
        announceScopes = announceScopes ?? {},
        muted = muted ?? {},
-       blocked = blocked ?? {} {
+       blocked = blocked ?? {},
+       meshLinks = meshLinks ?? {} {
     // v1.1.x prefilled the name box with "Phone 38EA", so pressing Save
     // stored it as if typed. Treat that as "never customized".
     if (customName != null &&
@@ -251,6 +254,9 @@ class AppSettings {
   /// Blocked people (id -> name, for the unblock list).
   final Map<int, String> blocked;
 
+  /// Open Walkie channels shared with a Meshtastic channel (v1.9.7).
+  final Map<int, MeshLink> meshLinks;
+
   static String encodeSocial(AppSettings s) => jsonEncode({
     'cn': {
       for (final e in s.channelNames.entries) '${e.key}': e.value.toJson(),
@@ -375,6 +381,7 @@ class SharedPrefsSettingsStore implements SettingsStore {
   static const _kRadioId = 'lora_radio_id';
   static const _kRadioName = 'lora_radio_name';
   static const _kTrip = 'trip_settings';
+  static const _kMeshLinks = 'mesh_links';
 
   @override
   Future<AppSettings> load({required int defaultChannel}) async {
@@ -443,6 +450,7 @@ class SharedPrefsSettingsStore implements SettingsStore {
       radioId: prefs?.getString(_kRadioId),
       radioName: prefs?.getString(_kRadioName),
       trip: TripSettings.decode(prefs?.getString(_kTrip)),
+      meshLinks: MeshLink.decodeMap(prefs?.getString(_kMeshLinks)),
     );
   }
 
@@ -500,6 +508,7 @@ class SharedPrefsSettingsStore implements SettingsStore {
       );
       await prefs.setString(_kFriends, Friend.encodeList(s.friends));
       await prefs.setString(_kTrip, s.trip.encode());
+      await prefs.setString(_kMeshLinks, MeshLink.encodeMap(s.meshLinks));
       await prefs.setString(_kSocial, AppSettings.encodeSocial(s));
       await prefs.setString(
         _kPrivate,

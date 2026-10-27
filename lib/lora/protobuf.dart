@@ -63,6 +63,27 @@ class PbWriter {
     _b.add(v);
   }
 
+  /// A decoded field written back unchanged (any wire type).
+  void raw(PbField f) {
+    switch (f.wireType) {
+      case 0:
+        _key(f.number, 0);
+        _varint(f.asInt);
+      case 1:
+        _key(f.number, 1);
+        final d = ByteData(8)..setUint64(0, f.asInt, Endian.little);
+        _b.add(d.buffer.asUint8List());
+      case 2:
+        _key(f.number, 2);
+        _varint(f.asBytes.length);
+        _b.add(f.asBytes);
+      case 5:
+        _key(f.number, 5);
+        final d = ByteData(4)..setUint32(0, f.asFixed32, Endian.little);
+        _b.add(d.buffer.asUint8List());
+    }
+  }
+
   Uint8List toBytes() => _b.toBytes();
 }
 

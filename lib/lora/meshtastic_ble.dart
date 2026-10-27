@@ -121,10 +121,17 @@ class MeshtasticRadio implements RadioLink {
     int to = meshBroadcast,
     bool wantAck = false,
     int priority = 0,
+    int channel = 0,
   }) async {
     final s = session;
     if (s == null || !ready) throw StateError('radio not ready');
-    await s.send(payload, to: to, wantAck: wantAck, priority: priority);
+    await s.send(
+      payload,
+      to: to,
+      wantAck: wantAck,
+      priority: priority,
+      channel: channel,
+    );
   }
 
   void _set(RadioState s, [String? d]) {

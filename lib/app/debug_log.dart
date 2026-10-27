@@ -111,6 +111,11 @@ String redactLog(String line, {Iterable<String> secrets = const []}) {
   for (final x in secrets) {
     if (x.length >= 3) s = s.replaceAll(x, '[passcode]');
   }
+  // v1.9.7: Meshtastic channel links carry the channel key.
+  s = s.replaceAllMapped(
+    RegExp(r'(meshtastic\.org/[^\s#]*#)\S+', caseSensitive: false),
+    (m) => '${m[1]}[redacted]',
+  );
   s = s.replaceAllMapped(
     RegExp(r'walkie-friend:[^\s]+'),
     (_) => 'walkie-friend:[redacted]',

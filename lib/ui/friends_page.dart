@@ -323,33 +323,41 @@ Future<void> scanFriendCode(BuildContext context, WalkieController c) async {
 Future<String?> scanCode(
   BuildContext context, {
   String title = 'Scan a code',
+  bool Function(String text)? accept,
+  String? pasteHint,
 }) async {
   // Desktop (v1.9.6): no camera scanning, paste the code or link instead.
-  if (!PlatformCaps.camera) return _pasteCode(context);
+  if (!PlatformCaps.camera) return _pasteCode(context, hint: pasteHint);
   final granted = (await Permission.camera.request()).isGranted;
   if (!context.mounted) return null;
   if (granted) {
-    return Navigator.of(
-      context,
-    ).push<String>(MaterialPageRoute(builder: (_) => QrScanPage(title: title)));
+    return Navigator.of(context).push<String>(
+      MaterialPageRoute(
+        builder: (_) =>
+            QrScanPage(title: title, accept: accept, pasteHint: pasteHint),
+      ),
+    );
   }
-  return _pasteCode(context);
+  return _pasteCode(context, hint: pasteHint);
 }
 
 /// A scanned / pasted text this app understands.
 bool isWalkieCode(String v) =>
     v.startsWith('walkie-friend:') || Invite.parse(v) != null;
 
-Future<String?> _pasteCode(BuildContext context) {
+Future<String?> _pasteCode(BuildContext context, {String? hint}) {
   final ctl = TextEditingController();
   return showDialog<String>(
     context: context,
     builder: (ctx) => AlertDialog(
       title: const Text('Paste a code or link'),
       content: TextField(
+        key: const Key('paste-code-field'),
         controller: ctl,
-        decoration: const InputDecoration(
-          hintText: 'walkie-friend:1:... or walkietalkie://join?...',
+        autocorrect: false,
+        enableSuggestions: false,
+        decoration: InputDecoration(
+          hintText: hint ?? 'walkie-friend:1:... or walkietalkie://join?...',
         ),
       ),
       actions: [
@@ -367,8 +375,17 @@ Future<String?> _pasteCode(BuildContext context) {
 }
 
 class QrScanPage extends StatefulWidget {
-  const QrScanPage({super.key, this.title = 'Scan a code'});
+  const QrScanPage({
+    super.key,
+    this.title = 'Scan a code',
+    this.accept,
+    this.pasteHint,
+  });
   final String title;
+
+  /// Which scanned texts to take (default: Walkie codes / invites).
+  final bool Function(String text)? accept;
+  final String? pasteHint;
 
   @override
   State<QrScanPage> createState() => _QrScanPageState();
@@ -385,7 +402,7 @@ class _QrScanPageState extends State<QrScanPage> {
         actions: [
           TextButton(
             onPressed: () async {
-              final t = await _pasteCode(context);
+              final t = await _pasteCode(context, hint: widget.pasteHint);
               if (t != null && context.mounted && !_done) {
                 _done = true;
                 Navigator.pop(context, t);
@@ -400,7 +417,7 @@ class _QrScanPageState extends State<QrScanPage> {
           if (_done) return;
           for (final b in capture.barcodes) {
             final v = b.rawValue;
-            if (v != null && isWalkieCode(v)) {
+            if (v != null && (widget.accept ?? isWalkieCode)(v)) {
               _done = true;
               Navigator.pop(context, v);
               return;

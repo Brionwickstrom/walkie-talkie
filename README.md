@@ -1465,3 +1465,60 @@ Tests: `test/v195_gateway_test.dart`, `test/v195_quiet_test.dart`.
   (`ReleaseInfo.fromGitHubJson`), so the zip next to it changes nothing for
   phones; `releases/latest/download/WalkieTalkie.apk` (and is.gd/getwalkie)
   keep working.
+
+## v1.9.7: Meshtastic channels, on/off mute
+
+* **Import a Meshtastic channel** (Settings → Long-range radio →
+  *Meshtastic channels* → *Import channel QR or link*, or *Share with
+  Meshtastic* in the channel picker). Scan the QR from the Meshtastic app
+  (camera on Android) or paste the `https://meshtastic.org/e/#...` link
+  (Windows, or Android via *Paste*). Accepted: with or without `www`,
+  `/e/`, `/e`, `/d/`, `/channel/e/`, `?add=true`, with or without base64
+  padding (`lib/lora/meshtastic_channels.dart`).
+  * The preview shows each channel's name, its modem preset and region
+    (when the link has them) and the kind of key: *Custom key*, *Default
+    public key* or *No encryption*. **The key itself is never shown,
+    logged, stored by Walkie Talkie or put in the debug export** (links in
+    log lines become `meshtastic.org/e/#[redacted]`). Warnings: a default
+    / public key (anyone with a Meshtastic radio can listen) and MQTT
+    uplink (the channel may be copied to an internet server).
+  * **Add to my radio** writes the channel as a SECONDARY channel in the
+    first free slot 1–7 with Meshtastic admin messages (session key from
+    get_config, begin_edit, set_channel, commit_edit;
+    `lib/lora/meshtastic_admin.dart`), waits for the radio to restart and
+    reconnect, then reads the channels back and checks name and hash. The
+    primary channel and the LoRa settings are left alone. If the link's
+    preset or region differ from the radio's, a warning shows and
+    *Advanced → Also apply radio settings* (off by default, asks again)
+    changes only preset / bandwidth / spreading / coding rate / frequency
+    slot and region. A channel the radio already has (same name and hash)
+    is just linked; a secondary channel already on the radio can be linked
+    with *Link*.
+  * **Link to a Walkie channel:** a new open channel (named after the
+    Meshtastic one) or an existing open channel. It shows the mesh badge
+    *Shared with Meshtastic · name* and the note "anyone with that
+    Meshtastic QR can listen; removing someone needs a new QR". Private
+    Walkie channels can not be linked. Links are saved as name + channel
+    hash (never a key or slot number) and resolved on whichever radio is
+    connected, so a radio with the channel in another slot works and a
+    radio without it falls back to its primary channel. Walkie traffic
+    stays on PRIVATE_APP (256) on that Meshtastic channel.
+  * **Unlink:** ⋮ → *Unlink*, optionally *Also remove it from my radio*.
+  * **Gateway 1.1.0:** phones name the linked channel in a new `toRadio`
+    envelope (kind 3, followed by the old kind 2 copy for 1.0 gateways,
+    which newer gateways drop as a duplicate); every gateway radio
+    resolves it to its own slot. `gateway.json` can also map rooms:
+    `"meshChannels": {"5": {"name": "Trail", "hash": 98}}`. `/healthz`
+    lists each radio's channels (name, hash, key kind; never a key).
+  * Same flow on the Windows app over USB / Wi-Fi radios.
+* **Mute is on/off.** No more 30 min / 1 h / 2 h: hold *Mute* about a
+  second (the ring fills) to mute, it stays muted (also after restarts)
+  until you hold *Muted · hold to unmute* (or *Unmute* on the banner)
+  about a second. A quick tap only says *Hold to mute* / *Hold to unmute*.
+  A timed mute from 1.9.5/1.9.6 that was still running becomes plain
+  muted.
+* **Quiet hours:** each schedule has its on/off switch, a pencil to edit
+  it and a bin to delete it (with Undo).
+
+Tests: `test/v197_meshtastic_import_test.dart` (vectors from the official
+apps and the Python library), `test/v195_quiet_test.dart`.
