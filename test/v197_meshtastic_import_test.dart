@@ -931,7 +931,9 @@ void main() {
       expect(QuietHours.decode(jsonEncode({'mf': 1})).muted, isTrue);
     });
 
-    testWidgets('banner Unmute needs the hold too', (t) async {
+    testWidgets('v1.9.9 banner Unmute needs the 2.5 s hold and confirm', (
+      t,
+    ) async {
       var unmuted = 0;
       await t.pumpWidget(
         MaterialApp(
@@ -948,13 +950,13 @@ void main() {
       await t.tap(find.byKey(const Key('bannerUnmute')));
       await t.pump(const Duration(milliseconds: 100));
       expect(unmuted, 0);
-      expect(find.text('Hold to unmute'), findsOneWidget);
+      expect(find.text('Keep holding to unmute'), findsOneWidget);
       await t.pump(const Duration(seconds: 2));
-      final g = await t.startGesture(
+      var g = await t.startGesture(
         t.getCenter(find.byKey(const Key('bannerUnmute'))),
       );
       await t.pump();
-      await t.pump(const Duration(milliseconds: 500));
+      await t.pump(const Duration(milliseconds: 1250));
       expect(
         t
             .widget<CircularProgressIndicator>(
@@ -963,10 +965,24 @@ void main() {
             .value,
         closeTo(0.5, 0.1),
       );
-      await t.pump(const Duration(milliseconds: 600));
-      expect(unmuted, 1);
+      await t.pump(const Duration(milliseconds: 1400));
       await g.up();
+      await t.pumpAndSettle();
+      expect(find.text('Unmute Walkie?'), findsOneWidget);
+      expect(unmuted, 0);
+      await t.tap(find.byKey(const Key('muteConfirmCancel')));
+      await t.pumpAndSettle();
+      expect(unmuted, 0);
+      g = await t.startGesture(
+        t.getCenter(find.byKey(const Key('bannerUnmute'))),
+      );
       await t.pump();
+      await t.pump(const Duration(milliseconds: 2600));
+      await g.up();
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('muteConfirmOk')));
+      await t.pumpAndSettle();
+      expect(unmuted, 1);
     });
   });
 }

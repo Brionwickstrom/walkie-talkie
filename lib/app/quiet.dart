@@ -124,7 +124,7 @@ class QuietHours {
 
   /// Hold this long on the mute button to turn mute on or off (v1.9.7:
   /// both ways, a quick tap only shows a hint).
-  static const holdToMute = Duration(milliseconds: 1000);
+  static const holdToMute = Duration(milliseconds: 2500);
 
   /// A second ring from the same person within this gets through.
   static const repeatWindow = Duration(minutes: 2);

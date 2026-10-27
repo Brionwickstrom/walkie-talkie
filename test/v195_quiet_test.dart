@@ -194,79 +194,138 @@ void main() {
       return (log, null);
     }
 
-    testWidgets('a tap only shows "Hold to mute"', (t) async {
-      final log = <String>[];
-      await pump(t, muted: false, log: log);
-      await t.tap(find.byKey(const Key('muteButton')));
-      await t.pump(const Duration(milliseconds: 100));
-      expect(find.text('Hold to mute'), findsOneWidget);
-      expect(log, isEmpty);
-      await t.pump(const Duration(seconds: 2));
-    });
-
-    testWidgets('holding about a second mutes, with a progress ring', (
-      t,
-    ) async {
-      final log = <String>[];
-      await pump(t, muted: false, log: log);
-      final g = await t.startGesture(
-        t.getCenter(find.byKey(const Key('muteButton'))),
-      );
+    Future<void> hold(WidgetTester t, String key, Duration d) async {
+      final g = await t.startGesture(t.getCenter(find.byKey(Key(key))));
       await t.pump();
-      await t.pump(const Duration(milliseconds: 500));
-      final ring = t.widget<CircularProgressIndicator>(
-        find.byKey(const Key('muteButtonProgress')),
-      );
-      expect(ring.value, closeTo(0.5, 0.1));
-      expect(log, isEmpty);
-      await t.pump(const Duration(milliseconds: 600));
-      expect(log, ['mute']);
+      await t.pump(d);
       await g.up();
       await t.pump();
-      expect(find.text('Hold to mute'), findsNothing);
-    });
+    }
 
-    testWidgets('letting go early does not mute', (t) async {
-      final log = <String>[];
-      await pump(t, muted: false, log: log);
-      final g = await t.startGesture(
-        t.getCenter(find.byKey(const Key('muteButton'))),
+    for (final muted in [false, true]) {
+      final word = muted ? 'unmute' : 'mute';
+      final title = muted ? 'Unmute Walkie?' : 'Mute Walkie?';
+
+      testWidgets('v1.9.9 $word: a tap only shows "Keep holding to $word"', (
+        t,
+      ) async {
+        final log = <String>[];
+        await pump(t, muted: muted, log: log);
+        await t.tap(find.byKey(const Key('muteButton')));
+        await t.pump(const Duration(milliseconds: 100));
+        expect(find.text('Keep holding to $word'), findsOneWidget);
+        expect(find.text(title), findsNothing);
+        expect(log, isEmpty);
+        await t.pump(const Duration(seconds: 2));
+      });
+
+      testWidgets('v1.9.9 $word: letting go early (2.3 s) cancels', (t) async {
+        final log = <String>[];
+        await pump(t, muted: muted, log: log);
+        await hold(t, 'muteButton', const Duration(milliseconds: 2300));
+        await t.pump(const Duration(milliseconds: 100));
+        expect(find.text('Keep holding to $word'), findsOneWidget);
+        expect(find.text(title), findsNothing);
+        expect(log, isEmpty);
+        await t.pump(const Duration(seconds: 2));
+      });
+
+      testWidgets('v1.9.9 $word: ring fills, dialog after 2.5 s, no change '
+          'until confirmed', (t) async {
+        final log = <String>[];
+        await pump(t, muted: muted, log: log);
+        final g = await t.startGesture(
+          t.getCenter(find.byKey(const Key('muteButton'))),
+        );
+        await t.pump();
+        await t.pump(const Duration(milliseconds: 1250));
+        expect(
+          t
+              .widget<CircularProgressIndicator>(
+                find.byKey(const Key('muteButtonProgress')),
+              )
+              .value,
+          closeTo(0.5, 0.1),
+        );
+        expect(find.text(title), findsNothing);
+        await t.pump(const Duration(milliseconds: 1000));
+        expect(find.text(title), findsNothing);
+        await t.pump(const Duration(milliseconds: 300));
+        await t.pump();
+        expect(find.text(title), findsOneWidget);
+        expect(log, isEmpty);
+        await g.up();
+        await t.pumpAndSettle();
+        expect(find.text(title), findsOneWidget);
+        expect(log, isEmpty);
+        // Cancel has the focus.
+        final cancel = t.widget<TextButton>(
+          find.byKey(const Key('muteConfirmCancel')),
+        );
+        expect(cancel.autofocus, isTrue);
+        await t.tap(find.byKey(const Key('muteConfirmOk')));
+        await t.pumpAndSettle();
+        expect(log, [word]);
+        expect(find.text(title), findsNothing);
+      });
+
+      testWidgets('v1.9.9 $word: Cancel keeps the state', (t) async {
+        final log = <String>[];
+        await pump(t, muted: muted, log: log);
+        await hold(t, 'muteButton', const Duration(milliseconds: 2600));
+        await t.pumpAndSettle();
+        expect(find.text(title), findsOneWidget);
+        await t.tap(find.byKey(const Key('muteConfirmCancel')));
+        await t.pumpAndSettle();
+        expect(find.text(title), findsNothing);
+        expect(log, isEmpty);
+      });
+
+      testWidgets('v1.9.9 $word: dismissing the dialog cancels', (t) async {
+        final log = <String>[];
+        await pump(t, muted: muted, log: log);
+        await hold(t, 'muteButton', const Duration(milliseconds: 2600));
+        await t.pumpAndSettle();
+        await t.tapAt(const Offset(5, 5));
+        await t.pumpAndSettle();
+        expect(find.text(title), findsNothing);
+        expect(log, isEmpty);
+      });
+    }
+
+    testWidgets('v1.9.9 confirm toggles the real state both ways', (t) async {
+      var muted = false;
+      await t.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (_, set) => Center(
+                child: MuteButton(
+                  muted: muted,
+                  onMute: () => set(() => muted = true),
+                  onUnmute: () => set(() => muted = false),
+                ),
+              ),
+            ),
+          ),
+        ),
       );
-      await t.pump();
-      await t.pump(const Duration(milliseconds: 800));
-      await g.up();
-      await t.pump(const Duration(seconds: 1));
-      expect(log, isEmpty);
-    });
-
-    testWidgets('v1.9.7 muted: a tap only shows "Hold to unmute"', (t) async {
-      final log = <String>[];
-      await pump(t, muted: true, log: log);
+      await hold(t, 'muteButton', const Duration(milliseconds: 2600));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('muteConfirmOk')));
+      await t.pumpAndSettle();
+      expect(muted, isTrue);
       expect(find.text('Muted · hold to unmute'), findsOneWidget);
-      await t.tap(find.byKey(const Key('muteButton')));
-      await t.pump(const Duration(milliseconds: 100));
-      expect(find.text('Hold to unmute'), findsOneWidget);
-      expect(log, isEmpty);
-      await t.pump(const Duration(seconds: 2));
+      await hold(t, 'muteButton', const Duration(milliseconds: 2600));
+      await t.pumpAndSettle();
+      expect(find.text('Unmute Walkie?'), findsOneWidget);
+      await t.tap(find.byKey(const Key('muteConfirmOk')));
+      await t.pumpAndSettle();
+      expect(muted, isFalse);
     });
 
-    testWidgets('v1.9.7 muted: holding about a second unmutes', (t) async {
-      final log = <String>[];
-      await pump(t, muted: true, log: log);
-      final g = await t.startGesture(
-        t.getCenter(find.byKey(const Key('muteButton'))),
-      );
-      await t.pump();
-      await t.pump(const Duration(milliseconds: 500));
-      final ring = t.widget<CircularProgressIndicator>(
-        find.byKey(const Key('muteButtonProgress')),
-      );
-      expect(ring.value, closeTo(0.5, 0.1));
-      expect(log, isEmpty);
-      await t.pump(const Duration(milliseconds: 600));
-      expect(log, ['unmute']);
-      await g.up();
-      await t.pump();
+    test('v1.9.9 the hold is 2.5 s', () {
+      expect(QuietHours.holdToMute, const Duration(milliseconds: 2500));
     });
   });
 }

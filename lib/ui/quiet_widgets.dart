@@ -3,10 +3,13 @@ import 'package:flutter/material.dart';
 import '../app/quiet.dart';
 import '../app/walkie_controller.dart';
 
-/// Mute button on the talk screen (v1.9.7): a plain on/off switch, no
-/// time limit. Both ways need a deliberate hold of about 1 s (a ring fills
-/// up while you hold); a quick tap only shows "Hold to mute" / "Hold to
-/// unmute". Also used, [compact], as the banner's Unmute button.
+/// Mute button on the talk screen: a plain on/off switch, no time limit.
+/// v1.9.9: both ways need a deliberate 2.5 s hold (a ring fills up while
+/// you hold); letting go early cancels and shows "Keep holding to mute" /
+/// "Keep holding to unmute". When the hold completes a "Mute Walkie?" /
+/// "Unmute Walkie?" dialog asks first (Cancel has focus); only confirming
+/// changes anything. Also used, [compact], as the banner's Unmute button
+/// and on the desktop app.
 class MuteButton extends StatefulWidget {
   const MuteButton({
     super.key,
@@ -20,7 +23,7 @@ class MuteButton extends StatefulWidget {
 
   final bool muted;
 
-  /// Called when the hold completes (not muted / muted).
+  /// Called after the hold completes and the dialog is confirmed.
   final VoidCallback onMute;
   final VoidCallback onUnmute;
   final Duration hold;
@@ -45,11 +48,18 @@ class _MuteButtonState extends State<MuteButton>
     if (s == AnimationStatus.completed && !_fired) {
       _fired = true;
       _ring.value = 0;
-      if (widget.muted) {
-        widget.onUnmute();
-      } else {
-        widget.onMute();
-      }
+      _confirm();
+    }
+  }
+
+  Future<void> _confirm() async {
+    final wasMuted = widget.muted;
+    final ok = await confirmMuteChange(context, mute: !wasMuted);
+    if (!ok || !mounted || widget.muted != wasMuted) return;
+    if (wasMuted) {
+      widget.onUnmute();
+    } else {
+      widget.onMute();
     }
   }
 
@@ -64,7 +74,9 @@ class _MuteButtonState extends State<MuteButton>
     m?.hideCurrentSnackBar();
     m?.showSnackBar(
       SnackBar(
-        content: Text(widget.muted ? 'Hold to unmute' : 'Hold to mute'),
+        content: Text(
+          widget.muted ? 'Keep holding to unmute' : 'Keep holding to mute',
+        ),
         duration: const Duration(milliseconds: 1500),
       ),
     );
@@ -132,10 +144,9 @@ class _MuteButtonState extends State<MuteButton>
       },
       onPointerUp: (_) {
         if (!_fired) {
-          final short = _ring.value < 0.6;
           _ring.stop();
           _ring.value = 0;
-          if (short) _hint();
+          _hint();
         }
       },
       onPointerCancel: (_) {
@@ -145,6 +156,42 @@ class _MuteButtonState extends State<MuteButton>
       child: button,
     );
   }
+}
+
+/// "Mute Walkie?" / "Unmute Walkie?" (v1.9.9). Cancel has the focus;
+/// tapping outside or Back cancels. True only when confirmed.
+Future<bool> confirmMuteChange(
+  BuildContext context, {
+  required bool mute,
+}) async {
+  final word = mute ? 'Mute' : 'Unmute';
+  final r = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      key: const Key('muteConfirm'),
+      title: Text('$word Walkie?'),
+      content: Text(
+        mute
+            ? 'Incoming talk, rings and beeps go quiet and are kept in '
+                  'Missed until you unmute.'
+            : 'Talk, rings and beeps will play again.',
+      ),
+      actions: [
+        TextButton(
+          key: const Key('muteConfirmCancel'),
+          autofocus: true,
+          onPressed: () => Navigator.of(ctx).pop(false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          key: const Key('muteConfirmOk'),
+          onPressed: () => Navigator.of(ctx).pop(true),
+          child: Text(word),
+        ),
+      ],
+    ),
+  );
+  return r ?? false;
 }
 
 /// Banner under the header while muted or in quiet hours. Its Unmute
