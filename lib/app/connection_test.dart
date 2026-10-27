@@ -89,6 +89,7 @@ class RelayProbe {
     this.room,
     this.host,
     this.error,
+    this.label,
   });
   final bool ok;
   final int? connectMs;
@@ -96,6 +97,19 @@ class RelayProbe {
   final String? room;
   final String? host;
   final String? error;
+
+  /// "Home relay" / "Backup relay" (v1.8.8), null for a single relay.
+  final String? label;
+
+  RelayProbe withLabel(String? label) => RelayProbe(
+    ok: ok,
+    connectMs: connectMs,
+    rttMs: rttMs,
+    room: room,
+    host: host,
+    error: error,
+    label: label,
+  );
 }
 
 class ConnSnapshot {
@@ -119,6 +133,8 @@ class ConnSnapshot {
     this.relayLink,
     this.relayLinkDetail,
     this.relay,
+    this.relayProbes = const [],
+    this.relayInUse,
     this.radioPaired = false,
     this.radioReady = false,
     this.radioDetail,
@@ -158,6 +174,14 @@ class ConnSnapshot {
 
   /// null: not tested.
   final RelayProbe? relay;
+
+  /// v1.8.8: one probe per configured relay, home first (empty = only
+  /// [relay] was tested).
+  final List<RelayProbe> relayProbes;
+
+  /// The relay the app talks through right now ("Home relay", "Backup
+  /// relay"), null when none is connected.
+  final String? relayInUse;
   final bool radioPaired;
   final bool radioReady;
   final String? radioDetail;
@@ -428,6 +452,7 @@ CheckRow _relay(ConnSnapshot s) {
       CheckFix.relaySettings,
     );
   }
+  if (s.relayProbes.length > 1) return _relays(s, t);
   final p = s.relay;
   final link = s.relayLink;
   if (p != null && p.ok) {
@@ -453,6 +478,62 @@ CheckRow _relay(ConnSnapshot s) {
     CheckLevel.fail,
     'Cannot reach the relay ($why). '
         '${internetOk ? 'The internet works, so the relay may be waking up (up to a minute) or blocked on this network; try again.' : 'No internet: fix that first.'}',
+    internetOk
+        ? CheckFix.relaySettings
+        : (s.cell == CellState.blocked
+              ? CheckFix.appInfo
+              : CheckFix.mobileNetwork),
+  );
+}
+
+String _probeLine(RelayProbe p) {
+  final name = p.label ?? p.host ?? 'Relay';
+  if (p.ok) {
+    return '$name (${p.host ?? '?'}): OK'
+        '${p.connectMs != null ? ' in ${p.connectMs} ms' : ''}, '
+        'ping ${p.rttMs ?? '?'} ms';
+  }
+  return '$name (${p.host ?? '?'}): not reachable (${_d(p.error, 'no answer')})';
+}
+
+/// Home + backup relays (v1.8.8).
+CheckRow _relays(ConnSnapshot s, String t) {
+  final ps = s.relayProbes;
+  final home = ps.first;
+  final anyOk = ps.any((p) => p.ok);
+  final link = s.relayLink;
+  final lines = ps.map(_probeLine).join('. ');
+  final inUse = s.relayInUse != null
+      ? ' In use: ${s.relayInUse}.'
+      : (link == TransportStatus.running
+            ? ''
+            : ' The app\'s own link is ${link?.name ?? 'down'}; it retries on its own.');
+  final room = ' Room ${home.room ?? '?'}.';
+  if (home.ok) {
+    return CheckRow(
+      'relay',
+      t,
+      link == TransportStatus.running ? CheckLevel.ok : CheckLevel.warn,
+      '$lines.$room$inUse',
+    );
+  }
+  if (anyOk) {
+    return CheckRow(
+      'relay',
+      t,
+      CheckLevel.warn,
+      '$lines.$room$inUse The backup relay keeps everyone connected (all '
+          'phones also stay on it); the app keeps trying the home relay. '
+          'If it stays down, check that the Synology and its internet are on.',
+    );
+  }
+  final internetOk = s.internet?.ok ?? false;
+  return CheckRow(
+    'relay',
+    t,
+    CheckLevel.fail,
+    'Cannot reach any relay. $lines. '
+        '${internetOk ? 'The internet works, so the relays may be waking up (the backup can take up to a minute) or blocked on this network; try again.' : 'No internet: fix that first.'}',
     internetOk
         ? CheckFix.relaySettings
         : (s.cell == CellState.blocked

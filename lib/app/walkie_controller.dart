@@ -176,12 +176,17 @@ class WalkieController extends ChangeNotifier {
       radio: ManagerFriendRadio(manager),
       far: ManagerFriendFarPaths(manager),
       localName: () => name,
+      // v1.8.8: friend rooms on every relay too (home + backup), so two
+      // friends meet even when only one of them can reach the home relay.
       relayFactory: relays.isEmpty
           ? null
-          : (room) => RelayTransport(
-              serverUri: relays.first,
-              connector: RelayConnector.platform(),
-              room: room,
+          : (room) => MultiRelayTransport(
+              serverUris: relays,
+              factory: (u) => RelayTransport(
+                serverUri: u,
+                connector: RelayConnector.platform(),
+                room: room,
+              ),
             ),
     );
     friendLinks.setFriends(settings.friends);
@@ -197,6 +202,7 @@ class WalkieController extends ChangeNotifier {
     whosWhere.replyPresence = _replyPresence;
     whosWhere.addListener(notifyListeners);
     debugLog.secrets = () => settings.privateChannels.values;
+    _relay.onRoleChange = _logRelayRole;
     peopleRefresh = PeopleRefresh(
       probe: _probeEveryone,
       probeRadio: _probeRadio,
@@ -414,19 +420,33 @@ class WalkieController extends ChangeNotifier {
       final relays = relayUrisFor(settings);
       NetProbe? net;
       RelayProbe? relay;
+      var relayProbes = const <RelayProbe>[];
       if (!offline) {
+        // v1.8.8: every relay (home + backup), in parallel.
         final results = await Future.wait<Object?>([
           (internetProbe ?? probeInternet)(),
-          if (relays.isNotEmpty)
+          for (var i = 0; i < relays.length; i++)
             (relayProbe ??
-                (u) => probeRelay(
-                  server: u,
-                  channelScope: scope,
-                  connector: RelayConnector.platform(),
-                ))(relays.first),
+                    (u) => probeRelay(
+                      server: u,
+                      channelScope: scope,
+                      connector: RelayConnector.platform(),
+                      connectTimeout: i == 0 && relays.length > 1
+                          ? const Duration(seconds: 10)
+                          : const Duration(seconds: 45),
+                    ))(relays[i])
+                .then(
+                  (p) => p.withLabel(
+                    MultiRelayTransport.labelFor(
+                      MultiRelayTransport.roleAt(i, relays.length),
+                      count: relays.length,
+                    ),
+                  ),
+                ),
         ]);
         net = results[0] as NetProbe;
-        if (results.length > 1) relay = results[1] as RelayProbe;
+        relayProbes = [for (final r in results.skip(1)) r as RelayProbe];
+        if (relayProbes.isNotEmpty) relay = relayProbes.first;
       }
       final lan = _transport(TransportKind.lan);
       final wd = _transport(TransportKind.wifiDirect);
@@ -451,6 +471,8 @@ class WalkieController extends ChangeNotifier {
         relayLink: _relay.status,
         relayLinkDetail: internetStatus.text,
         relay: relay,
+        relayProbes: relayProbes,
+        relayInUse: relayInUse,
         radioPaired: radioPaired,
         radioReady: radioDevice.ready,
         radioDetail: radioDevice.deviceName ?? radioDevice.detail,
@@ -534,6 +556,20 @@ class WalkieController extends ChangeNotifier {
 
   // debug log
 
+  /// v1.8.8: which relay is in use, into the debug log when it changes.
+  void _logRelayRole(RelayRole? from, RelayRole? to) {
+    final n = _relay.relays.length;
+    String label(RelayRole r) => MultiRelayTransport.labelFor(r, count: n);
+    final host = _relay.active?.serverUri?.host;
+    debugLog.add(
+      'relay',
+      to == null
+          ? 'no relay connected${from != null ? ' (was ${label(from)})' : ''}'
+          : 'using ${label(to)}${host != null ? ' ($host)' : ''}'
+                '${from != null ? ', was ${label(from)}' : ''}',
+    );
+  }
+
   Future<void> _attachDebugLog() async {
     debugLog.secrets = () => settings.privateChannels.values;
     try {
@@ -582,7 +618,8 @@ class WalkieController extends ChangeNotifier {
       'Phone network: ${phoneNet ?? '?'}, cell: ${cellStatus.name}'
           '${cellInfo != null ? ' (${cellLabel(cellInfo!)})' : ''}',
       internetStatus.text,
-      'Relay: ${relayUris.map((u) => u.host).join(', ')}',
+      'Relay: ${[for (final r in _relay.relays) '${_relay.labelOf(r)} ${r.serverUri?.host} ${r.status.name}${r.lastError != null && r.status != TransportStatus.running ? ' (${r.lastError})' : ''}'].join(', ')}',
+      'Relay in use: ${relayInUse ?? 'none'}',
       for (final t in manager.transports)
         'Link ${t.kind.name}: ${t.status.name}'
             '${t.statusDetail != null ? ' (${t.statusDetail})' : ''}',
@@ -898,12 +935,26 @@ class WalkieController extends ChangeNotifier {
 
   /// Ordered relay list: the saved override (comma separated, "off" =
   /// none), or the app default when nothing / an empty string is saved.
+  ///
+  /// v1.8.8: a saved value that is just an old built-in default (the
+  /// Render relay alone) counts as "default", so those phones get the home
+  /// relay too. Any other custom list is used exactly as typed.
   static List<Uri> relayUrisFor(AppSettings s) {
     final saved = s.relayUrl?.trim() ?? '';
+    final isLegacy =
+        saved.isNotEmpty &&
+        AppConfig.legacyDefaults.any(
+          (d) =>
+              _sameUris(MultiRelayTransport.parseList(saved), [Uri.parse(d)]),
+        );
     return MultiRelayTransport.parseList(
-      saved.isEmpty ? AppConfig.relayUrl : saved,
+      saved.isEmpty || isLegacy ? AppConfig.relayUrl : saved,
     );
   }
+
+  static bool _sameUris(List<Uri> a, List<Uri> b) =>
+      a.length == b.length &&
+      [for (var i = 0; i < a.length; i++) a[i] == b[i]].every((x) => x);
 
   /// How long an incoming ring rings before it counts as missed.
   static const ringDuration = Duration(seconds: 15);
@@ -1090,43 +1141,10 @@ class WalkieController extends ChangeNotifier {
   List<Uri> get relayUris => _relay.serverUris;
 
   /// One line for the UI: "Internet: connected via mobile data", ...
-  ({TransportStatus status, String text}) get internetStatus {
-    final rs = _relay.relays;
-    if (rs.isEmpty) {
-      return (
-        status: TransportStatus.unavailable,
-        text: 'Internet: off (no relay set in Settings)',
-      );
-    }
-    String host(RelayTransport r) => r.serverUri?.host ?? '';
-    final up = rs.where((r) => r.status == TransportStatus.running).toList();
-    if (up.isNotEmpty) {
-      final r = up.first;
-      final others = up.length > 1 ? ' (${up.length} relays)' : '';
-      return (
-        status: TransportStatus.running,
-        text:
-            'Internet: connected${r.network != null ? ' via ${r.network}' : ''}'
-            '$others',
-      );
-    }
-    final starting = rs.where((r) => r.status == TransportStatus.starting);
-    if (starting.isNotEmpty) {
-      return (
-        status: TransportStatus.starting,
-        text:
-            'Internet: connecting... (${starting.first.statusDetail ?? host(starting.first)})',
-      );
-    }
-    final r = rs.first;
-    final why = r.lastError ?? r.statusDetail ?? 'not connected';
-    final retry = r.retryIn;
-    return (
-      status: TransportStatus.error,
-      text:
-          'Internet: offline ($why)${retry != null ? ', retrying in ${retry.inSeconds}s' : ''}',
-    );
-  }
+  ({TransportStatus status, String text}) get internetStatus => _relay.summary;
+
+  /// "Home relay" / "Backup relay" in use (null = none connected).
+  String? get relayInUse => _relay.activeLabel;
 
   /// What the Settings field shows: the saved override, or empty (= default).
   String get relayOverride => settings.relayUrl?.trim() ?? '';
@@ -1563,6 +1581,9 @@ class WalkieController extends ChangeNotifier {
       }
       if (settings.stayReachable) unawaited(applyBackgroundSettings());
       unawaited(_applyPttConfig());
+      // v1.8.8: warm the relay before the next push-to-talk: reconnect
+      // what is down (home first), ping what is up.
+      if (!settings.offlineSaver) unawaited(_relay.wake());
     }
     if (s == AppLifecycleState.detached) {
       // App swiped away / closed: nothing may keep playing or talking.

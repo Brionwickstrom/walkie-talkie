@@ -32,6 +32,8 @@ class RelayTransport extends Transport {
     this.connectTimeout = const Duration(seconds: 75),
     this.pingInterval = const Duration(seconds: 25),
     this.room,
+    this.quickRetry = false,
+    this.quickRetryDelay = const Duration(milliseconds: 400),
   }) : connector = connector ?? IoRelayConnector() {
     _netSub = this.connector.networkChanges.listen(_onNetworkChanged);
   }
@@ -42,11 +44,23 @@ class RelayTransport extends Transport {
   /// Fixed relay room (friend links) instead of the channel's room.
   final String? room;
   final Duration minBackoff;
-  final Duration maxBackoff;
+
+  /// Longest wait between retries. [MultiRelayTransport] raises it for the
+  /// home relay while the backup relay carries the traffic (v1.8.8).
+  Duration maxBackoff;
 
   /// Long on purpose: a sleeping free-tier server needs ~50 s to start.
-  final Duration connectTimeout;
+  /// The always-on home relay uses a short one (v1.8.8).
+  Duration connectTimeout;
   final Duration pingInterval;
+
+  /// v1.8.8: after a failed connect, try once more right away (after
+  /// [quickRetryDelay]) before backing off. Some TLS handshakes through
+  /// Tailscale Funnel fail on the first try and work on the second.
+  bool quickRetry;
+  final Duration quickRetryDelay;
+  bool _quickUsed = false;
+  Duration? _retryDelay;
 
   int _localNodeId = 0;
   int _channel = 1;
@@ -88,7 +102,13 @@ class RelayTransport extends Transport {
   String? get lastError => _lastError;
 
   /// When the next retry happens, while waiting.
-  Duration? get retryIn => _retry == null ? null : _backoff;
+  Duration? get retryIn => _retry == null ? null : (_retryDelay ?? _backoff);
+
+  /// When the open socket connected (null while down).
+  DateTime? get connectedAt => _ws == null ? null : _connectedAt;
+
+  /// Successful connects so far.
+  int get connects => _connects;
 
   @override
   String? get debugInfo {
@@ -131,6 +151,7 @@ class RelayTransport extends Transport {
     _channel = channel;
     _wanted = true;
     _backoff = Duration.zero;
+    _quickUsed = false;
     await _connectAndWait();
   }
 
@@ -185,6 +206,7 @@ class RelayTransport extends Transport {
       _connectedAt = DateTime.now();
       _lastRx = DateTime.now();
       _lastError = null;
+      _quickUsed = false;
       _sub = ws.messages.listen((data) {
         _lastRx = DateTime.now();
         if (data is Uint8List) {
@@ -200,8 +222,21 @@ class RelayTransport extends Transport {
     } catch (e) {
       if (attempt == _attempt) {
         _lastError = '$e';
-        _setStatus(TransportStatus.error, 'Relay unreachable: $e');
-        _scheduleRetry();
+        if (quickRetry && !_quickUsed && _wanted) {
+          // One fast second try (flaky first TLS handshake), no backoff.
+          _quickUsed = true;
+          _setStatus(TransportStatus.starting, 'Retrying ($e)');
+          _retry?.cancel();
+          _retryDelay = quickRetryDelay;
+          _retry = Timer(quickRetryDelay, () {
+            _retry = null;
+            _retryDelay = null;
+            if (_wanted && _ws == null) _connect();
+          });
+        } else {
+          _setStatus(TransportStatus.error, 'Relay unreachable: $e');
+          _scheduleRetry();
+        }
       }
     } finally {
       if (attempt == _attempt) _connecting = false;
@@ -256,6 +291,7 @@ class RelayTransport extends Transport {
         _connectedAt != null &&
         DateTime.now().difference(_connectedAt!) > const Duration(seconds: 30);
     if (lived) _backoff = Duration.zero;
+    _quickUsed = false;
     _lastError = why;
     if (_wanted) {
       _setStatus(TransportStatus.error, 'Relay connection lost: $why');
@@ -271,12 +307,14 @@ class RelayTransport extends Transport {
     unawaited(() async {
       await _disconnect();
       _backoff = Duration.zero;
+      _quickUsed = false;
       await _connect();
     }());
   }
 
   void _scheduleRetry() {
     _retry?.cancel();
+    _retryDelay = null;
     if (!_wanted) return;
     _backoff = _backoff == Duration.zero
         ? minBackoff
@@ -292,6 +330,7 @@ class RelayTransport extends Transport {
     _retry = null;
     _ping?.cancel();
     _ping = null;
+    _retryDelay = null;
     _attempt++; // abandon an in-flight connect
     _connecting = false;
     final sub = _sub;
@@ -310,7 +349,20 @@ class RelayTransport extends Transport {
   Future<void> reconnectNow() async {
     if (!_wanted || _ws != null) return;
     _backoff = Duration.zero;
+    _quickUsed = false;
     await _connect();
+  }
+
+  /// App came back on screen (v1.8.8): reconnect now when down, else ping
+  /// right away so a socket that died in the background is noticed (and
+  /// replaced) before the next push-to-talk instead of up to a minute later.
+  Future<void> wake() async {
+    if (!_wanted) return;
+    if (_ws == null) {
+      await reconnectNow();
+      return;
+    }
+    _keepAlive();
   }
 
   @override
@@ -354,24 +406,74 @@ class RelayTransport extends Transport {
   }
 }
 
+/// Which relay a phone uses (v1.8.8), for the UI and the debug log.
+enum RelayRole {
+  /// The first relay in the list (the user's Synology through Tailscale
+  /// Funnel by default): always on, no cold start.
+  home,
+
+  /// Any later relay (Render by default): may sleep and take ~50 s to wake.
+  backup,
+}
+
 /// Several relays at once, as one internet [Transport].
 ///
-/// The list is ordered (first = preferred, e.g. a home Synology relay, then
-/// the public Render one). Every relay that can be reached is connected in
-/// parallel and every frame is sent to all connected relays, so two phones
-/// meet as long as they share at least one working relay; the
-/// [TransportManager] drops the duplicate copies by (sender, seq). The
-/// status / debug line follows the first connected relay.
+/// The list is ordered: first = the home relay (preferred), then backups.
+///
+/// Failover design (v1.8.8), "both doors open, home preferred":
+/// * Every relay is connected in parallel and every frame is sent to every
+///   connected relay; receivers drop the duplicate copies by (sender, seq)
+///   and play whichever copy arrives first. So two phones always hear each
+///   other as long as they share at least ONE working relay. This is what
+///   keeps a room together: the relays do not talk to each other, and a
+///   pure "switch over" design would split a room whenever one phone could
+///   reach home and another could not (flaky TLS, a network that blocks
+///   *.ts.net, ...). With both open, the phone stuck on the backup still
+///   meets everyone, because they are on the backup too.
+/// * The home relay gets a short connect timeout ([homeConnectTimeout])
+///   plus one immediate second try (a first TLS handshake sometimes fails),
+///   so it is up within seconds; the backup keeps the long timeout for its
+///   cold start.
+/// * While home is down and a backup carries the traffic, home is retried
+///   with backoff up to [homeRetryWhileOnBackup] (2.5 min), right away on
+///   a network change, and when the app comes back on screen ([wake]).
+///   Home comes back by itself; nothing has to "switch back".
+/// * The status line and the "which relay" label follow home first.
 class MultiRelayTransport extends Transport {
   MultiRelayTransport({
     List<Uri> serverUris = const [],
     RelayTransport Function(Uri uri)? factory,
     RelayConnector? connector,
+    this.failover = true,
   }) : _factory =
            factory ??
            ((u) => RelayTransport(serverUri: u, connector: connector)) {
     _build(serverUris);
   }
+
+  /// Short: the home relay is always on (no cold start).
+  static const homeConnectTimeout = Duration(milliseconds: 4500);
+
+  /// Home retry cap while a backup relay is connected.
+  static const homeRetryWhileOnBackup = Duration(seconds: 150);
+
+  /// Home retry cap while nothing is connected (same as one relay).
+  static const homeRetryAlone = Duration(seconds: 30);
+
+  /// Tune the first relay as the fast home relay when there are several.
+  final bool failover;
+
+  /// The role of the relay at [index] in a list of [count].
+  static RelayRole roleAt(int index, int count) =>
+      index == 0 && count > 0 ? RelayRole.home : RelayRole.backup;
+
+  /// "Home relay" / "Backup relay". A single custom relay is just "Relay".
+  static String labelFor(RelayRole role, {int count = 2}) => count <= 1
+      ? 'Relay'
+      : switch (role) {
+          RelayRole.home => 'Home relay',
+          RelayRole.backup => 'Backup relay',
+        };
 
   /// Parse a comma / whitespace separated list ("wss://a/ws, wss://b/ws").
   /// "off" (or empty) gives an empty list.
@@ -412,6 +514,10 @@ class MultiRelayTransport extends Transport {
   void _build(List<Uri> uris) {
     for (final u in uris) {
       final r = _factory(u)..setPowerSaver(_saver);
+      if (failover && uris.length > 1 && _relays.isEmpty) {
+        r.connectTimeout = homeConnectTimeout;
+        r.quickRetry = true;
+      }
       _relays.add(r);
       _subs.add(
         r.frames.listen((f) {
@@ -420,10 +526,137 @@ class MultiRelayTransport extends Transport {
       );
       _subs.add(
         r.statusChanges.listen((_) {
+          _tuneHomeRetry();
+          final role = activeRole;
+          if (role != _lastRole) {
+            final was = _lastRole;
+            _lastRole = role;
+            onRoleChange?.call(was, role);
+          }
           if (!_statusCtl.isClosed) _statusCtl.add(status);
         }),
       );
     }
+  }
+
+  /// Called when the relay in use changes (home -> backup, ...), with null
+  /// for "none connected". For the debug log.
+  void Function(RelayRole? from, RelayRole? to)? onRoleChange;
+  RelayRole? _lastRole;
+
+  /// Home retries slowly (2.5 min) only while a backup carries the traffic.
+  void _tuneHomeRetry() {
+    if (!failover || _relays.length < 2) return;
+    final backupUp = _relays
+        .skip(1)
+        .any((r) => r.status == TransportStatus.running);
+    final home = _relays.first;
+    home.maxBackoff = backupUp ? homeRetryWhileOnBackup : homeRetryAlone;
+    if (_backupWasUp &&
+        !backupUp &&
+        _wanted &&
+        home.status != TransportStatus.running) {
+      // The backup just dropped while home is waiting out a long retry:
+      // try home now instead of up to 2.5 min later.
+      unawaited(home.reconnectNow());
+    }
+    _backupWasUp = backupUp;
+  }
+
+  bool _backupWasUp = false;
+
+  /// The relay this phone talks through: home when it is connected, else
+  /// the first connected backup, else null.
+  RelayTransport? get active {
+    for (final r in _relays) {
+      if (r.status == TransportStatus.running) return r;
+    }
+    return null;
+  }
+
+  RelayRole? get activeRole {
+    final a = active;
+    if (a == null) return null;
+    return roleAt(_relays.indexOf(a), _relays.length);
+  }
+
+  /// "Home relay" / "Backup relay" / "Relay", null when none is connected.
+  String? get activeLabel {
+    final role = activeRole;
+    return role == null ? null : labelFor(role, count: _relays.length);
+  }
+
+  /// The label of [r] in this list.
+  String labelOf(RelayTransport r) => labelFor(
+    roleAt(_relays.indexOf(r), _relays.length),
+    count: _relays.length,
+  );
+
+  /// One line for the UI: "Internet: connected via mobile data (Home
+  /// relay)", "Internet: connected via Wi-Fi (Backup relay; home relay
+  /// unreachable)", "Internet: connecting...", "Internet: offline (...)".
+  ({TransportStatus status, String text}) get summary {
+    final rs = _relays;
+    if (rs.isEmpty) {
+      return (
+        status: TransportStatus.unavailable,
+        text: 'Internet: off (no relay set in Settings)',
+      );
+    }
+    String host(RelayTransport r) => r.serverUri?.host ?? '';
+    final r = active;
+    if (r != null) {
+      final via = r.network != null ? ' via ${r.network}' : '';
+      var which = '';
+      if (rs.length > 1) {
+        final role = roleAt(rs.indexOf(r), rs.length);
+        final home = rs.first;
+        if (role == RelayRole.home) {
+          final backups = rs
+              .skip(1)
+              .where((b) => b.status == TransportStatus.running)
+              .length;
+          which = ' (Home relay${backups > 0 ? ' + backup' : ''})';
+        } else {
+          final homeWhy = home.status == TransportStatus.starting
+              ? 'home relay connecting'
+              : 'home relay unreachable'
+                    '${home.retryIn != null ? ', retry in ${_short(home.retryIn!)}' : ''}';
+          which = ' (Backup relay; $homeWhy)';
+        }
+      }
+      return (
+        status: TransportStatus.running,
+        text: 'Internet: connected$via$which',
+      );
+    }
+    final starting = rs.where((r) => r.status == TransportStatus.starting);
+    if (starting.isNotEmpty) {
+      final s = starting.first;
+      return (
+        status: TransportStatus.starting,
+        text:
+            'Internet: connecting... (${rs.length > 1 ? '${labelOf(s)}: ' : ''}${s.statusDetail ?? host(s)})',
+      );
+    }
+    final f = rs.first;
+    final why = f.lastError ?? f.statusDetail ?? 'not connected';
+    final retry = f.retryIn;
+    return (
+      status: TransportStatus.error,
+      text:
+          'Internet: offline ($why)${retry != null ? ', retrying in ${retry.inSeconds}s' : ''}',
+    );
+  }
+
+  static String _short(Duration d) => d.inSeconds >= 90
+      ? '${(d.inSeconds / 60).round()} min'
+      : '${d.inSeconds}s';
+
+  /// App back on screen: reconnect what is down (home first), ping the rest.
+  Future<void> wake() async {
+    if (!_wanted) return;
+    await Future.wait(_relays.map((r) => r.wake()));
   }
 
   Future<void> _teardown() async {
@@ -477,11 +710,12 @@ class MultiRelayTransport extends Transport {
     if (_relays.isEmpty) return null;
     final parts = [
       for (final r in _relays)
-        '${r.serverUri!.host.split('.').first}:${switch (r.status) {
-          TransportStatus.running => 'up',
-          TransportStatus.starting => 'connecting',
-          _ => 'down',
-        }}',
+        '${_relays.length > 1 ? '${labelOf(r).split(' ').first.toLowerCase()} ' : ''}'
+            '${r.serverUri!.host.split('.').first}:${switch (r.status) {
+              TransportStatus.running => 'up',
+              TransportStatus.starting => 'connecting',
+              _ => 'down',
+            }}',
     ];
     return '${parts.join(' ')} · room ${RelayTransport.roomFor(_channel)}';
   }

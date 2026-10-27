@@ -79,6 +79,7 @@ LinkInfo describeLink(
   bool permissionMissing = false,
   bool offlineSaver = false,
   bool ios = false,
+  String? relayInUse,
 }) {
   final up = s == TransportStatus.running;
   var state = _stateText(s);
@@ -89,13 +90,30 @@ LinkInfo describeLink(
   switch (k) {
     case TransportKind.internet:
       if (offlineSaver) state = 'Off (Offline power save)';
+      // v1.8.8: which relay (home / backup).
+      if (up && !offlineSaver && relayInUse != null) {
+        state = '$state · $relayInUse';
+      }
       final cell = netKind == 'cell';
       return LinkInfo(
         title: 'Internet (relay)',
         state: state,
         help: up
-            ? 'Talking through the internet relay. Works on Wi-Fi or '
-                  'mobile data.'
+            ? switch (relayInUse) {
+                'Home relay' =>
+                  'Talking through your Home relay (the Synology). The '
+                      'Backup relay stays connected too, so phones that '
+                      'cannot reach home still hear you. Works on Wi-Fi or '
+                      'mobile data.',
+                'Backup relay' =>
+                  'Talking through the Backup relay: the Home relay (the '
+                      'Synology) cannot be reached right now. The app keeps '
+                      'trying it (every few minutes and when the network '
+                      'changes). Everyone still meets on the backup.',
+                _ =>
+                  'Talking through the internet relay. Works on Wi-Fi or '
+                      'mobile data.',
+              }
             : cell
             ? 'You are on mobile data but the relay is not reachable. '
                   'In App info, open Mobile data (or Data usage) and turn on '

@@ -197,7 +197,8 @@ Manager unchanged. Limits: 4 KB max message, ~150 msg/s and 64 KB/s per socket,
 silent sockets dropped after 3 min, max 64 per room. Private channels use room
 `p<tag>`, so the relay only ever sees ciphertext.
 
-The app keeps an ordered list of relays (default
+The app keeps an ordered list of relays (default since v1.8.8: the home relay
+`wss://walkie-relay.tail1700cf.ts.net/ws`, then the backup
 `wss://brion-walkie-relay.onrender.com/ws`; Settings accepts a comma separated
 list, empty = default, `off` = none), connects to all of them in parallel, sends
 every frame to each connected relay and de-duplicates on receive. Reconnects
@@ -313,8 +314,8 @@ decrypt).
 * Request-based friend adding has no protection against an active
   man-in-the-middle on the link unless you compare the safety codes. QR is
   safe.
-* Each friend uses one extra relay connection (first relay in the list only);
-  many friends = more sockets and battery.
+* Each friend uses one extra relay connection per configured relay (since
+  v1.8.8 home + backup); many friends = more sockets and battery.
 * Admin is trust-on-first-use: the first phone that claims admin on a
   private channel is accepted by the others. Anyone who knows the passcode
   could claim it first if nobody has.
@@ -330,6 +331,34 @@ decrypt).
   (at most 300 per conversation); friend keys are in app preferences.
 * Private talk to a friend is not saved in the replay history.
 * 1.4 and older phones do not see chats, names, friends or moderation.
+
+## v1.8.8: home relay first, Render as backup
+
+* **Home relay:** the default relay list is now the Synology NAS (the same
+  `relay/` server in Docker, public through Tailscale Funnel:
+  `wss://walkie-relay.tail1700cf.ts.net/ws`) first and the Render relay
+  second. Same protocol on both (`/ws?ch=<room>&id=<hex>`). A saved relay
+  setting that is just the old default (the Render URL alone) counts as the
+  default; any other custom list is used exactly as typed.
+* **Failover design ("both doors open, home preferred"):** the relays do not
+  talk to each other, so the app stays connected to every relay in the list
+  and sends each frame to all connected relays; receivers drop duplicates by
+  (sender, seq) and play the first copy. Two phones therefore always meet if
+  they share at least one working relay, so a room never splits when one
+  phone cannot reach home. The home relay connects with a 4.5 s timeout and
+  one immediate second try (a first TLS handshake through Funnel sometimes
+  fails); the backup keeps the 75 s timeout for Render's cold start. While
+  the backup carries the traffic, home is retried with backoff up to 2.5 min,
+  right away on a network change, when the app comes back on screen, and
+  when the backup drops.
+* **Which relay:** the internet status line, the Internet icon's sheet and
+  the connection test (which now probes every relay) say "Home relay" or
+  "Backup relay"; the debug log records every switch and lists each relay's
+  state.
+* **Warm before talking:** when the app comes back on screen it reconnects
+  any relay that is down and pings the open ones, so a socket that died in
+  the background is replaced before the next push-to-talk. Keep-alive pings
+  every 25 s as before. Friend rooms also use every relay now.
 
 ## v1.8.7: setup wizard, connection test, invites, debug log
 

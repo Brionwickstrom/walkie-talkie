@@ -969,6 +969,7 @@ class _HomePageState extends State<HomePage> {
       permissionMissing: btMissing,
       offlineSaver: c.settings.offlineSaver,
       ios: Platform.isIOS,
+      relayInUse: k == TransportKind.internet ? c.relayInUse : null,
     );
     await showAppSheet<void>(
       context: context,
