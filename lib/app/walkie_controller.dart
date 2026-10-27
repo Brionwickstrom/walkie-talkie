@@ -55,6 +55,7 @@ import '../platform/background_bridge.dart';
 import '../transports/ble_transport.dart';
 import '../transports/lan_transport.dart';
 import '../transports/mdns_discovery.dart';
+import '../transports/direct_links.dart';
 import '../transports/relay_socket.dart';
 import '../transports/relay_transport.dart';
 import '../transports/wifi_direct_transport.dart';
@@ -116,6 +117,8 @@ class WalkieController extends ChangeNotifier {
        _relay = MultiRelayTransport(
          serverUris: relayUrisFor(settings),
          connector: RelayConnector.platform(),
+         // v1.8.9: direct phone-to-phone links, signaled via the relays.
+         direct: DirectLinks(),
        ) {
     name = settings.name;
     final wd = Platform.isAndroid
@@ -203,6 +206,9 @@ class WalkieController extends ChangeNotifier {
     whosWhere.addListener(notifyListeners);
     debugLog.secrets = () => settings.privateChannels.values;
     _relay.onRoleChange = _logRelayRole;
+    _relay.direct!
+      ..attach(manager)
+      ..onEvent = (l) => debugLog.add('direct', l);
     peopleRefresh = PeopleRefresh(
       probe: _probeEveryone,
       probeRadio: _probeRadio,
@@ -421,6 +427,9 @@ class WalkieController extends ChangeNotifier {
       NetProbe? net;
       RelayProbe? relay;
       var relayProbes = const <RelayProbe>[];
+      final natCheck = offline
+          ? Future<NatInfo?>.value()
+          : (_relay.direct?.probeNat() ?? Future<NatInfo?>.value());
       if (!offline) {
         // v1.8.8: every relay (home + backup), in parallel.
         final results = await Future.wait<Object?>([
@@ -473,6 +482,15 @@ class WalkieController extends ChangeNotifier {
         relay: relay,
         relayProbes: relayProbes,
         relayInUse: relayInUse,
+        direct: _relay.direct == null
+            ? null
+            : DirectCheck(
+                nat: await natCheck,
+                up: directPeers.length,
+                paths: [
+                  for (final id in directPeers) ?_relay.direct!.pathOf(id),
+                ],
+              ),
         radioPaired: radioPaired,
         radioReady: radioDevice.ready,
         radioDetail: radioDevice.deviceName ?? radioDevice.detail,
@@ -620,6 +638,8 @@ class WalkieController extends ChangeNotifier {
       internetStatus.text,
       'Relay: ${[for (final r in _relay.relays) '${_relay.labelOf(r)} ${r.serverUri?.host} ${r.status.name}${r.lastError != null && r.status != TransportStatus.running ? ' (${r.lastError})' : ''}'].join(', ')}',
       'Relay in use: ${relayInUse ?? 'none'}',
+      'Direct links: ${_relay.direct?.debugInfo ?? 'off'}'
+          '${directPeers.isNotEmpty ? ' (${directPeers.map((id) => id.toRadixString(16)).join(', ')})' : ''}',
       for (final t in manager.transports)
         'Link ${t.kind.name}: ${t.status.name}'
             '${t.statusDetail != null ? ' (${t.statusDetail})' : ''}',
@@ -1145,6 +1165,12 @@ class WalkieController extends ChangeNotifier {
 
   /// "Home relay" / "Backup relay" in use (null = none connected).
   String? get relayInUse => _relay.activeLabel;
+
+  /// Phones reached over a direct internet link right now (v1.8.9).
+  Set<int> get directPeers => _relay.direct?.upPeers ?? const {};
+
+  /// "Direct" when [p] is reached over a direct internet link.
+  String? pathOf(Peer p) => manager.pathOf(p);
 
   /// What the Settings field shows: the saved override, or empty (= default).
   String get relayOverride => settings.relayUrl?.trim() ?? '';

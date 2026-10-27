@@ -332,6 +332,41 @@ decrypt).
 * Private talk to a friend is not saved in the replay history.
 * 1.4 and older phones do not see chats, names, friends or moderation.
 
+## v1.8.9: direct phone-to-phone links over the internet
+
+* **What:** two phones on the same channel but on different networks (cell,
+  another Wi-Fi) try a direct UDP link and send talk straight to each other.
+  It's a small pure-Dart version of what WebRTC's ICE does
+  (`lib/transports/direct_links.dart`, `stun.dart`), with no native
+  library, no APK growth and no TURN server.
+* **How:** each phone asks free public STUN servers (Google, Cloudflare) for
+  its public UDP address and lists its local IPv4 / IPv6 addresses. The
+  phones swap these candidates and a random per-link token through the
+  relays as normal room frames (`ControlKind.dx`, sealed on private
+  channels; the lower phone id offers). Then both send small probes to each
+  other's candidates for 8 s (hole punching). The first probe that gets
+  through opens the link. Every packet carries the receiver's token, so
+  nobody else can inject traffic. Frames are the same bytes the relay gets
+  (sealed on private channels).
+* **Never slower:** frames go over the direct link first and through the
+  relays as always; the receiver keeps the first copy (dedupe by sender +
+  seq). Talk never waits for a direct link and nothing breaks when one fails
+  or dies. If both relays drop, the direct link alone keeps talk going.
+* **When:** only for phones on v1.8.9+ that are heard over the internet and
+  have no Wi-Fi / Wi-Fi Direct / Bluetooth link (those stay the fast paths).
+  A failed attempt is retried after 30 s, 2 min, 5 min, then every 10 min,
+  and right away after a network change. Keepalive: a 16-byte ping every
+  15 s (25 s with Battery saver); the link closes after 40 s of silence.
+  Offline power save turns it off with the relays.
+* **Shown:** "via Direct (internet)" on the person's card, "Direct to N" in
+  the Internet sheet and status line, a "Direct links" row in the connection
+  test (what STUN says about this network, IPv4 / IPv6 path), and link
+  up / down / failed events in the debug log.
+* **Limits:** strict carrier NATs (CGNAT, symmetric NAT) often block direct
+  IPv4 links; IPv6 (common on US carriers) usually works. No TURN, so then
+  the relays carry the talk as before. On Android, a phone bound to a Wi-Fi
+  without internet skips direct links (the relay's native sockets still work).
+
 ## v1.8.8: home relay first, Render as backup
 
 * **Home relay:** the default relay list is now the Synology NAS (the same

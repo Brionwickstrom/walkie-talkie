@@ -174,15 +174,26 @@ enum ControlKind {
 
   /// Member got the [rekey].
   rekeyAck,
+
+  // ---- v1.8.9 (older phones fail to decode it and ignore it) ----
+
+  /// Direct link signaling (candidates, tokens) in `x`, to [ControlMessage.to].
+  /// Sent through the relays only; sealed on private channels like every
+  /// other frame. See `transports/direct_links.dart`.
+  dx,
 }
 
 /// Feature level we announce in hello and friend presence `x.v`:
 /// 15 = v1.5.0-1.5.3 (friends, chat, channel names, moderation),
 /// 16 = v1.5.4 (private reply on the home screen), 17 = v1.6.0 (mesh relay,
 /// Wi-Fi Direct), 18 = v1.8.0 (Trip tab: map, SOS, check-ins, pins,
-/// trails, base camp), 19 = v1.8.2 (Who's where lobby beacons). Absent on
-/// older phones.
-const int featureLevel = 19;
+/// trails, base camp), 19 = v1.8.2 (Who's where lobby beacons), 20 =
+/// v1.8.9 (direct internet links, [ControlKind.dx]). Absent on older
+/// phones.
+const int featureLevel = 20;
+
+/// Phones at this level set up direct internet links.
+const int directFeature = 20;
 
 /// Phones at this level send / read [FrameType.lobby] beacons.
 const int lobbyFeature = 19;

@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import '../core/frame.dart';
 import '../core/transport.dart';
+import 'direct_links.dart';
 import 'relay_socket.dart';
 
 /// Internet transport: a WebSocket to a tiny relay server that fans each
@@ -445,11 +446,33 @@ class MultiRelayTransport extends Transport {
     RelayTransport Function(Uri uri)? factory,
     RelayConnector? connector,
     this.failover = true,
+    this.direct,
+    Stream<String>? networkChanges,
   }) : _factory =
            factory ??
            ((u) => RelayTransport(serverUri: u, connector: connector)) {
     _build(serverUris);
+    final d = direct;
+    if (d != null) {
+      _directSubs.add(
+        d.frames.listen((f) {
+          if (!_framesCtl.isClosed) _framesCtl.add(f);
+        }),
+      );
+      _directSubs.add(
+        d.changes.listen((_) {
+          if (!_statusCtl.isClosed) _statusCtl.add(status);
+        }),
+      );
+      final nc = networkChanges ?? connector?.networkChanges;
+      if (nc != null) _directSubs.add(nc.listen((_) => d.networkChanged()));
+    }
   }
+
+  /// Direct phone-to-phone links (v1.8.9), signaled through these relays.
+  /// Only on the main channel transport (not the lobby / friend rooms).
+  final DirectLinks? direct;
+  final List<StreamSubscription<dynamic>> _directSubs = [];
 
   /// Short: the home relay is always on (no cold start).
   static const homeConnectTimeout = Duration(milliseconds: 4500);
@@ -506,10 +529,14 @@ class MultiRelayTransport extends Transport {
   @override
   void setPowerSaver(bool on) {
     _saver = on;
+    direct?.setPowerSaver(on);
     for (final r in _relays) {
       r.setPowerSaver(on);
     }
   }
+
+  @override
+  String? pathTo(int peerId) => direct?.isUp(peerId) ?? false ? 'Direct' : null;
 
   void _build(List<Uri> uris) {
     for (final u in uris) {
@@ -627,7 +654,16 @@ class MultiRelayTransport extends Transport {
       }
       return (
         status: TransportStatus.running,
-        text: 'Internet: connected$via$which',
+        text: 'Internet: connected$via$which$_directNote',
+      );
+    }
+    final nd = direct?.upPeers.length ?? 0;
+    if (nd > 0) {
+      return (
+        status: TransportStatus.running,
+        text:
+            'Internet: Direct to $nd ${nd == 1 ? 'phone' : 'phones'} '
+            '(relays not connected, retrying)',
       );
     }
     final starting = rs.where((r) => r.status == TransportStatus.starting);
@@ -648,6 +684,15 @@ class MultiRelayTransport extends Transport {
           'Internet: offline ($why)${retry != null ? ', retrying in ${retry.inSeconds}s' : ''}',
     );
   }
+
+  /// " · Direct to 2 phones" while direct links are up.
+  String get _directNote {
+    final n = direct?.upPeers.length ?? 0;
+    return n == 0 ? '' : ' · Direct to $n ${n == 1 ? 'phone' : 'phones'}';
+  }
+
+  /// Phones reached over a direct link right now.
+  int get directCount => direct?.upPeers.length ?? 0;
 
   static String _short(Duration d) => d.inSeconds >= 90
       ? '${(d.inSeconds / 60).round()} min'
@@ -690,6 +735,8 @@ class MultiRelayTransport extends Transport {
   TransportStatus get status {
     if (!_wanted) return TransportStatus.stopped;
     if (_relays.isEmpty) return TransportStatus.unavailable;
+    // Direct links keep working while every relay is down.
+    if (direct?.upPeers.isNotEmpty ?? false) return TransportStatus.running;
     final all = _relays.map((r) => r.status).toSet();
     if (all.contains(TransportStatus.running)) return TransportStatus.running;
     if (all.contains(TransportStatus.starting)) return TransportStatus.starting;
@@ -717,7 +764,9 @@ class MultiRelayTransport extends Transport {
               _ => 'down',
             }}',
     ];
-    return '${parts.join(' ')} · room ${RelayTransport.roomFor(_channel)}';
+    final d = direct;
+    return '${parts.join(' ')} · room ${RelayTransport.roomFor(_channel)}'
+        '${d != null && d.running ? ' · ${d.debugInfo}' : ''}';
   }
 
   @override
@@ -731,6 +780,7 @@ class MultiRelayTransport extends Transport {
     _localNodeId = localNodeId;
     _channel = channel;
     _wanted = true;
+    await direct?.start(localNodeId: localNodeId);
     await Future.wait(
       _relays.map((r) => r.start(localNodeId: localNodeId, channel: channel)),
     );
@@ -739,12 +789,31 @@ class MultiRelayTransport extends Transport {
 
   @override
   Future<void> setChannel(int channel) async {
+    final changed = channel != _channel;
     _channel = channel;
+    // Other room, other people: direct links start over.
+    final d = direct;
+    if (changed && d != null && d.running) {
+      await d.stop();
+      await d.start(localNodeId: _localNodeId);
+    }
     await Future.wait(_relays.map((r) => r.setChannel(channel)));
   }
 
+  /// Frames sent over direct links (tests / debug).
+  int directSent = 0;
+
   @override
   Future<void> send(Uint8List frame, {Set<int>? peerIds}) async {
+    // v1.8.9: direct links first (lowest latency), then the relays as
+    // always. The receiver keeps whichever copy arrives first, so talk
+    // never waits for a direct link and never breaks when one fails.
+    final d = direct;
+    if (d != null) {
+      for (final id in peerIds ?? d.upPeers) {
+        if (d.send(id, frame)) directSent++;
+      }
+    }
     for (final r in _relays) {
       if (r.status == TransportStatus.running) {
         await r.send(frame, peerIds: peerIds);
@@ -763,6 +832,7 @@ class MultiRelayTransport extends Transport {
   @override
   Future<void> stop() async {
     _wanted = false;
+    await direct?.stop();
     await Future.wait(_relays.map((r) => r.stop()));
     if (!_statusCtl.isClosed) _statusCtl.add(status);
   }
@@ -770,6 +840,10 @@ class MultiRelayTransport extends Transport {
   @override
   Future<void> dispose() async {
     await stop();
+    for (final s in _directSubs) {
+      await s.cancel();
+    }
+    await direct?.dispose();
     await _teardown();
     await _statusCtl.close();
     await _framesCtl.close();

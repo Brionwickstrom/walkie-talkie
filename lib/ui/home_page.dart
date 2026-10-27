@@ -602,10 +602,11 @@ class _HomePageState extends State<HomePage> {
           ringStatus: c.ringStatusText(p.id),
           volume: c.volumeOf(p.id),
           hops: p.meshHops,
-          debug: peerDebugLine(p, now),
+          debug: peerDebugLine(p, now, path: c.pathOf(p)),
           distance: _distanceTo(p.id),
           arrowDeg: _arrowTo(p.id),
           battery: c.batteryOf(p.id),
+          path: c.pathOf(p),
         ),
       );
     }
@@ -970,6 +971,7 @@ class _HomePageState extends State<HomePage> {
       offlineSaver: c.settings.offlineSaver,
       ios: Platform.isIOS,
       relayInUse: k == TransportKind.internet ? c.relayInUse : null,
+      directCount: k == TransportKind.internet ? c.directPeers.length : 0,
     );
     await showAppSheet<void>(
       context: context,
@@ -1899,9 +1901,10 @@ String _short(TransportKind k) => switch (k) {
 };
 
 /// e.g. "via WiFi | WiFi 0.3s 8ms | BLE 0.7s 41ms"
-String peerDebugLine(Peer p, DateTime now) {
+String peerDebugLine(Peer p, DateTime now, {String? path}) {
   final parts = <String>[
-    'via ${p.activeLink == null ? (p.meshHops != null ? 'mesh ${p.meshHops} hops' : 'none') : _short(p.activeLink!)}',
+    'via ${p.activeLink == null ? (p.meshHops != null ? 'mesh ${p.meshHops} hops' : 'none') : _short(p.activeLink!)}'
+        '${path != null ? ' ($path)' : ''}',
   ];
   for (final k in TransportKind.values) {
     final seen = p.lastSeen[k];

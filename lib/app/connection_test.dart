@@ -4,6 +4,7 @@
 library;
 
 import '../core/transport.dart';
+import '../transports/direct_links.dart' show NatInfo;
 import 'battery_guide.dart';
 import 'link_settings.dart';
 import 'setup.dart';
@@ -135,6 +136,7 @@ class ConnSnapshot {
     this.relay,
     this.relayProbes = const [],
     this.relayInUse,
+    this.direct,
     this.radioPaired = false,
     this.radioReady = false,
     this.radioDetail,
@@ -182,6 +184,9 @@ class ConnSnapshot {
   /// The relay the app talks through right now ("Home relay", "Backup
   /// relay"), null when none is connected.
   final String? relayInUse;
+
+  /// v1.8.9: direct internet links (null = not shown, e.g. old snapshot).
+  final DirectCheck? direct;
   final bool radioPaired;
   final bool radioReady;
   final String? radioDetail;
@@ -205,6 +210,7 @@ List<CheckRow> evaluateConnection(ConnSnapshot s) => [
   _cell(s),
   _internet(s),
   _relay(s),
+  if (s.direct != null) _direct(s, s.direct!),
   _radio(s),
   _permissions(s),
   _battery(s),
@@ -540,6 +546,53 @@ CheckRow _relays(ConnSnapshot s, String t) {
               ? CheckFix.appInfo
               : CheckFix.mobileNetwork),
   );
+}
+
+/// Direct links (v1.8.9): what STUN says about this network and how many
+/// phones are reached directly. Never a failure: the relays always work.
+CheckRow _direct(ConnSnapshot s, DirectCheck d) {
+  const t = 'Direct links (internet)';
+  if (s.offlineSaver) {
+    return const CheckRow(
+      'direct',
+      t,
+      CheckLevel.off,
+      'Off: Offline power save is on (intentionally).',
+    );
+  }
+  final up = d.up;
+  final paths = d.paths.isEmpty ? '' : ' over ${d.paths.join(' / ')}';
+  final nat = d.nat;
+  final net = nat == null
+      ? 'Network check did not run.'
+      : switch (nat.outlook) {
+          'good' => 'This network has IPv6, so direct links usually work here.',
+          'maybe' => 'This network\'s NAT allows direct links to many phones.',
+          _ =>
+            nat.stunAnswered
+                ? 'This network uses a strict (carrier) NAT, so direct links '
+                      'rarely work here.'
+                : 'The public address check (STUN) got no answer, so direct '
+                      'links are unlikely on this network.',
+        };
+  return CheckRow(
+    'direct',
+    t,
+    CheckLevel.ok,
+    '${up > 0 ? 'Direct to $up ${up == 1 ? 'phone' : 'phones'} now$paths. ' : 'No direct link right now (they start when someone on another network is on your channel). '}'
+        '$net Talk always goes through the relay too, so nothing breaks '
+        'when a direct link cannot be made.',
+  );
+}
+
+/// Direct link state for the connection test (v1.8.9).
+class DirectCheck {
+  const DirectCheck({this.nat, this.up = 0, this.paths = const []});
+  final NatInfo? nat;
+  final int up;
+
+  /// "IPv6" / "IPv4" per direct link.
+  final List<String> paths;
 }
 
 CheckRow _radio(ConnSnapshot s) {

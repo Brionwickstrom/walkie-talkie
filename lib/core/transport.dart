@@ -126,6 +126,11 @@ abstract class Transport {
   /// schedule resumes afterwards.
   void kickDiscovery() {}
 
+  /// How traffic to [peerId] travels on this transport when that is worth
+  /// showing, e.g. "Direct" for a direct internet link (v1.8.9); null =
+  /// the normal path.
+  String? pathTo(int peerId) => null;
+
   /// One-line diagnostic for the debug UI.
   String? get debugInfo => null;
 

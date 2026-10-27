@@ -551,6 +551,58 @@ class TransportManager {
   bool sendProbeRadio(Uint8List bytes) =>
       sendLobbyRadio(bytes, priority: LoraPriority.presence);
 
+  // ------------------------------------------- direct links (v1.8.9)
+
+  /// Direct link signaling from [peerId] (a [ControlKind.dx] message).
+  void Function(int peerId, Map<String, Object?> x)? onDirectSignal;
+
+  /// Send direct link signaling to [peerId] over the internet transport
+  /// (the relays), sealed on a private channel like any other frame.
+  Future<void> sendDirectSignal(int peerId, Map<String, Object?> x) async {
+    final t = _transportOf(TransportKind.internet);
+    if (t == null || !_running) return;
+    final bytes = _wire(
+      Frame.control(
+        senderId: localNodeId,
+        channel: _wireChannel,
+        seq: _nextSeq(),
+        message: ControlMessage(ControlKind.dx, to: peerId, x: x),
+      ),
+    );
+    await _safeSend(t, bytes, {peerId});
+  }
+
+  /// Phones that should get a direct internet link: on our channel, new
+  /// enough, heard over the internet and with no local Wi-Fi, Wi-Fi Direct
+  /// or Bluetooth link (those stay the fast paths).
+  List<int> directCandidates() {
+    final now = _clock();
+    final out = <int>[];
+    for (final p in _peers.values) {
+      if (p.channel != scope || p.feature < directFeature) continue;
+      if (blocked.contains(p.id)) continue;
+      final links = usableLinks(p, now);
+      if (!links.contains(TransportKind.internet)) continue;
+      if (links.any(
+        (k) =>
+            k == TransportKind.lan ||
+            k == TransportKind.wifiDirect ||
+            k == TransportKind.ble,
+      )) {
+        continue;
+      }
+      out.add(p.id);
+    }
+    return out;
+  }
+
+  /// "Direct" when [p] is reached over a direct internet link, else null.
+  String? pathOf(Peer p) {
+    final k = p.activeLink;
+    if (k == null) return null;
+    return _transportOf(k)?.pathTo(p.id);
+  }
+
   /// Broadcast presence on every running transport.
   Future<void> sendHello() => _broadcastControl(
     ControlMessage(
@@ -721,6 +773,7 @@ class TransportManager {
           case ControlKind.friendAcc:
           case ControlKind.friendDec:
           case ControlKind.fhello:
+          case ControlKind.dx:
             return false;
         }
       case FrameType.trip:
@@ -1456,6 +1509,15 @@ class TransportManager {
                 changed = true;
               case ControlKind.fhello:
                 break; // only between friends (FriendLinks)
+              case ControlKind.dx:
+                // Direct link signaling (v1.8.9): only straight from the
+                // relay (never through the phone mesh), only for us.
+                if (!relayed &&
+                    inbound.transport == TransportKind.internet &&
+                    msg.to == localNodeId &&
+                    frameScope == scope) {
+                  onDirectSignal?.call(peer.id, msg.x);
+                }
               case ControlKind.ring:
               case ControlKind.beep:
               case ControlKind.ringAck:

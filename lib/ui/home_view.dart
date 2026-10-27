@@ -26,9 +26,14 @@ class PersonView {
     this.distance,
     this.arrowDeg,
     this.battery,
+    this.path,
   });
 
   final int id;
+
+  /// "Direct" when [active] is the internet and the phone is reached over
+  /// a direct link (v1.8.9), else null.
+  final String? path;
 
   /// Their phone battery 0..100 (v1.8.3), null = unknown.
   final int? battery;
@@ -828,7 +833,7 @@ class PersonCard extends StatelessWidget {
             if (p.active == TransportKind.lora)
               'via radio'
             else if (p.active != null)
-              'via ${transportName(p.active!)}',
+              'via ${p.active == TransportKind.internet && p.path != null ? '${p.path} (internet)' : transportName(p.active!)}',
             if (p.active == null && p.hops != null) hopsText(p.hops!),
             if (p.elsewhere != null) p.elsewhere!,
             if (p.lastHeard != null) agoText(p.lastHeard!),
