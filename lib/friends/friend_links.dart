@@ -370,7 +370,22 @@ class FriendLinks {
 
   Duration get currentPresenceInterval => _offline
       ? offlinePresenceInterval
-      : (_saver ? saverPresenceInterval : presenceInterval);
+      : ((_saver || _idle) ? saverPresenceInterval : presenceInterval);
+
+  /// v2.0.0: the app is idle (background, nothing going on): presence
+  /// every 6 s instead of 3 s (friends stay online for 15 s). Busy again:
+  /// back to 3 s and a presence beacon right now.
+  bool get idle => _idle;
+  bool _idle = false;
+
+  void setIdle(bool idle) {
+    if (idle == _idle) return;
+    _idle = idle;
+    if (_running) {
+      _restartTimer();
+      if (!idle) unawaited(sendPresence());
+    }
+  }
 
   void _restartTimer() {
     _timer?.cancel();

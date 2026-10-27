@@ -61,7 +61,7 @@ class TripPage extends StatefulWidget {
   State<TripPage> createState() => TripPageState();
 }
 
-class TripPageState extends State<TripPage> {
+class TripPageState extends State<TripPage> with WidgetsBindingObserver {
   WalkieController get c => widget.controller;
   TripController? get t => c.trip;
   final MapController _map = MapController();
@@ -88,6 +88,7 @@ class TripPageState extends State<TripPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     t?.setVisible(true);
     _startCompass();
     if (widget.focus != null) _follow = false;
@@ -95,12 +96,29 @@ class TripPageState extends State<TripPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _hlTimer?.cancel();
     t?.setVisible(false);
     for (final s in _sensors) {
       s.cancel();
     }
     super.dispose();
+  }
+
+  /// v2.0.0: the compass sensors only run with the app on screen (a phone
+  /// left on the Trip tab with the screen off used to keep them going).
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      if (_sensors.isEmpty) _startCompass();
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      for (final s in _sensors) {
+        s.cancel();
+      }
+      _sensors.clear();
+      _acc = null;
+    }
   }
 
   void _startCompass() {

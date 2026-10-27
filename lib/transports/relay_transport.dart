@@ -765,13 +765,23 @@ class MultiRelayTransport extends Transport {
   static RelayRole roleAt(int index, int count) =>
       index == 0 && count > 0 ? RelayRole.home : RelayRole.backup;
 
-  /// "Home relay" / "Backup relay". A single custom relay is just "Relay".
-  static String labelFor(RelayRole role, {int count = 2}) => count <= 1
+  /// "Home relay" / "Backup relay" / "Backup relay 2" (v2.0.0: more than
+  /// one backup; [index] is the position in the list: 1 = "Backup relay",
+  /// 2 = "Backup relay 2", ...). A single custom relay is just "Relay".
+  static String labelFor(RelayRole role, {int count = 2, int? index}) =>
+      count <= 1
       ? 'Relay'
       : switch (role) {
           RelayRole.home => 'Home relay',
-          RelayRole.backup => 'Backup relay',
+          RelayRole.backup =>
+            index != null && index >= 2
+                ? 'Backup relay $index'
+                : 'Backup relay',
         };
+
+  /// Label of the relay at [index] in a list of [count].
+  static String labelAt(int index, int count) =>
+      labelFor(roleAt(index, count), count: count, index: index);
 
   /// Parse a comma / whitespace separated list ("wss://a/ws, wss://b/ws").
   /// "off" (or empty) gives an empty list.
@@ -844,9 +854,11 @@ class MultiRelayTransport extends Transport {
         r.statusChanges.listen((_) {
           _tuneHomeRetry();
           final role = activeRole;
-          if (role != _lastRole) {
+          final label = activeLabel;
+          if (role != _lastRole || label != _lastLabel) {
             final was = _lastRole;
             _lastRole = role;
+            _lastLabel = label;
             onRoleChange?.call(was, role);
           }
           if (!_statusCtl.isClosed) _statusCtl.add(status);
@@ -859,6 +871,7 @@ class MultiRelayTransport extends Transport {
   /// for "none connected". For the debug log.
   void Function(RelayRole? from, RelayRole? to)? onRoleChange;
   RelayRole? _lastRole;
+  String? _lastLabel;
 
   /// Home retries slowly (2.5 min) only while a backup carries the traffic.
   void _tuneHomeRetry() {
@@ -896,17 +909,16 @@ class MultiRelayTransport extends Transport {
     return roleAt(_relays.indexOf(a), _relays.length);
   }
 
-  /// "Home relay" / "Backup relay" / "Relay", null when none is connected.
+  /// "Home relay" / "Backup relay" / "Backup relay 2" / "Relay", null when
+  /// none is connected.
   String? get activeLabel {
-    final role = activeRole;
-    return role == null ? null : labelFor(role, count: _relays.length);
+    final a = active;
+    return a == null ? null : labelOf(a);
   }
 
   /// The label of [r] in this list.
-  String labelOf(RelayTransport r) => labelFor(
-    roleAt(_relays.indexOf(r), _relays.length),
-    count: _relays.length,
-  );
+  String labelOf(RelayTransport r) =>
+      labelAt(_relays.indexOf(r), _relays.length);
 
   /// One line for the UI: "Internet: connected via mobile data (Home
   /// relay)", "Internet: connected via Wi-Fi (Backup relay; home relay
@@ -932,13 +944,18 @@ class MultiRelayTransport extends Transport {
               .skip(1)
               .where((b) => b.status == TransportStatus.running)
               .length;
-          which = ' (Home relay${backups > 0 ? ' + backup' : ''})';
+          which =
+              ' (Home relay${backups > 1
+                  ? ' + $backups backups'
+                  : backups > 0
+                  ? ' + backup'
+                  : ''})';
         } else {
           final homeWhy = home.status == TransportStatus.starting
               ? 'home relay connecting'
               : 'home relay unreachable'
                     '${home.retryIn != null ? ', retry in ${_short(home.retryIn!)}' : ''}';
-          which = ' (Backup relay; $homeWhy)';
+          which = ' (${labelOf(r)}; $homeWhy)';
         }
       }
       return (
@@ -1046,7 +1063,7 @@ class MultiRelayTransport extends Transport {
     if (_relays.isEmpty) return null;
     final parts = [
       for (final r in _relays)
-        '${_relays.length > 1 ? '${labelOf(r).split(' ').first.toLowerCase()} ' : ''}'
+        '${_relays.length > 1 ? '${labelOf(r).replaceFirst(' relay', '').replaceAll(' ', '').toLowerCase()} ' : ''}'
             '${r.serverUri!.host.split('.').first}:${switch (r.status) {
               TransportStatus.running => 'up',
               TransportStatus.starting => 'connecting',

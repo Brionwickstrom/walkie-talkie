@@ -676,6 +676,9 @@ void main() {
       await m.setTalking(true); // talking from the notification
       expect(m.probeInterval, const Duration(seconds: 1));
       await m.setTalking(false);
+      // v2.0.0: a minute of quiet after talking before it relaxes again.
+      expect(m.probeInterval, const Duration(seconds: 3));
+      clock.advance(LinkPolicy.idleAfter + const Duration(seconds: 1));
       m.setSpeed(ConnectionSpeed.balanced);
       expect(m.probeInterval, const Duration(seconds: 30));
       expect(net.plans.last, (

@@ -232,7 +232,7 @@ class WifiDirectTransport extends Transport {
       ? const Duration(seconds: 10)
       : _offline
       ? const Duration(minutes: 15)
-      : Duration(seconds: _inGroup ? 120 : (_saver ? 90 : 30));
+      : Duration(seconds: _inGroup ? 120 : ((_saver || _idle) ? 90 : 30));
 
   /// Offline power save: discovery only on demand ([discoverNow]).
   bool _offline = false;
@@ -288,6 +288,19 @@ class WifiDirectTransport extends Transport {
     if (_supported) await _platform.stop();
     if (_status != TransportStatus.unavailable) {
       _setStatus(TransportStatus.stopped);
+    }
+  }
+
+  /// v2.0.0: idle (background, nothing going on): peer discovery as slow
+  /// as in battery saver; busy again: back to the normal period.
+  bool _idle = false;
+
+  @override
+  void setIdle(bool idle) {
+    if (_idle == idle) return;
+    _idle = idle;
+    if (_status == TransportStatus.running) {
+      unawaited(_platform.setDiscoveryInterval(_discoveryInterval));
     }
   }
 

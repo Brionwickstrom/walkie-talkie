@@ -34,7 +34,8 @@ enum ProbeActivity {
   foreground,
 
   /// The app is in the background (screen off or another app) and nothing
-  /// is going on.
+  /// has happened for [LinkPolicy.idleAfter] (v2.0.0: no push-to-talk,
+  /// audio, chat, ring or SOS in or out, no link trouble).
   idle,
 }
 
@@ -134,7 +135,7 @@ class LinkPolicy {
   static Duration peerPingInterval(ConnectionSpeed speed, ProbeActivity a) =>
       switch ((speed, a)) {
         (ConnectionSpeed.maxSpeed, ProbeActivity.idle) => const Duration(
-          seconds: 5,
+          seconds: 10,
         ),
         (ConnectionSpeed.maxSpeed, _) => const Duration(seconds: 1),
         (ConnectionSpeed.balanced, ProbeActivity.active) => const Duration(
@@ -147,6 +148,32 @@ class LinkPolicy {
           seconds: 15,
         ),
       };
+
+  // ------------------------------------------------ adaptive (v2.0.0)
+
+  /// Background and nothing heard or sent for this long = idle. Any real
+  /// traffic (talk, chat, rings, SOS, friend audio) ends it at once.
+  static const idleAfter = Duration(seconds: 60);
+
+  /// A link that missed a check, a send that failed or a network change
+  /// puts every probe at the fastest rate ([ProbeActivity.active]) for
+  /// this long, whatever the idle state.
+  static const burstFor = Duration(seconds: 10);
+
+  /// A new burst may start this long after the last one ended (a network
+  /// that stays down must not keep the phone at full speed all night).
+  static const burstCooldown = Duration(seconds: 20);
+
+  /// Presence hello (and the 2 s mesh beacon) while idle. Phones that hear
+  /// it are told the interval in the hello, so they wait longer before
+  /// calling us gone; our answers to their pings are never delayed.
+  static Duration idleHelloInterval(ConnectionSpeed speed) => switch (speed) {
+    ConnectionSpeed.maxSpeed => const Duration(seconds: 5),
+    ConnectionSpeed.balanced => const Duration(milliseconds: 7500),
+  };
+
+  /// Mesh beacon every [TransportManager.beaconInterval], this often idle.
+  static const idleBeaconInterval = Duration(seconds: 10);
 
   /// Longest wait between relay reconnect attempts.
   static Duration reconnectCap(ConnectionSpeed speed, ProbeActivity a) =>
@@ -204,7 +231,9 @@ class LinkPolicy {
     ConnectionSpeed.maxSpeed =>
       'Max speed: moves to a working connection within about a second. '
           'Checks every 1-3 s while the app is open or you talk, every '
-          '15 s in the background. Uses a little more battery than '
+          '15 s in the background once nothing has happened for a '
+          'minute (and snaps back to full speed the moment anything '
+          'does). Uses a little more battery than '
           'Balanced (roughly 1-3% more per hour with the app open; '
           'estimate, varies by phone).',
     ConnectionSpeed.balanced =>

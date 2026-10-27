@@ -130,6 +130,12 @@ abstract class Transport {
     required Duration reconnectCap,
   }) {}
 
+  /// v2.0.0: the app is idle (background, nothing heard or sent for a
+  /// minute, see [LinkPolicy.idleAfter]) or busy again. Links with
+  /// discovery / scan duty cycles relax them while idle and go back to
+  /// full speed at once ([idle] false). Receiving never waits on this.
+  void setIdle(bool idle) {}
+
   /// Best measured round trip on this link right now (relay ping/pong),
   /// null when unknown. For the status line.
   Duration? get probeRtt => null;

@@ -323,6 +323,23 @@ class TripController extends ChangeNotifier {
 
   bool get visible => _visible;
 
+  /// v2.0.0: the app is on screen. The Trip tab only counts as visible
+  /// (fast GPS fixes, compass) while it is: a phone left on the Trip tab
+  /// with the screen off no longer polls GPS every 5 s. Trip mode,
+  /// recording, navigation, driving and SOS keep their own GPS needs.
+  bool get appForeground => _appForeground;
+  bool _appForeground = true;
+
+  void setAppForeground(bool on) {
+    if (_appForeground == on) return;
+    _appForeground = on;
+    unawaited(_updateLocationNeed());
+    if (on && _visible) unawaited(maybeRefreshWeather());
+  }
+
+  /// The Trip tab is on screen and so is the app.
+  bool get _onScreen => _visible && _appForeground;
+
   /// Offline power save (v1.8.1): slower GPS and check-ins, no live
   /// position updates, no map / weather downloads. SOS stays at full
   /// speed and priority; quick messages, pins and check-ins still go out.
@@ -348,7 +365,7 @@ class TripController extends ChangeNotifier {
       settings.tripMode ||
       recorder.recording ||
       sos.active != null ||
-      _visible ||
+      _onScreen ||
       nav != null ||
       drive != null;
 
@@ -361,7 +378,7 @@ class TripController extends ChangeNotifier {
     if (recorder.recording) {
       return recorder.interval(now, saver: p.transportSaver);
     }
-    return p.gpsInterval(visible: _visible, sosActive: false);
+    return p.gpsInterval(visible: _onScreen, sosActive: false);
   }
 
   /// GPS interval asked for right now (tests / debug).

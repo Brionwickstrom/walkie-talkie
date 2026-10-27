@@ -188,9 +188,16 @@ class TransportManager {
   bool get powerSaver => _saver;
   bool _saver = false;
   static const saverHelloInterval = Duration(milliseconds: 2500);
-  Duration get currentHelloInterval => _offline
-      ? PowerPlan.offlineHello
-      : (_saver ? saverHelloInterval : helloInterval);
+  Duration get currentHelloInterval {
+    if (_offline) return PowerPlan.offlineHello;
+    final base = _saver ? saverHelloInterval : helloInterval;
+    if (!_idleHello) return base;
+    final idle = LinkPolicy.idleHelloInterval(_speed);
+    return idle > base ? idle : base;
+  }
+
+  /// Hellos are on the idle (slow) cadence (set by [_applyProbePlan]).
+  bool _idleHello = false;
 
   /// Offline power save (see [PowerPlan]): internet transports stopped,
   /// every other transport in its strongest saver, slow hellos / beacons.
@@ -247,11 +254,89 @@ class TransportManager {
     if (_talking || _peers.values.any((p) => p.talking)) {
       return ProbeActivity.active;
     }
+    final now = _clock();
     final u = _urgentAt;
-    if (u != null && _clock().difference(u) < urgentActiveFor) {
+    if (u != null && now.difference(u) < urgentActiveFor) {
       return ProbeActivity.active;
     }
+    // v2.0.0: a missed check, a failed send or a network change: burst.
+    final b = _burstUntil;
+    if (b != null && now.isBefore(b)) return ProbeActivity.active;
+    if (_activity == ProbeActivity.idle) {
+      // Background, but something real happened lately (a conversation):
+      // keep checking at the screen-on rate until it has been quiet.
+      final t = _trafficAt;
+      if (t != null && now.difference(t) < LinkPolicy.idleAfter) {
+        return ProbeActivity.foreground;
+      }
+    }
     return _activity;
+  }
+
+  // ------------------------------------------ adaptive probing (v2.0.0)
+
+  /// Last real traffic in or out: push-to-talk, audio, chat / clips, rings,
+  /// beeps, SOS / Trip, friend talk. Not hellos, pings, pongs or beacons
+  /// (those arrive every second from busy phones and would keep this
+  /// phone awake for ever).
+  DateTime? _trafficAt;
+  DateTime? _burstUntil;
+  DateTime? _burstEnded;
+
+  /// Times a burst of fast probes started (tests / Details).
+  int bursts = 0;
+
+  /// Callback when the idle state changes (the app slows friend presence).
+  void Function(bool idle)? onIdleChanged;
+
+  /// Real traffic happened (the app calls this for friend talk too).
+  /// Leaves idle at once.
+  void noteTraffic() {
+    _trafficAt = _clock();
+    if (_appliedActivity == ProbeActivity.idle) _applyProbePlan();
+  }
+
+  static bool _isTraffic(Frame f) {
+    switch (f.type) {
+      case FrameType.audio:
+      case FrameType.data:
+      case FrameType.trip:
+        return true;
+      case FrameType.control:
+        final k = f.control?.kind;
+        return k == ControlKind.talkStart ||
+            k == ControlKind.talkEnd ||
+            k == ControlKind.ring ||
+            k == ControlKind.beep ||
+            k == ControlKind.ringAck ||
+            k == ControlKind.friendReq ||
+            k == ControlKind.friendAcc ||
+            k == ControlKind.friendDec;
+      default:
+        return false;
+    }
+  }
+
+  /// A link looks broken (a check was missed, a send failed, the network
+  /// changed): every probe at full speed for [LinkPolicy.burstFor], every
+  /// link pinged right now, whatever the idle state. [force] skips the
+  /// cool-down (network changes).
+  void _startBurst({bool force = false}) {
+    if (!_running) return;
+    final now = _clock();
+    final b = _burstUntil;
+    if (b != null && now.isBefore(b)) return; // already bursting
+    final ended = _burstEnded;
+    if (!force &&
+        ended != null &&
+        now.difference(ended) < LinkPolicy.burstCooldown) {
+      return;
+    }
+    bursts++;
+    _burstUntil = now.add(LinkPolicy.burstFor);
+    _burstEnded = _burstUntil;
+    _applyProbePlan();
+    if (_started && !_slow) unawaited(sendPings(force: true));
   }
 
   ProbeActivity? _appliedActivity;
@@ -295,6 +380,7 @@ class TransportManager {
     final a = activity;
     if (a == _appliedActivity && _speed == _appliedSpeed) return;
     final wasActive = _appliedActivity == ProbeActivity.active;
+    final wasIdle = _appliedActivity == ProbeActivity.idle;
     _appliedActivity = a;
     _appliedSpeed = _speed;
     final probe = LinkPolicy.probeInterval(_speed, a);
@@ -304,9 +390,30 @@ class TransportManager {
         t.setProbePlan(probe: probe, reconnectCap: cap);
       } catch (_) {}
     }
+    final idle = a == ProbeActivity.idle;
+    if (idle != wasIdle || (idle && !_idleHello)) {
+      _idleHello = idle;
+      for (final t in _transports) {
+        try {
+          t.setIdle(idle);
+        } catch (_) {}
+      }
+      try {
+        onIdleChanged?.call(idle);
+      } catch (_) {}
+      _startPruneTimer();
+      if (_started) {
+        // Back to full speed: say so now and go back to one hello a
+        // second; going idle: slow hellos from here on.
+        _startHelloTimer();
+        if (!idle && !_slow) unawaited(sendHello());
+      }
+    }
     // Something started (talk, ring): check every link right now instead
     // of at the next tick.
     if (_started && a == ProbeActivity.active && !wasActive && !_slow) {
+      unawaited(sendPings(force: true));
+    } else if (_started && wasIdle && !idle && !_slow) {
       unawaited(sendPings(force: true));
     }
   }
@@ -320,6 +427,7 @@ class TransportManager {
   Future<void> onNetworkChanged() async {
     if (!_running) return;
     networkChanges++;
+    _startBurst(force: true);
     for (final t in _transports) {
       if (t.lowBandwidth || t.kind == TransportKind.internet) continue;
       if (t.kind == TransportKind.ble) continue; // not tied to a network
@@ -478,10 +586,7 @@ class TransportManager {
       }),
     );
     _startHelloTimer();
-    _pruneTimer = Timer.periodic(
-      const Duration(milliseconds: 500),
-      (_) => prune(),
-    );
+    _startPruneTimer();
     _missTimer = Timer.periodic(
       const Duration(milliseconds: 250),
       (_) => checkMisses(),
@@ -510,6 +615,18 @@ class TransportManager {
     }());
   }
 
+  /// Peers are dropped and links aged every 500 ms (every 2 s while idle).
+  void _startPruneTimer() {
+    if (!_running) return;
+    _pruneTimer?.cancel();
+    _pruneTimer = Timer.periodic(
+      _idleHello
+          ? const Duration(seconds: 2)
+          : const Duration(milliseconds: 500),
+      (_) => prune(),
+    );
+  }
+
   void _startHelloTimer() {
     _helloTimer?.cancel();
     _helloTimer = Timer.periodic(currentHelloInterval, (_) async {
@@ -520,9 +637,12 @@ class TransportManager {
       if (!_slow) await _maybePings();
       final now = _clock();
       final last = _lastBeacon;
+      final beaconEvery = _idleHello && !_offline
+          ? LinkPolicy.idleBeaconInterval
+          : beaconInterval;
       if (last == null ||
           now.difference(last) >=
-              beaconInterval - const Duration(milliseconds: 100)) {
+              beaconEvery - const Duration(milliseconds: 100)) {
         await sendBeacon();
       }
     });
@@ -789,7 +909,9 @@ class TransportManager {
   ControlMessage _helloMessage() => ControlMessage(
     ControlKind.hello,
     name: localName,
-    interval: _slow ? currentHelloInterval.inMilliseconds : null,
+    interval: (_slow || _idleHello)
+        ? currentHelloInterval.inMilliseconds
+        : null,
     x: helloExtras?.call() ?? const {},
     lanAddrs: [
       for (final t in _transports)
@@ -844,6 +966,8 @@ class TransportManager {
   Future<void> setTalking(bool talking) async {
     if (_talking == talking) return;
     _talking = talking;
+    if (talking) _trafficAt = _clock();
+    _applyProbePlan(); // push-to-talk: full speed right now, even idle
     await _sendToChannel(
       Frame.control(
         senderId: localNodeId,
@@ -1754,6 +1878,8 @@ class TransportManager {
           degradedEvents++;
           changed = true;
           _failover(p, k, now);
+          // v2.0.0: trouble: probe fast for a while, idle or not.
+          _startBurst();
         }
         if (m == LinkPolicy.missesForDown) changed = true;
       }
@@ -1931,6 +2057,10 @@ class TransportManager {
   /// Rings, beeps and SOS make the app check links at the fastest rate
   /// for [urgentActiveFor].
   void _noteActivity(Frame f) {
+    if (_isTraffic(f)) {
+      _trafficAt = _clock();
+      if (_appliedActivity == ProbeActivity.idle) _applyProbePlan();
+    }
     final k = f.type == FrameType.control ? f.control?.kind : null;
     final ring =
         k == ControlKind.ring ||
@@ -2010,7 +2140,9 @@ class TransportManager {
       await t.send(bytes, peerIds: to);
     } catch (_) {
       // A failed send on one link is not fatal; the link will time out and
-      // traffic moves to the next best transport.
+      // traffic moves to the next best transport. v2.0.0: and every link
+      // is checked at full speed for a few seconds (idle or not).
+      if (!t.lowBandwidth) _startBurst();
     }
   }
 
@@ -2244,7 +2376,13 @@ class TransportManager {
     final frameScope = key == null ? f.channel : scope;
 
     final now = _clock();
+    final knownBefore = _peers.containsKey(f.senderId);
     final peer = _peers.putIfAbsent(f.senderId, () => Peer(f.senderId));
+    // Idle (slow hellos): a phone we have not heard yet gets our hello now,
+    // not up to a few seconds later.
+    if (!knownBefore && _idleHello && _running && _started) {
+      unawaited(sendHello());
+    }
     final wasMeshHops = peer.meshHops;
     final viaSlow =
         viaGw || (_transportOf(inbound.transport)?.lowBandwidth ?? false);

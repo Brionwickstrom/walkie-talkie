@@ -136,6 +136,13 @@ class LanTransport extends Transport {
   @override
   void setPowerSaver(bool on) => _saver = on;
 
+  /// v2.0.0: idle (background, nothing going on): subnet sweeps (only
+  /// run while no phone is heard) as slow as in battery saver.
+  bool _idle = false;
+
+  @override
+  void setIdle(bool idle) => _idle = idle;
+
   /// Offline power save: no subnet sweeps. Broadcast / multicast / known
   /// addresses keep working while the phone is on a network (with no
   /// network there is nothing to send on anyway).
@@ -612,7 +619,7 @@ class LanTransport extends Transport {
     if (_hasRecentPeer) return;
     final since = _lastPeerHeard ?? _startedAt;
     if (since == null || now.difference(since) < sweepAfter) return;
-    final every = _saver ? saverSweepInterval : sweepInterval;
+    final every = (_saver || _idle) ? saverSweepInterval : sweepInterval;
     if (_lastSweep != null && now.difference(_lastSweep!) < every) {
       return;
     }

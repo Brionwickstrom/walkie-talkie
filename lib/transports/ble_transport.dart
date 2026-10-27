@@ -213,7 +213,9 @@ class BleTransport extends Transport {
       return;
     }
     final wantMode = _links.isEmpty
-        ? fbp.AndroidScanMode.lowLatency
+        ? (_idle
+              ? fbp.AndroidScanMode.balanced
+              : fbp.AndroidScanMode.lowLatency)
         : fbp.AndroidScanMode.lowPower;
     final recently =
         _lastScanStart != null &&
@@ -280,6 +282,20 @@ class BleTransport extends Transport {
   @override
   void setPowerSaver(bool on) => _saver = on;
 
+  /// v2.0.0: idle (background, nothing going on): with no Bluetooth link
+  /// the scan runs in the balanced mode (about a quarter duty) instead of
+  /// continuous low latency. Busy again: back to full speed and a fast
+  /// scan burst right away.
+  bool _idle = false;
+  bool get idle => _idle;
+
+  @override
+  void setIdle(bool idle) {
+    if (_idle == idle) return;
+    _idle = idle;
+    if (!idle) kickDiscovery();
+  }
+
   /// Offline power save: even shorter bursts, longer gaps, low-power scan
   /// mode. (Advertising already uses Android's low-power default.)
   bool _offline = false;
@@ -322,7 +338,9 @@ class BleTransport extends Transport {
               ? fbp.AndroidScanMode.balanced
               : fbp.AndroidScanMode.lowPower)
         : _links.isEmpty
-        ? fbp.AndroidScanMode.lowLatency
+        ? (_idle
+              ? fbp.AndroidScanMode.balanced
+              : fbp.AndroidScanMode.lowLatency)
         : fbp.AndroidScanMode.lowPower;
     _lastScanStart = DateTime.now();
     if (fbp.FlutterBluePlus.isScanningNow) {

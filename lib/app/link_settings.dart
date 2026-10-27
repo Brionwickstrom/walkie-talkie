@@ -111,11 +111,11 @@ LinkInfo describeLink(
             ? switch (relayInUse) {
                     'Home relay' =>
                       'Talking through your Home relay (the Synology). The '
-                          'Backup relay stays connected too, so phones that '
+                          'Backup relays stay connected too, so phones that '
                           'cannot reach home still hear you. Works on Wi-Fi or '
                           'mobile data.',
-                    'Backup relay' =>
-                      'Talking through the Backup relay: the Home relay (the '
+                    'Backup relay' || 'Backup relay 2' || 'Backup relay 3' =>
+                      'Talking through a Backup relay: the Home relay (the '
                           'Synology) cannot be reached right now. The app keeps '
                           'trying it (every few minutes and when the network '
                           'changes). Everyone still meets on the backup.',

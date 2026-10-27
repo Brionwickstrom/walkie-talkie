@@ -192,7 +192,11 @@ class _HomePageState extends State<HomePage> {
     // Refresh link ages / debug lines / recording timer.
     var ticks = 0;
     _tick = Timer.periodic(const Duration(milliseconds: 500), (_) {
-      if (!mounted) return;
+      // v2.0.0: nothing to redraw (or poll) with the app in the background.
+      final life = WidgetsBinding.instance.lifecycleState;
+      if (!mounted || (life != null && life != AppLifecycleState.resumed)) {
+        return;
+      }
       setState(() {});
       // The volume buttons change the media stream; re-check every 2 s.
       if (ticks++ % 4 == 0) c.refreshMediaVolume();

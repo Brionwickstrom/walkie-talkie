@@ -115,6 +115,7 @@ void main() {
       expect(l.map((u) => u.toString()), [
         'wss://walkie-relay.tail1700cf.ts.net/ws',
         'wss://brion-walkie-relay.onrender.com/ws',
+        'wss://brion-walkie-relay-2.onrender.com/ws', // v2.0.0
       ]);
     });
 
@@ -128,6 +129,7 @@ void main() {
       const both = [
         'walkie-relay.tail1700cf.ts.net',
         'brion-walkie-relay.onrender.com',
+        'brion-walkie-relay-2.onrender.com', // v2.0.0
       ];
       expect(uris(null), both);
       expect(uris(''), both);

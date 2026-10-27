@@ -474,10 +474,7 @@ class WalkieController extends ChangeNotifier {
                     ))(relays[i])
                 .then(
                   (p) => p.withLabel(
-                    MultiRelayTransport.labelFor(
-                      MultiRelayTransport.roleAt(i, relays.length),
-                      count: relays.length,
-                    ),
+                    MultiRelayTransport.labelAt(i, relays.length),
                   ),
                 ),
         ]);
@@ -603,16 +600,29 @@ class WalkieController extends ChangeNotifier {
   // debug log
 
   /// v1.8.8: which relay is in use, into the debug log when it changes.
+  String? _lastRelayLabel;
+
   void _logRelayRole(RelayRole? from, RelayRole? to) {
     final n = _relay.relays.length;
     String label(RelayRole r) => MultiRelayTransport.labelFor(r, count: n);
     final host = _relay.active?.serverUri?.host;
+    final now = _relay.activeLabel;
+    final prev = _lastRelayLabel;
+    _lastRelayLabel = now;
     debugLog.add(
       'relay',
       to == null
-          ? 'no relay connected${from != null ? ' (was ${label(from)})' : ''}'
-          : 'using ${label(to)}${host != null ? ' ($host)' : ''}'
-                '${from != null ? ', was ${label(from)}' : ''}',
+          ? 'no relay connected${prev != null
+                ? ' (was $prev)'
+                : from != null
+                ? ' (was ${label(from)})'
+                : ''}'
+          : 'using ${now ?? label(to)}${host != null ? ' ($host)' : ''}'
+                '${prev != null
+                    ? ', was $prev'
+                    : from != null
+                    ? ', was ${label(from)}'
+                    : ''}',
     );
   }
 
@@ -996,8 +1006,10 @@ class WalkieController extends ChangeNotifier {
     final isLegacy =
         saved.isNotEmpty &&
         AppConfig.legacyDefaults.any(
-          (d) =>
-              _sameUris(MultiRelayTransport.parseList(saved), [Uri.parse(d)]),
+          (d) => _sameUris(
+            MultiRelayTransport.parseList(saved),
+            MultiRelayTransport.parseList(d),
+          ),
         );
     return MultiRelayTransport.parseList(
       saved.isEmpty || isLegacy ? AppConfig.relayUrl : saved,
@@ -1365,6 +1377,9 @@ class WalkieController extends ChangeNotifier {
     await manager.setOfflineSaver(settings.offlineSaver);
     // v1.9.8: connection speed plan and network-change reconnects.
     manager.setSpeed(settings.connectionSpeed);
+    // v2.0.0: idle (background, nothing for a minute) slows friend
+    // presence; busy again restores it at once.
+    manager.onIdleChanged = (idle) => friendLinks.setIdle(idle);
     manager.setActivity(
       foreground ? ProbeActivity.foreground : ProbeActivity.idle,
     );
@@ -1386,11 +1401,14 @@ class WalkieController extends ChangeNotifier {
     );
     if (bridge.supported) {
       unawaited(refreshPhoneNet());
+      // v2.0.0: every 5 s on screen, every 30 s in the background (it
+      // only feeds the status text; the network callback handles changes).
+      var netTicks = 0;
       _timers.add(
-        Timer.periodic(
-          const Duration(seconds: 5),
-          (_) => unawaited(refreshPhoneNet()),
-        ),
+        Timer.periodic(const Duration(seconds: 5), (_) {
+          if (!foreground && ++netTicks % 6 != 0) return;
+          unawaited(refreshPhoneNet());
+        }),
       );
     }
     _subs.add(radioDevice.changes.listen((_) => notifyListeners()));
@@ -1701,6 +1719,11 @@ class WalkieController extends ChangeNotifier {
     manager.setActivity(
       foreground ? ProbeActivity.foreground : ProbeActivity.idle,
     );
+    // v2.0.0: the Trip tab's fast GPS and compass only run on screen.
+    trip?.setAppForeground(foreground);
+    if (foreground && !wasForeground && bridge.supported) {
+      unawaited(refreshPhoneNet());
+    }
     if (s != AppLifecycleState.detached) _wasVisible = true;
     if (foreground && !wasForeground) {
       for (final id in _talkingPrev) {
@@ -3721,6 +3744,7 @@ class WalkieController extends ChangeNotifier {
   void _sendPrivate(Uint8List opus) {
     final id = privateTalkTo;
     if (id == null || !transmitting) return;
+    manager.noteTraffic();
     unawaited(
       friendLinks.send(
         id,
@@ -3734,6 +3758,7 @@ class WalkieController extends ChangeNotifier {
   }
 
   void _onFriendFrame(FriendInbound f) {
+    manager.noteTraffic(); // friend talk / chat: leave idle at once
     if (f.frame.type != FrameType.audio) return;
     final id = f.friendId;
     final why = liveGate.admit(-1 - id, f.frame.payload, talking: null);
