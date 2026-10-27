@@ -54,6 +54,16 @@ class Peer {
   /// through the mesh, else null. Set by the TransportManager.
   int? meshHops;
 
+  /// Last time this phone was heard through a LoRa gateway (v1.9.5) and
+  /// which one.
+  DateTime? gatewaySeen;
+  int? gatewayId;
+
+  /// "Home gateway" while a LoRa gateway is the only way to this phone
+  /// (shown as "via Home gateway (LoRa)"), else null. Set by the
+  /// TransportManager.
+  String? viaGateway;
+
   String get displayName => name.isNotEmpty ? name : callSignFor(id);
 
   Set<TransportKind> liveLinks(DateTime now, Duration timeout) => {

@@ -19,6 +19,7 @@ import 'history_page.dart';
 import 'home_view.dart';
 import 'link_sheet.dart';
 import 'inbox_page.dart';
+import 'quiet_widgets.dart';
 import 'radio_settings.dart';
 import 'sheets.dart';
 import 'trip_page.dart';
@@ -413,6 +414,13 @@ class _HomePageState extends State<HomePage> {
               : SafeArea(
                   child: HomeBody(
                     banners: [
+                      if (c.quietStatus != null)
+                        QuietBanner(
+                          text: c.quietStatus!,
+                          muted: c.quiet.muted,
+                          onUnmute: c.unmute,
+                          onSettings: () => _openSettings(context),
+                        ),
                       if (c.playingSomething)
                         Card(
                           margin: const EdgeInsets.fromLTRB(8, 4, 8, 0),
@@ -566,6 +574,16 @@ class _HomePageState extends State<HomePage> {
                       onRingAll: () => c.ring(),
                       onBeepAll: () => c.ring(beep: true),
                       record: _RecordButton(controller: c),
+                      mute: MuteButton(
+                        muted: c.quiet.muted,
+                        onMute: () async {
+                          await c.muteFor(null);
+                          if (context.mounted) {
+                            await showMuteDurationSheet(context, c);
+                          }
+                        },
+                        onUnmute: c.unmute,
+                      ),
                     ),
                     ptt: _mainTalk(context, pttSize),
                   ),
@@ -598,7 +616,7 @@ class _HomePageState extends State<HomePage> {
       final links = c.manager.liveLinksOf(p, now)
         ..sort((a, b) => b.defaultPriority.compareTo(a.defaultPriority));
       DateTime? last;
-      for (final t in [...p.lastSeen.values, ?p.meshSeen]) {
+      for (final t in [...p.lastSeen.values, ?p.meshSeen, ?p.gatewaySeen]) {
         if (last == null || t.isAfter(last)) last = t;
       }
       final mine = p.channel == c.scope;
@@ -619,6 +637,7 @@ class _HomePageState extends State<HomePage> {
           arrowDeg: _arrowTo(p.id),
           battery: c.batteryOf(p.id),
           path: c.pathOf(p),
+          gateway: p.viaGateway,
         ),
       );
     }
@@ -705,6 +724,17 @@ class _HomePageState extends State<HomePage> {
                   TextButton(
                     onPressed: () => c.setPeerVolume(p.id, 1),
                     child: const Text('Reset to 100%'),
+                  ),
+                  SwitchListTile(
+                    key: const Key('alwaysAllow'),
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Always allow rings'),
+                    subtitle: const Text(
+                      'Their rings still sound while you are muted or in '
+                      'quiet hours (with "Let urgent rings through" on).',
+                    ),
+                    value: c.alwaysAllowed(p.id),
+                    onChanged: (v) => c.setAlwaysAllow(p.id, v),
                   ),
                   const Divider(),
                   Wrap(
@@ -1257,6 +1287,9 @@ class _HomePageState extends State<HomePage> {
                 const Divider(height: 32),
                 _SectionTitle('Long-range radio (Meshtastic)'),
                 RadioSettings(controller: c),
+                const Divider(height: 32),
+                _SectionTitle('Mute & quiet hours'),
+                QuietSettings(controller: c),
                 const Divider(height: 32),
                 _SectionTitle('Talk button'),
                 SwitchListTile(
@@ -1930,7 +1963,11 @@ String _short(TransportKind k) => switch (k) {
 /// e.g. "via WiFi | WiFi 0.3s 8ms | BLE 0.7s 41ms"
 String peerDebugLine(Peer p, DateTime now, {String? path}) {
   final parts = <String>[
-    'via ${p.activeLink == null ? (p.meshHops != null ? 'mesh ${p.meshHops} hops' : 'none') : _short(p.activeLink!)}'
+    'via ${p.activeLink == null ? (p.meshHops != null
+                  ? 'mesh ${p.meshHops} hops'
+                  : p.viaGateway != null
+                  ? 'gateway ${p.viaGateway}'
+                  : 'none') : _short(p.activeLink!)}'
         '${path != null ? ' ($path)' : ''}',
   ];
   for (final k in TransportKind.values) {

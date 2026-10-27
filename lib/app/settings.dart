@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../friends/friend_links.dart';
 import '../trip/trip_settings.dart';
 import 'call_signs.dart';
+import 'quiet.dart';
 
 /// A channel's display name and emoji (shared with the others on it via
 /// presence; the newest [updated] wins).
@@ -58,6 +59,8 @@ class AppSettings {
     this.urgentLoud = true,
     this.joinAlertPrivate = true,
     this.joinAlertPublic = false,
+    this.shareRadio = true,
+    QuietHours? quiet,
     this.radioId,
     this.radioName,
     TripSettings? trip,
@@ -69,7 +72,8 @@ class AppSettings {
     Set<int>? announceScopes,
     Set<int>? muted,
     Map<int, String>? blocked,
-  }) : trip = trip ?? TripSettings(),
+  }) : quiet = quiet ?? QuietHours(),
+       trip = trip ?? TripSettings(),
        privateChannels = privateChannels ?? {},
        peerVolumes = peerVolumes ?? {},
        friends = friends ?? [],
@@ -93,6 +97,13 @@ class AppSettings {
   /// I am on (default on) / an open channel (default off).
   bool joinAlertPrivate;
   bool joinAlertPublic;
+
+  /// v1.9.5: share my paired LoRa radio as a gateway with phones on the
+  /// internet in my channel (default on).
+  bool shareRadio;
+
+  /// v1.9.5: mute (hold to mute) and programmable quiet hours.
+  final QuietHours quiet;
 
   /// Name the user typed, or null to use [defaultName].
   String? customName;
@@ -357,6 +368,8 @@ class SharedPrefsSettingsStore implements SettingsStore {
   static const _kUrgent = 'urgent_loud';
   static const _kJoinPrivate = 'join_alert_private';
   static const _kJoinPublic = 'join_alert_public';
+  static const _kShareRadio = 'share_radio';
+  static const _kQuiet = 'quiet_hours';
   static const _kFriends = 'friends';
   static const _kSocial = 'social';
   static const _kRadioId = 'lora_radio_id';
@@ -425,6 +438,8 @@ class SharedPrefsSettingsStore implements SettingsStore {
       urgentLoud: prefs?.getBool(_kUrgent) ?? true,
       joinAlertPrivate: prefs?.getBool(_kJoinPrivate) ?? true,
       joinAlertPublic: prefs?.getBool(_kJoinPublic) ?? false,
+      shareRadio: prefs?.getBool(_kShareRadio) ?? true,
+      quiet: QuietHours.decode(prefs?.getString(_kQuiet)),
       radioId: prefs?.getString(_kRadioId),
       radioName: prefs?.getString(_kRadioName),
       trip: TripSettings.decode(prefs?.getString(_kTrip)),
@@ -470,6 +485,8 @@ class SharedPrefsSettingsStore implements SettingsStore {
       await prefs.setBool(_kUrgent, s.urgentLoud);
       await prefs.setBool(_kJoinPrivate, s.joinAlertPrivate);
       await prefs.setBool(_kJoinPublic, s.joinAlertPublic);
+      await prefs.setBool(_kShareRadio, s.shareRadio);
+      await prefs.setString(_kQuiet, s.quiet.encode());
       if (s.radioId == null) {
         await prefs.remove(_kRadioId);
         await prefs.remove(_kRadioName);

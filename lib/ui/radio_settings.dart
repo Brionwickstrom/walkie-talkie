@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../app/walkie_controller.dart';
+import '../core/gateway_protocol.dart' show GatewayInfo;
 import '../lora/meshtastic_ble.dart';
 import '../lora/meshtastic_proto.dart';
 import '../lora/meshtastic_session.dart';
@@ -75,6 +76,14 @@ List<String> radioWarnings(MeshtasticSession s) => [
 ];
 
 /// Settings > Long-range radio (Meshtastic).
+/// "1 radio connected", "Waiting for its radio", "Phone sharing its radio".
+String gatewayStatusText(GatewayInfo g) {
+  if (g.phone) return 'A phone sharing its radio';
+  if (g.radiosUp <= 0) return 'Online, waiting for its radio';
+  return '${g.radiosUp} radio${g.radiosUp == 1 ? '' : 's'} connected'
+      '${g.radios > g.radiosUp ? ' (of ${g.radios})' : ''}';
+}
+
 class RadioSettings extends StatefulWidget {
   const RadioSettings({super.key, required this.controller});
   final WalkieController controller;
@@ -226,6 +235,58 @@ class _RadioSettingsState extends State<RadioSettings> {
                 label: const Text('Forget radio'),
                 onPressed: c.forgetRadio,
               ),
+            ),
+          );
+        }
+        // v1.9.5: LoRa gateways (Home gateway on the Synology, phones
+        // sharing their radio) in this channel's relay room.
+        if (c.radioPaired) {
+          children.add(
+            SwitchListTile(
+              key: const Key('shareRadio'),
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Share my radio with phones on the internet'),
+              subtitle: const Text(
+                'While you have signal, phones on this channel that are on '
+                'the internet can reach radio-only people through your '
+                'radio, and the other way round. Private channels stay '
+                'encrypted. Never live talk.',
+              ),
+              value: c.settings.shareRadio,
+              onChanged: c.setShareRadio,
+            ),
+          );
+        }
+        final gws = c.gateways;
+        children.add(
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text('LoRa gateways', style: theme.textTheme.titleSmall),
+          ),
+        );
+        if (gws.isEmpty) {
+          children.add(
+            Text(
+              'None on this channel right now. A Home gateway (radio at '
+              'home on the Synology) or a phone sharing its radio shows up '
+              'here; then people with only a radio can reach you over the '
+              'internet, and you them.',
+              style: theme.textTheme.bodySmall,
+            ),
+          );
+        }
+        for (final g in gws) {
+          children.add(
+            ListTile(
+              key: Key('gateway${g.id}'),
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(
+                g.phone ? Icons.phone_android : Icons.router,
+                color: g.radiosUp > 0 ? cs.primary : cs.outline,
+              ),
+              title: Text(g.name),
+              subtitle: Text(gatewayStatusText(g)),
             ),
           );
         }

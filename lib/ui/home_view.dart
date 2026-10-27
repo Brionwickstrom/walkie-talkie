@@ -27,9 +27,14 @@ class PersonView {
     this.arrowDeg,
     this.battery,
     this.path,
+    this.gateway,
   });
 
   final int id;
+
+  /// "Home gateway" when only a LoRa gateway reaches this phone (v1.9.5),
+  /// shown as "via Home gateway (LoRa)".
+  final String? gateway;
 
   /// "Direct" when [active] is the internet and the phone is reached over
   /// a direct link (v1.8.9), else null.
@@ -177,6 +182,9 @@ class TakeView {
 
 /// "via 2 hops" (relayed through other phones).
 String hopsText(int hops) => 'via $hops hops';
+
+/// A phone only a LoRa gateway reaches (v1.9.5).
+String gatewayText(String gateway) => 'via $gateway (LoRa)';
 
 /// "0:07"
 String clipLength(int ms) {
@@ -840,6 +848,8 @@ class PersonCard extends StatelessWidget {
             else if (p.active != null)
               'via ${p.active == TransportKind.internet && p.path != null ? '${p.path} (internet)' : transportName(p.active!)}',
             if (p.active == null && p.hops != null) hopsText(p.hops!),
+            if (p.active == null && p.hops == null && p.gateway != null)
+              gatewayText(p.gateway!),
             if (p.elsewhere != null) p.elsewhere!,
             if (p.lastHeard != null) agoText(p.lastHeard!),
           ].join(' · '),
@@ -1397,10 +1407,14 @@ class ChannelActions extends StatelessWidget {
     required this.onRingAll,
     required this.onBeepAll,
     required this.record,
+    this.mute,
   });
   final VoidCallback onRingAll;
   final VoidCallback onBeepAll;
   final Widget record;
+
+  /// Hold-to-mute button (v1.9.5).
+  final Widget? mute;
 
   @override
   Widget build(BuildContext context) {
@@ -1428,6 +1442,7 @@ class ChannelActions extends StatelessWidget {
             onPressed: onBeepAll,
           ),
           record,
+          ?mute,
         ],
       ),
     );

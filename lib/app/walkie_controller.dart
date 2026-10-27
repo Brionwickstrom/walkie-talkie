@@ -33,6 +33,7 @@ import '../chat/chat_store.dart';
 import '../chat/photo.dart';
 import '../core/channel_crypto.dart';
 import '../core/frame.dart';
+import '../core/gateway_protocol.dart' show GatewayInfo;
 import '../core/listeners.dart';
 import '../core/lobby.dart';
 import '../core/pair_key.dart';
@@ -71,6 +72,7 @@ import 'config.dart';
 import 'passcodes.dart';
 import 'playback_log.dart';
 import 'private_reply.dart';
+import 'quiet.dart';
 import 'settings.dart';
 import 'whos_where.dart';
 
@@ -159,6 +161,7 @@ class WalkieController extends ChangeNotifier {
       channelKey: channelKey,
     );
     manager.relayForOthers = settings.relayForOthers;
+    manager.shareRadio = settings.shareRadio;
     // Only form a Wi-Fi Direct group with phones we cannot already reach
     // over a shared Wi-Fi / hotspot.
     wd?.sharedNetworkWith = (id) {
@@ -1303,10 +1306,18 @@ class WalkieController extends ChangeNotifier {
           sender: a.peerId,
           name: nameOf(a.peerId),
           opus: a.opus,
-          heard: live && foreground && auto,
+          heard: live && foreground && auto && !silenced,
           hops: a.hops,
         );
         if (!live) return;
+        if (silenced) {
+          playbackLog.stream(
+            'ch${a.peerId}',
+            'live-held',
+            '$who: ${quietStatus ?? 'muted'}, saved in Missed',
+          );
+          return;
+        }
         if (!auto) {
           playbackLog.stream(
             'ch${a.peerId}',
@@ -1446,7 +1457,16 @@ class WalkieController extends ChangeNotifier {
       Timer.periodic(const Duration(milliseconds: 500), (_) => ringer.tick()),
     );
     _timers.add(
-      Timer.periodic(const Duration(seconds: 5), (_) => _updateServiceText()),
+      Timer.periodic(const Duration(seconds: 5), (_) {
+        _updateServiceText();
+        // Quiet hours start / end, a timed mute runs out.
+        final q = quietStatus;
+        if (q != _lastQuietStatus) {
+          _lastQuietStatus = q;
+          debugLog.add('quiet', q ?? 'sound back on');
+          notifyListeners();
+        }
+      }),
     );
     // Safety net: the mic must never stay on while we are not talking or
     // recording (see MicGate for the v1.5.0 bug this guards against).
@@ -1593,8 +1613,18 @@ class WalkieController extends ChangeNotifier {
     notifyListeners();
   }
 
-  String get _serviceTitle => 'Walkie Talkie is listening on $channelLabel';
+  String get _serviceTitle {
+    final q = quietStatus;
+    return q != null
+        ? '\u{1F507} $q · $channelLabel'
+        : 'Walkie Talkie is listening on $channelLabel';
+  }
+
   String get _serviceBody {
+    if (silenced) {
+      return 'Talk, rings and voice messages are saved for later. '
+          'Tap to open.';
+    }
     final n = peers.length;
     return n == 0
         ? 'Rings and voice messages still come through. Tap to open.'
@@ -1853,6 +1883,81 @@ class WalkieController extends ChangeNotifier {
     settings.autoPlay = on;
     if (!on) await stopAllAudio();
     playbackLog.add('setting', 'Auto-play incoming talk ${on ? 'on' : 'off'}');
+    notifyListeners();
+    await settingsStore.save(settings);
+  }
+
+  // ------------------------------------------------ mute / quiet hours
+
+  QuietHours get quiet => settings.quiet;
+
+  /// Mute or quiet hours: incoming talk is kept in Missed, rings, beeps,
+  /// join tones and notification sounds stay quiet (v1.9.5).
+  bool get silenced => quiet.silenced;
+  String? _lastQuietStatus;
+
+  /// "Muted until 3:45", "Quiet hours until 7:00", or null.
+  String? get quietStatus => quiet.statusText(quietClock);
+
+  static String quietClock(DateTime t) {
+    final h = t.hour % 12 == 0 ? 12 : t.hour % 12;
+    return '$h:${t.minute.toString().padLeft(2, '0')} '
+        '${t.hour < 12 ? 'AM' : 'PM'}';
+  }
+
+  /// Mute for [d] (null = until I turn it off).
+  Future<void> muteFor(Duration? d) async {
+    quiet.mute(d);
+    _lastQuietStatus = quietStatus;
+    debugLog.add('quiet', _lastQuietStatus ?? 'muted');
+    // Whatever live talk is still in the speaker stops now.
+    unawaited(_audio.flushSpeaker().catchError((_) {}));
+    notifyListeners();
+    _updateServiceText();
+    await settingsStore.save(settings);
+  }
+
+  Future<void> unmute() async {
+    quiet.unmute();
+    _lastQuietStatus = quietStatus;
+    debugLog.add('quiet', 'unmuted');
+    notifyListeners();
+    _updateServiceText();
+    await settingsStore.save(settings);
+  }
+
+  Future<void> saveQuietHours() async {
+    _lastQuietStatus = quietStatus;
+    notifyListeners();
+    _updateServiceText();
+    await settingsStore.save(settings);
+  }
+
+  Future<void> setLetUrgentThrough(bool on) async {
+    quiet.letUrgentThrough = on;
+    await saveQuietHours();
+  }
+
+  bool alwaysAllowed(int id) => quiet.alwaysAllow.contains(id);
+
+  Future<void> setAlwaysAllow(int id, bool on) async {
+    if (on) {
+      quiet.alwaysAllow.add(id);
+    } else {
+      quiet.alwaysAllow.remove(id);
+    }
+    await saveQuietHours();
+  }
+
+  // ------------------------------------------------ LoRa gateways (v1.9.5)
+
+  /// Gateways in this channel's relay room (Home gateway, phones sharing
+  /// their radio).
+  List<GatewayInfo> get gateways => manager.gateways;
+
+  Future<void> setShareRadio(bool on) async {
+    settings.shareRadio = on;
+    manager.shareRadio = on;
     notifyListeners();
     await settingsStore.save(settings);
   }
@@ -2281,20 +2386,35 @@ class WalkieController extends ChangeNotifier {
 
   void _onIncomingRing(IncomingRing r) {
     final from = nameOf(r.from);
+    // v1.9.5: mute / quiet hours keep rings and beeps silent unless they
+    // are let through (urgent, a second ring, an "Always allow" person).
+    final sounds = r.beep
+        ? !silenced
+        : quiet.ringSounds(from: r.from, ringId: r.id, urgent: r.urgent);
     if (r.beep) {
-      bridge.beep(from: r.from, name: from, notify: !foreground);
-      if (foreground) _notice('$from beeped you');
+      if (sounds) {
+        bridge.beep(from: r.from, name: from, notify: !foreground);
+      }
+      if (foreground) _notice('$from beeped you${sounds ? '' : ' (muted)'}');
       return;
     }
     activeRings.add(r);
-    bridge.showRing(
-      from: r.from,
-      id: r.id,
-      name: from,
-      channel: displayChannel(r.channel),
-      urgent: r.urgent,
-      loud: settings.urgentLoud,
-    );
+    if (sounds) {
+      bridge.showRing(
+        from: r.from,
+        id: r.id,
+        name: from,
+        channel: displayChannel(r.channel),
+        urgent: r.urgent,
+        loud: settings.urgentLoud,
+      );
+    } else {
+      debugLog.add(
+        'quiet',
+        'ring from $from kept silent (${quietStatus ?? ''})',
+      );
+      if (foreground) _notice('Ring from $from (muted)');
+    }
     final ringFor = r.urgent ? urgentRingDuration : ringDuration;
     _ringTimers[(r.from, r.id)] = Timer(ringFor, () async {
       if (r.status != RingStatus.delivered) return;
@@ -2543,6 +2663,7 @@ class WalkieController extends ChangeNotifier {
       nid: e.notificationId,
       name: name,
       duration: formatDuration(e.durationMs),
+      silent: silenced,
     );
     notifyListeners();
   }
@@ -3012,6 +3133,8 @@ class WalkieController extends ChangeNotifier {
       for (final p in peers)
         if (p.channel == scope) p.id.toRadixString(16),
       for (final id in settings.blocked.keys) id.toRadixString(16),
+      // v1.9.5: announced LoRa gateways are visible, not unknown.
+      for (final id in manager.gatewayIds) id.toRadixString(16),
     };
     listenerWatch.update(e.$1, e.$2, heard);
     _refreshListeners();
@@ -3073,7 +3196,7 @@ class WalkieController extends ChangeNotifier {
     lastJoinAlert = (text: text, at: now);
     debugLog.add('people', 'join alert: $text');
     _notice(isPrivate ? '\u{1F512} $text' : text);
-    if (foreground && bridge.supported) {
+    if (foreground && bridge.supported && !silenced) {
       unawaited(
         bridge
             .beep(from: first!, name: names.first, notify: false)
@@ -4016,14 +4139,28 @@ class _WalkieTripHost implements TripHost {
   Future<void> backgroundLocation(bool on) => c.bridge.setServiceLocation(on);
 
   @override
-  void showSosAlarm(IncomingSos s, String text) => unawaited(
-    c.bridge.showSos(
-      from: s.origin,
-      id: s.id,
-      name: c.nameOf(s.origin),
-      text: text,
-    ),
-  );
+  void showSosAlarm(IncomingSos s, String text) {
+    // v1.9.5: an SOS is urgent; it only stays quiet when "Let urgent rings
+    // through" is off during mute / quiet hours.
+    if (!c.quiet.ringSounds(from: s.origin, ringId: s.id, urgent: true)) {
+      unawaited(
+        c.bridge.showInfo(
+          nid: 7000000 + (s.id & 0xFFFF),
+          title: 'SOS from ${c.nameOf(s.origin)} (muted)',
+          text: text,
+        ),
+      );
+      return;
+    }
+    unawaited(
+      c.bridge.showSos(
+        from: s.origin,
+        id: s.id,
+        name: c.nameOf(s.origin),
+        text: text,
+      ),
+    );
+  }
 
   @override
   void stopSosAlarm(IncomingSos s) =>

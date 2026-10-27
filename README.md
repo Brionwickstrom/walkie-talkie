@@ -1371,3 +1371,50 @@ versions and older relays (old phones keep working, no new steps):
 Limits: this protects against listening, not against a phone that has the
 passcode and actively fakes another phone's hellos (it shows as a key
 conflict). The join tone plays only while the app is on screen.
+
+## v1.9.5: LoRa gateway, hold-to-mute, quiet hours
+
+* **LoRa gateway (`gateway/`, `lib/gateway/`, `core/gateway_protocol.dart`).**
+  An always-on container on the Synology (`walkie-gateway`) joins the home
+  relay's rooms and talks to any number of Meshtastic radios (USB serial,
+  or Wi-Fi / Ethernet radios over TCP 4403). Phones on the internet and
+  people who only have a radio can now reach each other: rings, chat,
+  voice clips, rekeys, Trip messages and the rare presence hello. Never
+  live talk. New frame type 8 (gateway envelope, internet only; older apps
+  drop it): `fromRadio` (a radio frame brought in), `toRadio` (a phone asks
+  gateways to transmit a frame it already decided may use the radio, sealed
+  on private channels) and `announce` ("Home gateway", radios up). Dedupe
+  and loop prevention by the inner frame's hash across every radio, room
+  and gateway; only `toRadio` ever goes on the air, and nothing heard on
+  the air goes back on it. Airtime: per-radio token bucket (4, then 1 per
+  8 s), priority queue, 12 requests/min per phone, presence once per 4 min
+  per phone. Private channels: the gateway only sees ciphertext and joins a
+  private room (`p` + tag) for 30 min after LoRa traffic for it is heard.
+  Status: `http://<nas>:47481/healthz`.
+* **Phones sharing their radio.** A phone with a paired radio and internet
+  does the same for its own channel (Settings → Long-range radio → *Share
+  my radio with phones on the internet*, on by default), after a short
+  random wait so the Home gateway (or another phone) that heard the same
+  packet goes first and the phone stays quiet.
+* **In the app:** people only a gateway reaches show *via Home gateway
+  (LoRa)*; Settings → Long-range radio lists the LoRa gateways on the
+  channel. Gateways are not counted as unknown listeners (1.9.4 phones may
+  show "1 more connected" until they update).
+* **Mute.** *Mute* next to Ring all / Beep on the Talk screen: hold about
+  a second (a ring fills up) to mute, a tap alone only says *Hold to mute*.
+  Then pick 30 min, 1 h, 2 h or *Until I turn it off* (the default if you
+  close the sheet). One tap on *Muted · tap to unmute* (or *Unmute* on the
+  banner) turns sound back on.
+* **Quiet hours.** Settings → Mute & quiet hours → *Add quiet hours*: from,
+  until (overnight works, e.g. 10:00 PM–7:00 AM), days (the nights it
+  starts on). Several schedules, each with an on/off switch.
+* **While muted or in quiet hours** live talk is not played (kept in
+  Missed), rings, beeps, join tones and the voice message notification
+  sound stay silent, rings and voice messages are kept. A banner shows
+  *Muted until 3:45 PM* / *Quiet hours until 7:00 AM* and so does the
+  listening notification. *Let urgent rings through* (on by default): an
+  urgent ring or SOS, a second ring from the same person within 2 minutes,
+  or someone marked *Always allow rings* (tap the person) still rings.
+  Everything is saved across app restarts (`app/quiet.dart`).
+
+Tests: `test/v195_gateway_test.dart`, `test/v195_quiet_test.dart`.

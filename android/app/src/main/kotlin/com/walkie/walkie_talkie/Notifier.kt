@@ -293,7 +293,7 @@ object Notifier {
 
     fun cancelTalking(ctx: Context, peer: Long) = cancel(ctx, talkId(peer))
 
-    fun showVoiceMessage(ctx: Context, key: String, nid: Int, name: String, duration: String) {
+    fun showVoiceMessage(ctx: Context, key: String, nid: Int, name: String, duration: String, silent: Boolean = false) {
         ensureChannels(ctx)
         val id = 5000000 + (nid and 0xFFFFF)
         val n = NotificationCompat.Builder(ctx, CH_MSG)
@@ -302,6 +302,7 @@ object Notifier {
             .setContentText("Tap Play to listen")
             .setAutoCancel(true)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setSilent(silent)
             .setContentIntent(activityIntent(ctx, ACTION_OPEN_INBOX, id) { putExtra("key", key) })
             .addAction(0, "Play", broadcastIntent(ctx, ACTION_PLAY, id) { putExtra("key", key) })
             .addAction(0, "Stop audio", broadcastIntent(ctx, ACTION_STOP_AUDIO, id + 1))

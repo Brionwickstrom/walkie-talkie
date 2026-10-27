@@ -1,0 +1,7 @@
+name: walkie_gateway
+description: LoRa gateway for the Walkie Talkie app (pure dart:io). Its lib/ is copied from the app's lib/ by tool/gateway_bundle.sh.
+publish_to: 'none'
+version: 1.0.0
+
+environment:
+  sdk: ^3.5.0

@@ -30,7 +30,14 @@ enum FrameType {
   /// "Who's where" lobby beacon (v1.8.2): call sign + public channel (or
   /// just "private"), never sealed, never tied to a channel or relay
   /// room. See `core/lobby.dart`. Older phones drop it.
-  lobby(7);
+  lobby(7),
+
+  /// LoRa gateway envelope (v1.9.5): a radio frame carried over the
+  /// internet relay by a gateway (the Synology "Home gateway" or a phone
+  /// sharing its radio), a phone's request to put a frame on the radio,
+  /// or a gateway's announcement. See `core/gateway_protocol.dart`. Never
+  /// sent over LoRa itself; older phones drop it.
+  gateway(8);
 
   const FrameType(this.code);
   final int code;

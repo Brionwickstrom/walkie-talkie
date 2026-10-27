@@ -146,11 +146,13 @@ class BackgroundBridge {
     required int nid,
     required String name,
     required String duration,
+    bool silent = false,
   }) => _call<void>('showVoiceMessage', {
     'key': key,
     'nid': nid,
     'name': name,
     'duration': duration,
+    'silent': silent,
   });
 
   Future<void> showInfo({

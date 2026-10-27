@@ -139,6 +139,7 @@ object BgBridge {
             "showVoiceMessage" -> {
                 Notifier.showVoiceMessage(
                     ctx, str(call, "key"), int(call, "nid"), str(call, "name"), str(call, "duration"),
+                    call.argument<Boolean>("silent") ?: false,
                 )
                 result.success(null)
             }

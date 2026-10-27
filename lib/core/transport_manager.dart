@@ -5,10 +5,12 @@ import 'dart:typed_data';
 
 import '../app/power_plan.dart';
 import '../lora/lora_transport.dart';
+import '../lora/meshtastic_proto.dart' show loraPayloadBudget;
 
 import 'channel_crypto.dart';
 import 'lobby.dart';
 import 'frame.dart';
+import 'gateway_protocol.dart';
 import 'mesh.dart';
 import 'peer.dart';
 import 'peer_box.dart';
@@ -235,6 +237,39 @@ class TransportManager {
   /// Extra hello fields (feature level, channel name, admin...).
   Map<String, Object?> Function()? helloExtras;
 
+  // ------------------------------------------------ LoRa gateways (v1.9.5)
+
+  /// Gateways that announced themselves in our relay room (the Synology
+  /// "Home gateway", phones sharing their radio), by node id.
+  final Map<int, GatewayInfo> _gateways = {};
+
+  /// Phones heard through a gateway count as reachable this long (their
+  /// LoRa presence comes every ~5 min), like phones heard on our own radio.
+  Duration gatewayPeerTimeout = const Duration(minutes: 16);
+
+  /// A gateway that has not announced itself for this long is gone.
+  Duration gatewayTimeout = const Duration(minutes: 2);
+
+  /// Share our paired LoRa radio with phones on the internet (v1.9.5):
+  /// app frames our radio hears on our channel go into our relay room,
+  /// and phones there can ask us to put frames on the air.
+  bool shareRadio = true;
+
+  /// How long a sharing phone waits before bringing a LoRa frame onto the
+  /// internet, so the Home gateway (or another phone) that heard it too
+  /// gets there first and we stay quiet.
+  Duration gatewayForwardDelayMin = const Duration(milliseconds: 400);
+  Duration gatewayForwardDelayMax = const Duration(milliseconds: 1600);
+
+  /// Inner frame ids this phone forwarded / transmitted / saw as gateway
+  /// envelopes (loop prevention and dedupe across gateways).
+  final SeenIds gatewaySeenIds = SeenIds();
+  DateTime? _lastGatewayHello;
+  DateTime? _lastGatewayAnnounce;
+  Timer? _gatewayHelloSoon;
+  int gatewayForwarded = 0;
+  int gatewayTransmitted = 0;
+
   final Map<int, Peer> _peers = {};
   final Map<int, _SeqWindow> _seen = {};
   final Map<int, _SeqWindow> _seenAudio = {};
@@ -340,6 +375,7 @@ class TransportManager {
     _helloTimer = Timer.periodic(currentHelloInterval, (_) async {
       await sendHello();
       _maybeRadioHello();
+      _maybeGatewayTick();
       if (!_slow) await sendPings();
       final now = _clock();
       final last = _lastBeacon;
@@ -404,6 +440,7 @@ class TransportManager {
     _running = false;
     _helloTimer?.cancel();
     _radioHelloSoon?.cancel();
+    _gatewayHelloSoon?.cancel();
     _pruneTimer?.cancel();
     for (final s in _subs) {
       await s.cancel();
@@ -445,6 +482,8 @@ class TransportManager {
       _seen.clear();
       _seenAudio.clear();
     }
+    // Other room, other gateways (they announce again within 30 s).
+    if (oldScope != newScope) _gateways.clear();
     for (final t in _transports) {
       try {
         await t.setChannel(newScope);
@@ -696,13 +735,16 @@ class TransportManager {
     final r = routeTo(peerId);
     if (r.isNotEmpty) return r.first;
     if (meshReachable(peerId)) return TransportKind.ble;
-    return radioReachable(peerId) ? TransportKind.lora : null;
+    return radioReachable(peerId) || gatewayReachable(peerId)
+        ? TransportKind.lora
+        : null;
   }
 
   bool isReachable(int peerId) =>
       routeTo(peerId).isNotEmpty ||
       meshReachable(peerId) ||
-      radioReachable(peerId);
+      radioReachable(peerId) ||
+      gatewayReachable(peerId);
 
   /// The paired LoRa radio transport, if any.
   LoraTransport? get radio {
@@ -783,6 +825,7 @@ class TransportManager {
       case FrameType.audio:
       case FrameType.sealed:
       case FrameType.mesh:
+      case FrameType.gateway:
         return false;
     }
   }
@@ -870,6 +913,262 @@ class TransportManager {
     );
   }
 
+  // ------------------------------------------------ LoRa gateways (v1.9.5)
+
+  /// Gateways in our relay room right now (freshest first).
+  List<GatewayInfo> get gateways {
+    final now = _clock();
+    final l = [
+      for (final g in _gateways.values)
+        if (now.difference(g.at) <= gatewayTimeout) g,
+    ]..sort((a, b) => b.at.compareTo(a.at));
+    return l;
+  }
+
+  /// Some gateway (not us) with a radio up is in our room.
+  bool get hasGateway => gateways.any((g) => g.radiosUp > 0);
+
+  /// Node ids of gateways in our room (not "unknown listeners").
+  Set<int> get gatewayIds => {for (final g in gateways) g.id};
+
+  /// We share our radio right now (radio connected, internet up).
+  bool get sharingRadio {
+    if (!shareRadio) return false;
+    final r = radio;
+    final net = _transportOf(TransportKind.internet);
+    return r != null &&
+        r.status == TransportStatus.running &&
+        net != null &&
+        net.status == TransportStatus.running;
+  }
+
+  /// [peerId] was heard through a LoRa gateway recently and the relay is up.
+  bool gatewayReachable(int peerId) {
+    final p = _peers[peerId];
+    final seen = p?.gatewaySeen;
+    if (seen == null) return false;
+    if (_clock().difference(seen) > gatewayPeerTimeout) return false;
+    final net = _transportOf(TransportKind.internet);
+    return net != null && net.status == TransportStatus.running;
+  }
+
+  /// Only a gateway reaches [peerId]: no fast link, no phone mesh, not our
+  /// own radio.
+  bool onlyGateway(int peerId) {
+    final p = _peers[peerId];
+    if (p == null || !gatewayReachable(peerId)) return false;
+    final now = _clock();
+    if (fastLinks(p, now).isNotEmpty) return false;
+    if (meshReachable(peerId)) return false;
+    return !radioReachable(peerId);
+  }
+
+  void _updateGatewayLabel(Peer p, DateTime now) {
+    final seen = p.gatewaySeen;
+    if (seen == null ||
+        now.difference(seen) > gatewayPeerTimeout ||
+        fastLinks(p, now).isNotEmpty ||
+        p.meshHops != null ||
+        usableLinks(p, now).contains(TransportKind.lora)) {
+      p.viaGateway = null;
+      return;
+    }
+    final g = _gateways[p.gatewayId];
+    p.viaGateway = g?.name ?? 'LoRa gateway';
+  }
+
+  /// Ask the gateways in our room to put [bytes] (an already sealed frame
+  /// that [radioAllowed] passed) on the air, for [to] or everyone.
+  bool _sendGateway(Uint8List bytes, LoraPriority priority, {int? to}) {
+    final net = _transportOf(TransportKind.internet);
+    if (net == null || net.status != TransportStatus.running) return false;
+    if (bytes.length > loraPayloadBudget) return false;
+    gatewaySeenIds.add(gatewayPacketId(bytes));
+    final env = GatewayEnvelope.toRadio(
+      bytes,
+      priority: priority.index,
+      to: to ?? 0,
+    ).toFrame(senderId: localNodeId, channel: _wireChannel, seq: _nextSeq());
+    unawaited(_safeSend(net, env.encode(), null));
+    return true;
+  }
+
+  void _onGatewayFrame(InboundFrame inbound) {
+    // Envelopes only ever travel over the internet relay.
+    if (inbound.transport != TransportKind.internet) return;
+    final f = inbound.frame;
+    final env = GatewayEnvelope.tryDecode(f);
+    if (env == null) return;
+    final now = _clock();
+    switch (env.kind) {
+      case GatewayKind.announce:
+        final prev = _gateways[f.senderId];
+        _gateways[f.senderId] = GatewayInfo(
+          f.senderId,
+          env.name,
+          env.radiosUp,
+          env.radios,
+          env.isPhone,
+          now,
+        );
+        if (prev == null ||
+            prev.name != env.name ||
+            prev.radiosUp != env.radiosUp) {
+          _emitPeers();
+        }
+      case GatewayKind.fromRadio:
+        final inner = env.innerFrame;
+        if (inner == null) return;
+        if (inner.senderId == localNodeId) return;
+        if (inner.type == FrameType.gateway || inner.type == FrameType.mesh) {
+          return;
+        }
+        // Heard on the air by that gateway: never bring it in again.
+        gatewaySeenIds.add(env.packetId);
+        mesh.markSeen(env.packetId);
+        final g =
+            _gateways[f.senderId] ??
+            GatewayInfo(f.senderId, 'LoRa gateway', 1, 1, false, now);
+        _gateways.putIfAbsent(f.senderId, () => g);
+        _receive(
+          inner,
+          InboundFrame(inner, TransportKind.lora),
+          1,
+          viaGateway: g,
+        );
+      case GatewayKind.toRadio:
+        _onGatewayRequest(f.senderId, env);
+    }
+  }
+
+  /// A phone in our room asks gateways to transmit: do it when we share
+  /// our radio and it can reach the target.
+  void _onGatewayRequest(int sender, GatewayEnvelope env) {
+    if (!sharingRadio) return;
+    final r = radio!;
+    final inner = env.innerFrame;
+    if (inner == null || inner.type == FrameType.audio) return;
+    if (inner.type == FrameType.lobby) return;
+    if (!gatewaySeenIds.add(env.packetId)) return;
+    final to = env.to;
+    if (to != 0 && !r.peerSignals.containsKey(to)) return;
+    final pr = env.priority < LoraPriority.values.length
+        ? LoraPriority.values[env.priority]
+        : LoraPriority.normal;
+    if (r.sendRadio(env.inner!, peerIds: to == 0 ? null : {to}, priority: pr)) {
+      gatewayTransmitted++;
+    }
+  }
+
+  /// Our radio heard [inbound]: when we share it, bring the frame into our
+  /// relay room after a short random wait, unless a gateway did already.
+  void _maybeShareLoraFrame(InboundFrame inbound) {
+    if (!sharingRadio) return;
+    final f = inbound.frame;
+    if (f.type == FrameType.lobby ||
+        f.type == FrameType.mesh ||
+        f.type == FrameType.gateway) {
+      return;
+    }
+    final ourRoom = isPrivateScope(scope)
+        ? 'p${(scope & 0xFFFF).toRadixString(16).padLeft(4, '0')}'
+        : '$scope';
+    if (gatewayRoomOf(f) != ourRoom) return;
+    final bytes = f.encode();
+    final id = gatewayPacketId(bytes);
+    if (gatewaySeenIds.contains(id)) return;
+    final span =
+        gatewayForwardDelayMax.inMilliseconds -
+        gatewayForwardDelayMin.inMilliseconds;
+    final wait = Duration(
+      milliseconds:
+          gatewayForwardDelayMin.inMilliseconds +
+          (span > 0 ? _rng.nextInt(span) : 0),
+    );
+    void go() {
+      if (!_running || !sharingRadio) return;
+      if (!gatewaySeenIds.add(id)) return; // a gateway beat us to it
+      final net = _transportOf(TransportKind.internet)!;
+      final env = GatewayEnvelope.fromRadio(
+        bytes,
+        radioNode: 0,
+        snr: 0,
+      ).toFrame(senderId: localNodeId, channel: f.channel, seq: _nextSeq());
+      gatewayForwarded++;
+      unawaited(_safeSend(net, env.encode(), null));
+    }
+
+    if (wait == Duration.zero) {
+      go();
+    } else {
+      Timer(wait, go);
+    }
+  }
+
+  /// Hello timer hook: announce ourselves when sharing our radio, and let
+  /// LoRa-only phones know we are here through a gateway.
+  void _maybeGatewayTick() {
+    final now = _clock();
+    final net = _transportOf(TransportKind.internet);
+    if (net == null || net.status != TransportStatus.running) return;
+    if (sharingRadio) {
+      final last = _lastGatewayAnnounce;
+      if (last == null || now.difference(last) >= const Duration(seconds: 60)) {
+        _lastGatewayAnnounce = now;
+        final env =
+            GatewayEnvelope.announce(
+              name: '${localName.isEmpty ? 'Phone' : localName} (radio)',
+              radiosUp: 1,
+              radios: 1,
+              phone: true,
+            ).toFrame(
+              senderId: localNodeId,
+              channel: _wireChannel,
+              seq: _nextSeq(),
+            );
+        unawaited(_safeSend(net, env.encode(), null));
+      }
+    }
+    if (!hasGateway) return;
+    final last = _lastGatewayHello;
+    if (last == null || now.difference(last) >= radioHelloInterval) {
+      sendGatewayHello();
+    }
+  }
+
+  /// Our LoRa presence hello through the gateways in our room.
+  bool sendGatewayHello() {
+    if (!hasGateway) return false;
+    _lastGatewayHello = _clock();
+    final v = helloExtras?.call()['v'];
+    final f = Frame.control(
+      senderId: localNodeId,
+      channel: _wireChannel,
+      seq: _nextSeq(),
+      message: ControlMessage(
+        ControlKind.hello,
+        name: localName,
+        x: {'v': ?v, 'lr': 1, 'bt': ?helloExtras?.call()['bt']},
+      ),
+    );
+    return _sendGateway(_wire(f), LoraPriority.presence);
+  }
+
+  void _gatewayHelloSoonAfterNewPeer() {
+    final last = _lastGatewayHello;
+    if (last != null &&
+        _clock().difference(last) < const Duration(seconds: 60)) {
+      return;
+    }
+    if (_gatewayHelloSoon?.isActive ?? false) return;
+    _gatewayHelloSoon = Timer(
+      Duration(milliseconds: 2000 + _rng.nextInt(4000)),
+      () {
+        if (_running) sendGatewayHello();
+      },
+    );
+  }
+
   /// [peerId] has no direct link but was heard through other phones
   /// recently and a mesh neighbour can carry packets towards it.
   bool meshReachable(int peerId) {
@@ -925,9 +1224,14 @@ class TransportManager {
           return true;
         }
       }
-      // Last resort: the LoRa radio (only what it may carry).
+      // Last resort: the LoRa radio (only what it may carry), ours or a
+      // gateway's.
       if (radioReachable(peerId)) {
         return _sendRadio(frame, _wire(frame), {peerId});
+      }
+      if (gatewayReachable(peerId)) {
+        if (!radioAllowed(frame)) return false;
+        return _sendGateway(_wire(frame), _radioPriority(frame), to: peerId);
       }
       return false;
     }
@@ -1045,6 +1349,9 @@ class TransportManager {
       if (radioUp && radioReachable(to)) {
         if (r.sendRadio(bytes, peerIds: {to}, priority: pr)) return {to};
       }
+      if (radio && !big && gatewayReachable(to)) {
+        if (_sendGateway(bytes, pr, to: to)) return {to};
+      }
       return const {};
     }
     final targets = reachablePeersOn(scope);
@@ -1064,6 +1371,7 @@ class TransportManager {
         }
       }
       if (radioUp) r.sendRadio(bytes, priority: pr);
+      if (radio && !big && hasGateway) _sendGateway(bytes, pr);
       return targets;
     }
     if (fast) {
@@ -1088,6 +1396,18 @@ class TransportManager {
             p.id,
       };
       if (far.isNotEmpty) r.sendRadio(bytes, peerIds: far, priority: pr);
+    }
+    if (radio && !big) {
+      final farGw = <int>{
+        for (final p in _peers.values)
+          if (p.channel == scope &&
+              (fast ? onlyGateway(p.id) : gatewayReachable(p.id)) &&
+              !(radioUp && radioReachable(p.id)))
+            p.id,
+      };
+      if (farGw.isNotEmpty) {
+        _sendGateway(bytes, pr, to: farGw.length == 1 ? farGw.first : null);
+      }
     }
     return targets;
   }
@@ -1146,7 +1466,24 @@ class TransportManager {
         for (final p in _peers.values)
           if (p.channel == scope && onlyRadio(p.id)) p.id,
       };
-      if (far.isNotEmpty) _sendRadio(frame, bytes, far);
+      // ... and phones only a LoRa gateway reaches (v1.9.5).
+      final farGw = <int>{
+        for (final p in _peers.values)
+          if (p.channel == scope && onlyGateway(p.id)) p.id,
+      };
+      if (far.isNotEmpty || farGw.isNotEmpty) {
+        // Decide once (ring repeat counters).
+        if (radioAllowed(frame)) {
+          final pr = _radioPriority(frame);
+          final r = radio;
+          if (far.isNotEmpty && r != null) {
+            r.sendRadio(bytes, peerIds: far, priority: pr);
+          }
+          if (farGw.isNotEmpty) {
+            _sendGateway(bytes, pr, to: farGw.length == 1 ? farGw.first : null);
+          }
+        }
+      }
     }
     await Future.wait(
       routes.entries.map((e) {
@@ -1290,6 +1627,11 @@ class TransportManager {
 
   void _onInbound(InboundFrame inbound) {
     if (inbound.frame.senderId == localNodeId) return; // own echo
+    if (inbound.frame.type == FrameType.gateway) {
+      _onGatewayFrame(inbound);
+      return;
+    }
+    if (inbound.transport == TransportKind.lora) _maybeShareLoraFrame(inbound);
     // Mesh first: learns neighbours, unwraps relayed copies, and decides
     // whether this packet must be passed on (blocked senders included:
     // blocking is about what we hear, relaying is for the others).
@@ -1319,9 +1661,15 @@ class TransportManager {
     _receive(deliver, inbound, d.hops);
   }
 
-  void _receive(Frame frame, InboundFrame inbound, int hops) {
+  void _receive(
+    Frame frame,
+    InboundFrame inbound,
+    int hops, {
+    GatewayInfo? viaGateway,
+  }) {
     var f = frame;
     final relayed = hops > 1;
+    final viaGw = viaGateway != null;
     if (f.senderId == localNodeId) return; // our own broadcast echoed back
     if (blocked.contains(f.senderId)) return;
 
@@ -1388,15 +1736,24 @@ class TransportManager {
     final now = _clock();
     final peer = _peers.putIfAbsent(f.senderId, () => Peer(f.senderId));
     final wasMeshHops = peer.meshHops;
-    final viaSlow = _transportOf(inbound.transport)?.lowBandwidth ?? false;
-    if (viaSlow && !relayed) {
+    final viaSlow =
+        viaGw || (_transportOf(inbound.transport)?.lowBandwidth ?? false);
+    if (viaGw) {
+      final prev = peer.gatewaySeen;
+      if (prev == null || now.difference(prev) > gatewayPeerTimeout) {
+        _gatewayHelloSoonAfterNewPeer();
+      }
+    } else if (viaSlow && !relayed) {
       final prev = peer.lastSeen[inbound.transport];
       final t = _transportOf(inbound.transport)!;
       if (prev == null || now.difference(prev) > _linkTimeout(t, peer)) {
         _radioHelloSoonAfterNewPeer();
       }
     }
-    if (relayed) {
+    if (viaGw) {
+      peer.gatewaySeen = now;
+      peer.gatewayId = viaGateway.id;
+    } else if (relayed) {
       peer.meshSeen = now;
       peer.hops = hops;
     } else {
@@ -1406,7 +1763,10 @@ class TransportManager {
     }
     peer.channel = frameScope;
     _updateMeshHops(peer, now);
-    var meshChanged = wasMeshHops != peer.meshHops;
+    final gwBefore = peer.viaGateway;
+    _updateGatewayLabel(peer, now);
+    var meshChanged =
+        wasMeshHops != peer.meshHops || gwBefore != peer.viaGateway;
 
     final window = (f.type == FrameType.audio ? _seenAudio : _seen).putIfAbsent(
       f.senderId,
@@ -1579,6 +1939,7 @@ class TransportManager {
         case FrameType.sealed:
         case FrameType.mesh:
         case FrameType.lobby:
+        case FrameType.gateway:
           break; // never nested / handled above
       }
     }
@@ -1612,11 +1973,24 @@ class TransportManager {
       }
       final ms = p.meshSeen;
       if (ms != null && now.difference(ms) > meshTimeout) p.meshSeen = null;
+      final gs = p.gatewaySeen;
+      if (gs != null && now.difference(gs) > gatewayPeerTimeout) {
+        p.gatewaySeen = null;
+        p.gatewayId = null;
+      }
       final hopsBefore = p.meshHops;
       _updateMeshHops(p, now);
       if (hopsBefore != p.meshHops) changed = true;
-      if (p.lastSeen.isEmpty && p.meshSeen == null) gone.add(p.id);
+      final gwBefore = p.viaGateway;
+      _updateGatewayLabel(p, now);
+      if (gwBefore != p.viaGateway) changed = true;
+      if (p.lastSeen.isEmpty && p.meshSeen == null && p.gatewaySeen == null) {
+        gone.add(p.id);
+      }
     }
+    final gwCount = _gateways.length;
+    _gateways.removeWhere((_, g) => now.difference(g.at) > gatewayTimeout);
+    if (gwCount != _gateways.length) changed = true;
     for (final id in gone) {
       _peers.remove(id);
       _seen.remove(id);
