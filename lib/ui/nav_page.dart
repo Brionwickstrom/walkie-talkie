@@ -9,6 +9,7 @@ import '../trip/nav/gentle_route.dart' show gentleLabel;
 import '../trip/nav/nav_session.dart';
 import '../trip/nav/trail_graph.dart';
 import '../trip/trip_controller.dart';
+import 'save_route_sheet.dart';
 import 'trip_widgets.dart';
 
 String _dur(Duration d) {
@@ -122,14 +123,19 @@ class NavCard extends StatelessWidget {
                     ),
                   ],
                 ),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
+                Wrap(
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     TextButton(
                       key: const Key('navStop'),
                       onPressed: trip.stopNav,
                       child: const Text('Stop'),
                     ),
+                    if (!s.compass)
+                      SaveRouteButton(
+                        key: const Key('saveRouteBtn'),
+                        trip: trip,
+                      ),
                     FilledButton.tonal(
                       key: const Key('navFollow'),
                       onPressed: onFollow,
@@ -335,6 +341,11 @@ class NavFollowPage extends StatelessWidget {
                   trip.settings.trailVoice ? 'Voice on' : 'Voice off',
                 ),
               ),
+              if (!s.compass)
+                SaveRouteButton(
+                  key: const Key('saveRouteBtnFollow'),
+                  trip: trip,
+                ),
               OutlinedButton.icon(
                 key: const Key('shareRoute'),
                 onPressed: () {

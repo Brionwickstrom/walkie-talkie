@@ -284,7 +284,14 @@ object BgBridge {
                 result.success(null)
             }
             "getLocation" -> getLocation(ctx, result)
-            "startLocationUpdates" -> result.success(startLocationUpdates(ctx, long(call, "interval")))
+            "startLocationUpdates" -> result.success(
+                startLocationUpdates(
+                    ctx,
+                    long(call, "interval"),
+                    // v2.2.0: absent = high accuracy (older callers).
+                    (call.argument<Any>("accurate") as? Boolean) ?: true,
+                ),
+            )
             "stopLocationUpdates" -> {
                 stopLocationUpdates(ctx)
                 result.success(null)
@@ -387,14 +394,22 @@ object BgBridge {
     }
 
     private var locListener: LocationListener? = null
+    private var gpsFallback: Runnable? = null
+    private var lastFixAt = 0L
 
     /**
      * Continuous fixes for the Trip tab (live location, trail recording):
      * each one goes to Dart as an action {type: loc, lat, lng, acc, t, alt,
      * spd}. GPS when allowed, else network. False without permission.
+     *
+     * v2.2.0: [accurate] false (the phone is idle in the background and only
+     * shares its place with friends) asks for the network / fused location
+     * with the longer interval instead of GPS. Where that gives nothing (no
+     * cell or Wi-Fi, e.g. on a trail) one GPS fix is asked for now and then,
+     * so friends' maps still update without GPS running all the time.
      */
     @SuppressLint("MissingPermission")
-    private fun startLocationUpdates(ctx: Context, intervalMs: Long): Boolean {
+    private fun startLocationUpdates(ctx: Context, intervalMs: Long, accurate: Boolean): Boolean {
         val fine = ctx.checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) ==
             android.content.pm.PackageManager.PERMISSION_GRANTED
         val coarse = ctx.checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION) ==
@@ -403,14 +418,19 @@ object BgBridge {
         stopLocationUpdates(ctx)
         val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as LocationManager
         val providers = lm.getProviders(true)
+        val hasGps = fine && providers.contains(LocationManager.GPS_PROVIDER)
         val provider = when {
-            fine && providers.contains(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
+            accurate && hasGps -> LocationManager.GPS_PROVIDER
+            !accurate && providers.contains(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
+            !accurate && providers.contains(LocationManager.FUSED_PROVIDER) -> LocationManager.FUSED_PROVIDER
+            hasGps -> LocationManager.GPS_PROVIDER
             providers.contains(LocationManager.FUSED_PROVIDER) -> LocationManager.FUSED_PROVIDER
             providers.contains(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
             else -> return false
         }
         val l = object : LocationListener {
             override fun onLocationChanged(location: Location) {
+                lastFixAt = android.os.SystemClock.elapsedRealtime()
                 deliver(
                     ctx,
                     mapOf(
@@ -432,6 +452,27 @@ object BgBridge {
         return try {
             lm.requestLocationUpdates(provider, intervalMs.coerceAtLeast(1000L), 0f, l, Looper.getMainLooper())
             locListener = l
+            lastFixAt = android.os.SystemClock.elapsedRealtime()
+            if (!accurate && provider != LocationManager.GPS_PROVIDER && hasGps) {
+                // Balanced mode found no fix for 3 intervals: one GPS fix.
+                val every = (intervalMs * 3).coerceAtLeast(60_000L)
+                val h = Handler(Looper.getMainLooper())
+                val r = object : Runnable {
+                    override fun run() {
+                        if (locListener !== l) return
+                        if (android.os.SystemClock.elapsedRealtime() - lastFixAt >= every) {
+                            try {
+                                @Suppress("DEPRECATION")
+                                lm.requestSingleUpdate(LocationManager.GPS_PROVIDER, l, Looper.getMainLooper())
+                            } catch (_: Exception) {
+                            }
+                        }
+                        h.postDelayed(this, every)
+                    }
+                }
+                gpsFallback = r
+                h.postDelayed(r, every)
+            }
             // Hand over the last known fix right away.
             try {
                 lm.getLastKnownLocation(provider)?.let { l.onLocationChanged(it) }
@@ -444,6 +485,7 @@ object BgBridge {
     }
 
     private fun stopLocationUpdates(ctx: Context) {
+        gpsFallback = null // its loop ends when the listener is gone
         val l = locListener ?: return
         locListener = null
         try {

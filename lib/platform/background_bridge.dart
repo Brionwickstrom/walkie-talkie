@@ -177,9 +177,13 @@ class BackgroundBridge {
 
   /// Continuous location fixes (Trip tab); they arrive on [actions] as
   /// `{type: loc, lat, lng, acc, t, alt, spd}`. False without permission.
-  Future<bool> startLocationUpdates(Duration interval) async =>
+  Future<bool> startLocationUpdates(
+    Duration interval, {
+    bool highAccuracy = true,
+  }) async =>
       await _call<bool>('startLocationUpdates', {
         'interval': interval.inMilliseconds,
+        'accurate': highAccuracy,
       }) ??
       false;
 

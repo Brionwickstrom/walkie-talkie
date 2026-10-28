@@ -14,6 +14,7 @@ import 'mic_gate.dart';
 import 'opus_voice_codec.dart';
 import 'pcm_speaker.dart';
 import 'playout_buffer.dart';
+import 'speaker_gate.dart';
 import 'time_stretch.dart';
 import 'voice_pipeline.dart';
 
@@ -22,7 +23,11 @@ import 'voice_pipeline.dart';
 /// Opus in between.
 class AudioEngine {
   final _recorder = AudioRecorder();
-  final PcmSpeaker _speaker = PcmSpeaker.platform();
+  late final SpeakerGate _gate = SpeakerGate(
+    PcmSpeaker.platform(),
+    sampleRate: VoiceFormat.sampleRate,
+    channels: VoiceFormat.channels,
+  );
 
   /// Android / iOS audio focus and categories (no audio_session on desktop).
   static bool get _mobile => Platform.isAndroid || Platform.isIOS;
@@ -38,9 +43,6 @@ class AudioEngine {
   ClipPump? _pump;
   VoiceDecoder? _clipDecoder;
   Completer<void>? _clipDone;
-
-  /// False while the native player is being reset (feeds would fail).
-  bool _speakerOk = false;
 
   /// Mic read sizes to try, smallest (lowest latency) first. The record
   /// plugin's default is 2x the OS minimum, often 80-240 ms per chunk, which
@@ -77,7 +79,8 @@ class AudioEngine {
       volumeOf: (id) => _volumes[id] ?? 1.0,
     );
     if (_mobile) await _configureSession();
-    await _setupSpeaker();
+    // The speaker opens with the first audio and closes after 1.5 s of
+    // quiet (see [SpeakerGate]): nothing idles on the audio hardware.
     _ready = true;
   }
 
@@ -101,35 +104,23 @@ class AudioEngine {
     );
   }
 
-  Future<void> _setupSpeaker() async {
-    await _speaker.setup(
-      sampleRate: VoiceFormat.sampleRate,
-      channels: VoiceFormat.channels,
-    );
-    _speakerOk = true;
-  }
-
   void _feed(PcmArrayInt16 pcm) {
-    if (!_speakerOk) return;
     try {
-      _speaker.feed(pcm);
+      _gate.feed(pcm);
     } catch (_) {}
   }
 
   Future<void>? _flushing;
 
   /// Drop everything already queued in the native player (it has no flush
-  /// call: release + setup empties its queue and stops the AudioTrack).
+  /// call: closing it empties its queue and stops the AudioTrack). It opens
+  /// again by itself with the next audio.
   Future<void> flushSpeaker() {
     if (!_ready) return Future.value();
     return _flushing ??= () async {
-      _speakerOk = false;
       _playout.reset();
       try {
-        await _speaker.release();
-      } catch (_) {}
-      try {
-        await _setupSpeaker();
+        await _gate.release();
       } catch (_) {}
       _flushing = null;
     }();
@@ -195,7 +186,7 @@ class AudioEngine {
     for (final pcm in _pipeline.decode(peerId, seq, opus)) {
       final pre = _playout.admit(pcm.length);
       if (pre == null) continue; // too far behind: drop to catch up
-      if (pre > 0) _feed(PcmArrayInt16.zeros(count: pre));
+      if (pre > 0) _gate.feedSilence(pre);
       _feed(exactPcm(pcm));
     }
   }
@@ -303,7 +294,7 @@ class AudioEngine {
     await _recorder.dispose();
     if (_ready) {
       _pipeline.dispose();
-      await _speaker.release();
+      await _gate.dispose();
     }
   }
 }

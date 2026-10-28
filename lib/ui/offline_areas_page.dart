@@ -12,11 +12,13 @@ import '../trip/drive/road_download.dart';
 import '../trip/imports/map_layers.dart';
 import '../trip/imports/map_packs.dart';
 import '../trip/offline_areas.dart';
+import '../trip/route_save.dart';
 import '../trip/search/overpass.dart' show boundsSizeKm;
 import '../trip/tile_cache.dart';
 import '../trip/trip_controller.dart';
 import 'map_layer_widgets.dart';
 import 'map_packs_page.dart';
+import 'save_route_sheet.dart';
 import 'trip_widgets.dart' show askText;
 
 String _date(DateTime d) =>
@@ -26,6 +28,12 @@ String areaSize(GeoBounds b) {
   final k = boundsSizeKm(b);
   return '${k.w.round()} x ${k.h.round()} km';
 }
+
+/// The first line of a saved route's row: what it is and how complete.
+String routeRowLine(SavedRoute r, TripController trip) =>
+    'Route: ${r.summary(imperial: trip.settings.imperial)} · '
+    '${r.turns} turns'
+    '${r.isReady ? '' : ' · partly saved (menu: Resume)'}';
 
 /// Map styles that may be saved for offline use (base maps, overlays).
 List<MapSource> get offlineStyles => [
@@ -200,7 +208,9 @@ class _OfflineAreasPageState extends State<OfflineAreasPage> {
           if (mounted) Navigator.pop(context);
         }
       case 'update':
-        if (e.isPack) {
+        if (e.isRoute) {
+          await showSaveRoute(context, trip, route: e.route);
+        } else if (e.isPack) {
           await _updatePack(e);
         } else {
           await openSaveArea(
@@ -323,12 +333,17 @@ class _OfflineAreasPageState extends State<OfflineAreasPage> {
                   child: ListTile(
                     key: Key('area:${e.id}'),
                     leading: Icon(
-                      e.isPack ? Icons.terrain : Icons.download_for_offline,
+                      e.isRoute
+                          ? Icons.alt_route
+                          : e.isPack
+                          ? Icons.terrain
+                          : Icons.download_for_offline,
                     ),
                     title: Text(e.name),
-                    isThreeLine: e.parts.length > 1,
+                    isThreeLine: e.parts.length > 1 || e.isRoute,
                     subtitle: Text(
                       [
+                        if (e.isRoute) routeRowLine(e.route!, trip),
                         ...e.parts,
                         [
                           formatBytes(e.bytes),
@@ -343,14 +358,29 @@ class _OfflineAreasPageState extends State<OfflineAreasPage> {
                     trailing: PopupMenuButton<String>(
                       key: Key('areaMenu:${e.id}'),
                       onSelected: (v) => _menu(e, v),
-                      itemBuilder: (_) => const [
-                        PopupMenuItem(
+                      itemBuilder: (_) => [
+                        const PopupMenuItem(
                           value: 'show',
                           child: Text('Show on map'),
                         ),
-                        PopupMenuItem(value: 'update', child: Text('Update')),
-                        PopupMenuItem(value: 'rename', child: Text('Rename')),
-                        PopupMenuItem(value: 'delete', child: Text('Delete')),
+                        PopupMenuItem(
+                          value: 'update',
+                          child: Text(
+                            !e.isRoute
+                                ? 'Update'
+                                : e.route!.isReady
+                                ? 'Download again'
+                                : 'Resume',
+                          ),
+                        ),
+                        const PopupMenuItem(
+                          value: 'rename',
+                          child: Text('Rename'),
+                        ),
+                        const PopupMenuItem(
+                          value: 'delete',
+                          child: Text('Delete'),
+                        ),
                       ],
                     ),
                   ),

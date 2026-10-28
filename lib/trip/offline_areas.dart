@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 
 import 'imports/map_layers.dart';
 import 'imports/map_packs.dart' show layerBounds, unionBounds;
+import 'route_save.dart' show SavedRoute;
 import 'tile_cache.dart';
 
 /// One saved offline area (v1.9.3): the map tiles (any styles), trails
@@ -81,7 +82,12 @@ class AreaEntry {
     required this.layers,
     this.area,
     this.pack,
+    this.route,
   });
+
+  /// v2.2.0: set when this item is a route saved for offline.
+  final SavedRoute? route;
+  bool get isRoute => route != null;
 
   /// [OfflineArea.id], or `pack:<id>`.
   final String id;
@@ -170,6 +176,9 @@ class OfflineAreas extends ChangeNotifier {
   final List<OfflineArea> _areas = [];
   int _seq = 0;
 
+  /// v2.2.0: the saved route of an area (set by the Trip controller).
+  SavedRoute? Function(String areaId)? routeFor;
+
   /// Pack id -> its name (from the pack list), for the rows of packs.
   Map<String, String> packNames = {};
 
@@ -253,6 +262,7 @@ class OfflineAreas extends ChangeNotifier {
     // Areas left with nothing in them (deleted elsewhere).
     _areas.removeWhere(
       (a) =>
+          routeFor?.call(a.id) == null &&
           !tiles.regions.any((r) => r.areaId == a.id) &&
           !layers.all.any((l) => l.offlineArea == a.id),
     );
@@ -270,6 +280,7 @@ class OfflineAreas extends ChangeNotifier {
           name: a.name,
           bounds: a.bounds,
           area: a,
+          route: routeFor?.call(a.id),
           regions: tiles.regions.where((r) => r.areaId == a.id).toList(),
           layers: layers.all.where((l) => l.offlineArea == a.id).toList(),
         ),
@@ -488,4 +499,21 @@ class AreaSaveResult {
   /// Parts that could not be saved (the rest was).
   final List<String> problems;
   final bool cancelled;
+}
+
+/// How saving a route for offline went (v2.2.0).
+class RouteSaveResult {
+  const RouteSaveResult(
+    this.entry,
+    this.route,
+    this.problems, {
+    this.cancelled = false,
+  });
+  final AreaEntry? entry;
+  final SavedRoute route;
+  final List<String> problems;
+  final bool cancelled;
+
+  /// Everything was saved.
+  bool get complete => route.isReady && !cancelled;
 }

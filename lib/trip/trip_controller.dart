@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:math' show max;
 
 import 'package:flutter/foundation.dart';
@@ -11,13 +12,14 @@ import '../app/power_plan.dart';
 import '../core/transport.dart';
 import '../core/transport_manager.dart' show InboundTrip;
 import 'geo.dart';
-import 'imports/geo_import.dart' show ImportedData;
+import 'imports/geo_import.dart' show ImportedData, ImportedLine;
 import 'imports/map_layers.dart';
 import 'imports/route_share.dart';
 import 'lost_contact.dart';
 import 'drive/drive_nav.dart' show spokenDistance;
 import 'drive/drive_session.dart';
 import 'drive/online_router.dart';
+import 'drive/road_data.dart' show RoadData;
 import 'drive/road_download.dart';
 import 'drive/road_router.dart';
 import 'drive/road_service.dart';
@@ -31,6 +33,7 @@ import 'smart_plan.dart';
 import 'imports/geo_import.dart' show ImportedWaypoint;
 import 'nav/nav_session.dart';
 import 'offline_areas.dart';
+import 'route_save.dart';
 import 'nav/trail_graph.dart';
 import 'search/fetch.dart';
 import 'search/map_search.dart';
@@ -106,7 +109,11 @@ abstract class TripHost {
   /// Phones on our channel right now.
   List<TripPeer> channelPeers();
   Future<void> saveTripSettings();
-  Future<bool> startLocation(Duration interval);
+
+  /// [highAccuracy] false = balanced / network accuracy (v2.2.0): used
+  /// while the phone is idle in the background, only to share your place
+  /// with friends.
+  Future<bool> startLocation(Duration interval, {bool highAccuracy = true});
   Future<void> stopLocation();
   Future<Fix?> locateOnce();
   Future<void> backgroundLocation(bool on);
@@ -170,6 +177,8 @@ class TripController extends ChangeNotifier {
       layers: layers,
       clock: _clock,
     );
+    routes = SavedRoutes(File('${dir.path}/saved_routes.json'));
+    areas.routeFor = routes.byId;
     weather = WeatherCache(
       File('${dir.path}/weather.json'),
       userAgent: userAgent,
@@ -227,6 +236,9 @@ class TripController extends ChangeNotifier {
 
   /// Saved offline areas (v1.9.3): map tiles, trails and roads together.
   late final OfflineAreas areas;
+
+  /// Routes saved with "Save route for offline" (v2.2.0), one per area.
+  late final SavedRoutes routes;
   final RouteAssembler _routes = RouteAssembler();
 
   /// The newest route someone shared being stored (tests wait on it).
@@ -325,7 +337,9 @@ class TripController extends ChangeNotifier {
       _loadTracks(),
       layers.load(),
     ]);
+    await routes.load();
     await areas.load();
+    await routes.prune({for (final a in areas.areas) a.id});
     await _restoreDrive();
     unawaited(tiles.trim());
     await _updateLocationNeed();
@@ -423,17 +437,38 @@ class TripController extends ChangeNotifier {
   /// GPS interval asked for right now (tests / debug).
   Duration? get locationInterval => _locInterval;
 
+  /// v2.2.0: high-accuracy GPS is needed right now: navigating, driving,
+  /// recording a track, SOS, or the Trip screen on screen. Otherwise (Trip
+  /// mode left running in the background) a balanced / network location
+  /// with a longer interval is enough to keep friends' maps current.
+  bool get _wantHighAccuracy =>
+      _onScreen ||
+      nav != null ||
+      drive != null ||
+      recorder.recording ||
+      sos.active != null;
+
+  /// What the location was last started with (tests / debug).
+  bool? get locationHighAccuracy => _locAccurate;
+  bool? _locAccurate;
+
   Future<void> _updateLocationNeed() async {
     if (!_started) return;
     if (_needLocation) {
       final want = _wantedInterval;
-      if (_locInterval != want) {
+      final acc = _wantHighAccuracy;
+      if (_locInterval != want || _locAccurate != acc) {
         _locInterval = want;
-        final ok = await host.startLocation(want);
-        if (!ok) _locInterval = null;
+        _locAccurate = acc;
+        final ok = await host.startLocation(want, highAccuracy: acc);
+        if (!ok) {
+          _locInterval = null;
+          _locAccurate = null;
+        }
       }
     } else if (_locInterval != null) {
       _locInterval = null;
+      _locAccurate = null;
       await host.stopLocation();
     }
     final bg =
@@ -556,7 +591,21 @@ class TripController extends ChangeNotifier {
       // when neither works.
       r = (await planWalk(me, s.target)).route;
     }
+    if (r == null && !s.savedFallback) {
+      // v2.2.0: no new route: carry on with the walk saved for offline.
+      final saved = _savedHikeFor(s.target, me);
+      if (saved != null && nav == s && !_disposed) {
+        s.savedFallback = true;
+        s.replaceRoute(saved);
+        s.note =
+            'No signal for a new route: following your saved walking route. '
+            'It switches back to an online route when the signal returns.';
+        notifyListeners();
+        return true;
+      }
+    }
     if (r == null || nav != s || _disposed) return false;
+    s.savedFallback = false;
     s.replaceRoute(r);
     notifyListeners();
     return true;
@@ -678,6 +727,7 @@ class TripController extends ChangeNotifier {
       );
       final r = p.route;
       if (r != null && r.isOnline && drive == d && !_disposed) {
+        d.savedFallback = false;
         d.replaceRoute(r);
         d.notice = 'Back online: route updated.';
         unawaited(_saveDrive());
@@ -701,6 +751,7 @@ class TripController extends ChangeNotifier {
         r = routeWithEnds(r, n.me!, n.target);
         await _elevation(r);
         if (nav == n && !_disposed) {
+          n.savedFallback = false;
           n.replaceRoute(r);
           n.note = 'Back online: route updated.';
           notifyListeners();
@@ -795,6 +846,7 @@ class TripController extends ChangeNotifier {
     final w = await planWalk(me, to);
     var r = w.route;
     var note = w.note;
+    preview ??= r == null ? _savedHikeFor(to, me) : null;
     if (r == null && preview != null && preview.points.length > 1) {
       r = routeWithEnds(preview, me, to);
       note = 'No signal here, so this is the walking route planned earlier.';
@@ -850,6 +902,19 @@ class TripController extends ChangeNotifier {
   /// first, the saved roads and trails when there is no signal. Never a
   /// straight line unless asked for.
   Future<SmartPlan> planSmart(
+    GeoPoint to, {
+    String name = 'Destination',
+  }) async {
+    final p = await _planSmartLive(to, name: name);
+    if (p.ok) return p;
+    // v2.2.0: nothing could be planned (no signal, no saved roads): use the
+    // route saved for offline to the same place, if you are near it.
+    final me = myFix?.pos;
+    if (me == null) return p;
+    return _savedPlanFor(me, to) ?? p;
+  }
+
+  Future<SmartPlan> _planSmartLive(
     GeoPoint to, {
     String name = 'Destination',
   }) async {
@@ -1377,6 +1442,19 @@ class TripController extends ChangeNotifier {
     if (drive != s || _disposed) return false;
     final r = p.route;
     if (r == null) {
+      // v2.2.0: no new route (no signal, no saved roads here): keep going
+      // on the route saved for offline, if there is one near you.
+      final saved = s.savedFallback ? null : _savedDriveFor(s.target, me);
+      if (saved != null) {
+        s.savedFallback = true;
+        s.replaceRoute(saved);
+        s.notice =
+            'No signal for a new route: following your saved route. It '
+            'switches back to an online route when the signal returns.';
+        unawaited(_saveDrive());
+        notifyListeners();
+        return true;
+      }
       s.rerouting = false;
       s.notice = layers.roads.isEmpty || p.message.isEmpty
           ? offRouteNoRoads
@@ -1384,6 +1462,7 @@ class TripController extends ChangeNotifier {
       notifyListeners();
       return false;
     }
+    s.savedFallback = false;
     s.replaceRoute(r);
     s.notice = p.message;
     unawaited(_saveDrive());
@@ -1805,6 +1884,415 @@ class TripController extends ChangeNotifier {
     return AreaSaveResult(areas.entry(area.id), problems, cancelled: stop());
   }
 
+  // ------------------------------------------------------------ v2.2.0: save route for offline
+
+  /// The route being followed (or just planned and started), ready to be
+  /// saved: the drive, the walk, the trailhead. Null when there is none
+  /// (nothing active, or only a compass line).
+  SavedRoute? currentRouteForSave() {
+    final d = drive;
+    if (d != null) {
+      final hikeTo = d.hikeTo;
+      final base = mapSource.allowsOffline && !mapSource.onlineOnly
+          ? mapSource.id
+          : MapSource.topo.id;
+      if (hikeTo != null) {
+        final h = d.hikePreview;
+        final saved = routes.all.where(
+          (r) =>
+              distanceM(r.destination, hikeTo) < 150 &&
+              r.trailheadPos != null &&
+              distanceM(r.trailheadPos!, d.target) < 300,
+        );
+        return SavedRoute(
+          id: saved.firstOrNull?.id ?? '',
+          status: saved.firstOrNull?.status ?? SavedRoute.partial,
+          name: d.hikeName.isEmpty ? 'Destination' : d.hikeName,
+          destination: hikeTo,
+          drive: d.route,
+          hike: h,
+          hikeApprox: h == null,
+          trailheadName: d.name,
+          trailheadPos: d.target,
+          baseId: base,
+        );
+      }
+      final saved = routes.all.where(
+        (r) => r.hike == null && distanceM(r.destination, d.target) < 150,
+      );
+      return SavedRoute(
+        id: saved.firstOrNull?.id ?? '',
+        status: saved.firstOrNull?.status ?? SavedRoute.partial,
+        name: d.name,
+        destination: d.target,
+        drive: d.route,
+        baseId: base,
+      );
+    }
+    final n = nav;
+    if (n != null && n.route != null && n.route!.points.length > 1) {
+      final saved = routes.all.where(
+        (r) => r.drive == null && distanceM(r.destination, n.target) < 150,
+      );
+      return SavedRoute(
+        id: saved.firstOrNull?.id ?? '',
+        status: saved.firstOrNull?.status ?? SavedRoute.partial,
+        name: n.name,
+        destination: n.target,
+        hike: n.route,
+        baseId: mapSource.allowsOffline && !mapSource.onlineOnly
+            ? mapSource.id
+            : MapSource.topo.id,
+      );
+    }
+    return null;
+  }
+
+  /// The map style saved with a route: the one you use, else Topo.
+  MapSource _routeBase(SavedRoute r) {
+    final s = MapSource.byId(r.baseId);
+    if (s != null && s.allowsOffline && !s.onlineOnly && !s.overlay) return s;
+    return MapSource.topo;
+  }
+
+  /// Size and time of saving [r] (no network: known from the route).
+  ({RouteSaveJobs jobs, int bytes, Duration time}) estimateRouteSave(
+    SavedRoute r,
+  ) {
+    final j = routeSaveJobs(r, _routeBase(r));
+    return (jobs: j, bytes: j.bytes(r), time: j.time(r));
+  }
+
+  /// "Save route for offline" (v2.2.0): map tiles along every leg, the
+  /// roads and trails near it, elevation for the walk, the turn list and
+  /// trailhead info, as ONE item in Offline areas, named after the
+  /// destination. Only when called (the user tapped Save), one request at
+  /// a time, polite pace, stops at once when [cancelled]. Calling it again
+  /// for the same route resumes (tiles on the phone are skipped) or, for a
+  /// finished one, downloads it again (fresh data).
+  Future<RouteSaveResult> saveRoute(
+    SavedRoute r, {
+    void Function(AreaSaveProgress p)? onProgress,
+    bool Function()? cancelled,
+    RoadDownloader? downloader,
+    Duration tilePause = routeTilePause,
+  }) async {
+    if (!plan.mapTileDownloads) {
+      throw StateError(
+        'Offline power save is on: saving a route needs the internet.',
+      );
+    }
+    final base = _routeBase(r);
+    final jobs = routeSaveJobs(r, base);
+    if (jobs.tiles.isEmpty &&
+        jobs.roadWindows.isEmpty &&
+        jobs.trailWindows.isEmpty) {
+      throw StateError('Nothing to save for this route.');
+    }
+    final redo = r.isReady;
+    final name = r.name.trim().isEmpty ? 'Route' : r.name.trim();
+    final existing = r.id.isEmpty ? null : areas.byId(r.id);
+    final area =
+        existing ??
+        await areas.create(
+          name,
+          jobs.bounds,
+          styles: [base.id],
+          minZoom: 8,
+          maxZoom: 16,
+          roads: jobs.roadWindows.isNotEmpty,
+          trails: true,
+        );
+    r.id = area.id;
+    r.baseId = base.id;
+    r.status = SavedRoute.partial;
+    r.problems = [];
+    await routes.put(r);
+    final old = areas.entry(area.id);
+    final oldRegions = List<OfflineRegion>.of(old?.regions ?? const []);
+    final oldRoads = List<MapLayer>.of(old?.roadLayers ?? const []);
+    final oldTrails = List<MapLayer>.of(old?.trailLayers ?? const []);
+    final problems = <String>[...jobs.notes];
+    final steps =
+        jobs.tiles.length +
+        (jobs.roadWindows.isEmpty ? 0 : 1) +
+        (jobs.trailWindows.isEmpty ? 0 : 1);
+    var stepNo = 0;
+    bool stop() => cancelled?.call() ?? false;
+    void report(String step, double? f) =>
+        onProgress?.call(AreaSaveProgress(step, stepNo, steps, f));
+    var complete = true;
+    final newRegions = <OfflineRegion>[];
+
+    // Map tiles: one strip at a time.
+    for (final j in jobs.tiles) {
+      if (stop()) break;
+      stepNo++;
+      final p = DownloadProgress(j.tiles.length);
+      report(j.label, 0);
+      final reg = await tiles.downloadTiles(
+        j.src,
+        j.tiles,
+        name: name,
+        bounds: j.bounds,
+        areaId: area.id,
+        progress: p,
+        refresh: redo,
+        pause: tilePause,
+        onProgress: (p) {
+          if (stop()) p.cancelled = true;
+          report(j.label, p.fraction);
+        },
+      );
+      if (tiles.regions.contains(reg)) {
+        newRegions.add(reg);
+        for (final o in oldRegions.where(
+          (o) =>
+              o.sourceId == reg.sourceId &&
+              o.bounds.south == reg.bounds.south &&
+              o.bounds.west == reg.bounds.west &&
+              o.bounds.north == reg.bounds.north &&
+              o.bounds.east == reg.bounds.east,
+        )) {
+          tiles.regions.remove(o);
+        }
+        await tiles.saveRegions();
+      }
+      if (p.stalled) {
+        complete = false;
+        problems.add('${j.label}: no signal, stopped. Tap Resume later.');
+        break;
+      } else if (p.failed > 0) {
+        complete = false;
+        problems.add('${j.label}: ${p.failed} of ${p.total} tiles failed');
+      }
+      if (p.cancelled && stop()) complete = false;
+    }
+    if (stop()) complete = false;
+
+    // Roads (all legs together as one layer).
+    var noSignal = problems.any((x) => x.contains('no signal'));
+    if (!stop() && !noSignal && jobs.roadWindows.isNotEmpty) {
+      stepNo++;
+      report('Roads', null);
+      try {
+        final dl = downloader ?? RoadDownloader(fetch: fetch, clock: _clock);
+        final parts = <RoadData>[];
+        var km = 0.0;
+        DateTime? built;
+        for (var i = 0; i < jobs.roadWindows.length; i++) {
+          if (stop()) break;
+          final d = await dl.download(jobs.roadWindows[i], cancelled: stop);
+          parts.add(d);
+          km += d.roadKm;
+          built ??= d.builtAt;
+          report('Roads', (i + 1) / jobs.roadWindows.length);
+        }
+        if (!stop() && parts.isNotEmpty) {
+          final all = parts.length == 1
+              ? parts.first
+              : await Isolate.run(() => RoadData.merge(parts));
+          final l = await layers.importRoads(
+            '$name roads',
+            all.encode(),
+            area: jobs.bounds,
+            summary: roadsSummary(km, built ?? _clock()),
+            attribution: '© OpenStreetMap contributors, ODbL',
+          );
+          await layers.tagArea(l, area.id);
+          for (final x in oldRoads) {
+            if (layers.byId(x.id) != null) await layers.delete(x);
+          }
+        }
+      } on NoSignalException {
+        complete = false;
+        noSignal = true;
+        problems.add('Roads: no signal, stopped. Tap Resume later.');
+      } catch (e) {
+        if (!stop()) {
+          complete = false;
+          problems.add('Roads: $e');
+        }
+      }
+    }
+    if (stop()) complete = false;
+
+    // Trails and paths (unnamed ones too) along the walk.
+    if (!stop() && !noSignal && jobs.trailWindows.isNotEmpty) {
+      stepNo++;
+      report('Trails', null);
+      try {
+        final lines = <ImportedLine>[];
+        final wps = <ImportedWaypoint>[];
+        final seen = <String>{};
+        for (var i = 0; i < jobs.trailWindows.length; i++) {
+          if (stop()) break;
+          final res = await search.trailsFor(
+            jobs.trailWindows[i],
+            name: '$name trails',
+          );
+          for (final l in res.data.lines) {
+            final f = l.points.first;
+            final k =
+                '${l.name}|${f.lat.toStringAsFixed(5)}|'
+                '${f.lng.toStringAsFixed(5)}|${l.points.length}';
+            if (seen.add(k)) lines.add(l);
+          }
+          for (final w in res.data.waypoints) {
+            final k =
+                'w|${w.name}|${w.pos.lat.toStringAsFixed(5)}|'
+                '${w.pos.lng.toStringAsFixed(5)}';
+            if (seen.add(k)) wps.add(w);
+          }
+          report('Trails', (i + 1) / jobs.trailWindows.length);
+        }
+        if (!stop()) {
+          if (lines.isEmpty && wps.isEmpty) {
+            problems.add('Trails: none found near the route in OpenStreetMap');
+          } else {
+            final l = await layers.addTrail(
+              ImportedData(name: '$name trails', lines: lines, waypoints: wps),
+              attribution: osmAttribution,
+              color: 0xFF6D4C41,
+            );
+            await layers.tagArea(l, area.id);
+            for (final x in oldTrails) {
+              if (layers.byId(x.id) != null) await layers.delete(x);
+            }
+          }
+        }
+      } on NoSignalException {
+        complete = false;
+        problems.add('Trails: no signal, stopped. Tap Resume later.');
+      } catch (e) {
+        if (!stop()) {
+          complete = false;
+          problems.add('Trails: $e');
+        }
+      }
+    }
+    if (stop()) complete = false;
+
+    // Finished: drop what an older save had that this one does not.
+    if (complete) {
+      for (final o in oldRegions) {
+        if (tiles.regions.contains(o) && !newRegions.contains(o)) {
+          await tiles.deleteRegion(o);
+        }
+      }
+    }
+    area
+      ..name = name
+      ..bounds = jobs.bounds
+      ..styles = [base.id]
+      ..minZoom = 8
+      ..maxZoom = 16
+      ..roads = jobs.roadWindows.isNotEmpty
+      ..trails = true;
+    r
+      ..status = complete ? SavedRoute.ready : SavedRoute.partial
+      ..problems = problems
+      ..at = _clock();
+    final entry = areas.entry(area.id);
+    final empty =
+        entry == null || (entry.regions.isEmpty && entry.layers.isEmpty);
+    if (stop() && existing == null && empty) {
+      // Cancelled before anything was kept: leave no empty item behind.
+      await routes.remove(area.id);
+      if (entry != null) await areas.delete(entry);
+      notifyListeners();
+      return RouteSaveResult(null, r, problems, cancelled: true);
+    }
+    // The turn list and trailhead info stay (even when a download part
+    // failed): the route itself is always kept.
+    await routes.put(r);
+    await areas.touch(area);
+    await tiles.trim();
+    notifyListeners();
+    return RouteSaveResult(
+      areas.entry(area.id),
+      r,
+      problems,
+      cancelled: stop(),
+    );
+  }
+
+  /// A route saved for [dest] (within [withinM]) that has drive or walk
+  /// data, for when no new route can be made.
+  SavedRoute? savedRouteFor(GeoPoint dest, {double withinM = 250}) {
+    for (final r in routes.all.toList().reversed) {
+      if ((r.drive != null || r.hike != null) &&
+          distanceM(r.destination, dest) <= withinM) {
+        return r;
+      }
+    }
+    return null;
+  }
+
+  /// The saved driving leg that ends at [target], if you are near it.
+  DriveRoute? _savedDriveFor(GeoPoint target, GeoPoint me) {
+    for (final r in routes.all.toList().reversed) {
+      final d = r.drive;
+      if (d == null || d.points.length < 2) continue;
+      if (distanceM(d.points.last, target) > 300) continue;
+      if (distanceToLineM(d.points, me) > 8000) continue;
+      return d.copyWith(source: DriveRoute.saved);
+    }
+    return null;
+  }
+
+  /// The saved walking leg that ends at [target], if you are near it.
+  TrailRoute? _savedHikeFor(GeoPoint target, GeoPoint me) {
+    for (final r in routes.all.toList().reversed) {
+      final h = r.hike;
+      if (h == null || h.points.length < 2) continue;
+      if (distanceM(h.points.last, target) > 300) continue;
+      if (distanceToLineM(h.points, me) > 5000) continue;
+      return copyTrailRoute(h, source: h.terrainOnly ? null : 'saved');
+    }
+    return null;
+  }
+
+  /// No signal and no live plan: use the saved route to the same place.
+  SmartPlan? _savedPlanFor(GeoPoint me, GeoPoint to) {
+    final r = savedRouteFor(to);
+    if (r == null) return null;
+    final dr = r.drive;
+    final hike = r.hike;
+    const msg =
+        'No signal: using your saved route. It switches to a fresh one when '
+        'the signal is back.';
+    if (dr != null && distanceToLineM(dr.points, me) <= 8000) {
+      final copy = dr.copyWith(source: DriveRoute.saved);
+      final tp = r.trailheadPos;
+      if ((tp != null && hike != null) || r.hikeApprox) {
+        return SmartPlan(
+          SmartKind.driveThenHike,
+          drive: copy,
+          hike: hike == null ? null : copyTrailRoute(hike, source: 'saved'),
+          hikePending: hike == null,
+          trailhead: TrailheadCandidate(
+            name: r.trailheadName.isEmpty ? 'the trailhead' : r.trailheadName,
+            pos: tp ?? dr.points.last,
+            kind: 'trailhead',
+            source: 'saved',
+            distToTargetM: distanceM(tp ?? dr.points.last, to),
+          ),
+          message: msg,
+        );
+      }
+      return SmartPlan(SmartKind.drive, drive: copy, message: msg);
+    }
+    if (hike != null && distanceToLineM(hike.points, me) <= 5000) {
+      return SmartPlan(
+        SmartKind.hike,
+        hike: copyTrailRoute(hike, source: hike.terrainOnly ? null : 'saved'),
+        hikeNote: msg,
+      );
+    }
+    return null;
+  }
+
   /// Delete an area (or a ready-made pack) and everything in it.
   Future<void> deleteArea(AreaEntry e) async {
     final base = baseTiles;
@@ -1812,6 +2300,7 @@ class TripController extends ChangeNotifier {
       await update((s) => s.mapSource = 'topo');
     }
     await areas.delete(e);
+    await routes.remove(e.id);
     notifyListeners();
   }
 

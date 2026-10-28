@@ -266,7 +266,7 @@ void main() {
 
         await t.setOfflineSaver(false);
         expect(t.tiles.online, isTrue);
-        expect(t.locationInterval, const Duration(seconds: 20));
+        expect(t.locationInterval, const Duration(seconds: 45));
         t.onFix(Fix(here, clock.now));
         expect(posSent(checkIn: false), 1, reason: 'live again');
       },

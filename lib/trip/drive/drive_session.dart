@@ -51,7 +51,15 @@ class DriveSession extends ChangeNotifier {
   String spokenNotice = '';
 
   /// "Online route" / "Offline route".
-  String get sourceLabel => route.isOnline ? 'Online route' : 'Offline route';
+  String get sourceLabel => route.isOnline
+      ? 'Online route'
+      : route.isSaved
+      ? 'Saved route'
+      : 'Offline route';
+
+  /// v2.2.0: following the route saved for offline because no new one
+  /// could be made (so it is not tried again until the signal is back).
+  bool savedFallback = false;
   int _seenOff = 0;
   GeoPoint? _last;
   DateTime? _lastAt;

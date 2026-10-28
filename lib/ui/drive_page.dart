@@ -12,6 +12,7 @@ import '../trip/nav/trail_graph.dart' show TrailRoute, naismith;
 import '../trip/trip_controller.dart';
 import 'map_layer_widgets.dart';
 import 'nav_page.dart' show navBuzz;
+import 'save_route_sheet.dart';
 import 'sheets.dart';
 
 String driveDuration(Duration d) {
@@ -158,7 +159,7 @@ class DriveSourceLine extends StatelessWidget {
             Flexible(
               child: Text(
                 '${session.sourceLabel}'
-                '${r.isOnline ? ' · kept on the phone if signal drops' : ' · from saved roads'}',
+                '${r.isOnline ? ' · kept on the phone if signal drops' : (r.isSaved ? ' · from your saved route' : ' · from saved roads')}',
                 key: const Key('driveSource'),
                 style: style,
               ),
@@ -295,6 +296,7 @@ class DriveCard extends StatelessWidget {
                       onPressed: () => showDriveSteps(context, trip, s),
                       child: const Text('Steps'),
                     ),
+                    SaveRouteButton(key: const Key('saveRouteBtn'), trip: trip),
                     if (s.arrived && (s.hikeTo != null || r.endOffM > 30))
                       FilledButton.tonal(
                         key: const Key('walkOn'),
@@ -757,6 +759,10 @@ class _DriveFollowPageState extends State<DriveFollowPage> {
                   key: const Key('driveStepsFollow'),
                   onPressed: () => showDriveSteps(context, trip, s),
                   child: const Text('Steps'),
+                ),
+                SaveRouteButton(
+                  key: const Key('saveRouteBtnFollow'),
+                  trip: trip,
                 ),
                 TextButton(
                   key: const Key('driveStopFollow'),

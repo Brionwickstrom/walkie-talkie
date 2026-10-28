@@ -99,7 +99,10 @@ class PowerPlan {
     if (sosActive) return const Duration(seconds: 5); // SOS: full speed
     if (offline) return Duration(seconds: visible ? 15 : 90);
     if (visible) return const Duration(seconds: 5);
-    return Duration(seconds: saver ? 60 : 20);
+    // Idle in the background (Trip mode only sharing your place): a
+    // balanced location every 45 s (2 min with battery saver) is plenty for
+    // friends' maps; live positions go out at least every 60 s.
+    return Duration(seconds: saver ? 120 : 45);
   }
 
   /// GPS fix interval while navigating (v1.9.1): fast enough to follow a

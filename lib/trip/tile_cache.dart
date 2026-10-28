@@ -428,6 +428,9 @@ class DownloadProgress {
   int failed = 0;
   int bytes = 0;
   bool cancelled = false;
+
+  /// Stopped by itself after many failures in a row (no signal).
+  bool stalled = false;
   bool finished = false;
   double get fraction => total == 0 ? 1 : (done + failed) / total;
 }
@@ -697,6 +700,105 @@ class TileCache {
       ..tiles = p.done
       ..bytes = p.bytes;
     if (!p.cancelled && p.done > 0) {
+      regions.add(region);
+      await _saveRegions();
+    }
+    return region;
+  }
+
+  /// Save exactly these tiles (a strip along a route, v2.2.0) for offline
+  /// use: one request at a time, [pause] between requests (1 a second for
+  /// the free tile servers), tiles already on the phone skipped. Stops at
+  /// once when [progress] is cancelled, and after [giveUpAfter] failures in
+  /// a row (no signal: no point draining the battery). What was fetched is
+  /// kept as a region either way, so saving again carries on from there.
+  Future<OfflineRegion> downloadTiles(
+    MapSource s,
+    List<TileId> list, {
+    required String name,
+    required GeoBounds bounds,
+    DownloadProgress? progress,
+    void Function(DownloadProgress p)? onProgress,
+    Duration pause = const Duration(seconds: 1),
+    String? areaId,
+    bool refresh = false,
+    int giveUpAfter = 6,
+  }) async {
+    if (!s.allowsOffline) {
+      throw StateError('${s.name} does not allow offline downloads');
+    }
+    final p = progress ?? DownloadProgress(list.length);
+    var minZ = 99, maxZ = 0;
+    for (final t in list) {
+      minZ = min(minZ, t.z);
+      maxZ = max(maxZ, t.z);
+    }
+    final region = OfflineRegion(
+      name: name,
+      sourceId: s.id,
+      bounds: bounds,
+      minZoom: list.isEmpty ? 0 : minZ,
+      maxZoom: list.isEmpty ? 0 : maxZ,
+      tiles: 0,
+      bytes: 0,
+      at: DateTime.now(),
+      areaId: areaId,
+    );
+    var failsInRow = 0;
+    for (final t in list) {
+      if (p.cancelled) break;
+      final f = _file(s.id, t.z, t.x, t.y);
+      var ok = false;
+      var asked = false;
+      try {
+        if (await f.exists()) {
+          final fresh =
+              DateTime.now().difference(await f.lastModified()) < minFresh;
+          if (!refresh || fresh) {
+            p.bytes += await f.length();
+            ok = true;
+          } else {
+            asked = true;
+            final got = await _fetch(s, t.z, t.x, t.y, conditional: true);
+            if (got != null && got.isEmpty) {
+              await f.setLastModified(DateTime.now());
+            }
+            p.bytes += got != null && got.isNotEmpty
+                ? got.length
+                : await f.length();
+            ok = true;
+          }
+        }
+      } catch (_) {}
+      if (!ok) {
+        asked = true;
+        final got = await _fetch(s, t.z, t.x, t.y);
+        if (got != null && got.isNotEmpty) {
+          p.bytes += got.length;
+          ok = true;
+        }
+      }
+      if (ok) {
+        p.done++;
+        failsInRow = 0;
+      } else {
+        p.failed++;
+        if (++failsInRow >= giveUpAfter) {
+          p.stalled = true;
+          p.cancelled = true;
+        }
+      }
+      onProgress?.call(p);
+      if (asked && !p.cancelled && pause > Duration.zero) {
+        await Future<void>.delayed(pause);
+      }
+    }
+    p.finished = true;
+    onProgress?.call(p);
+    region
+      ..tiles = p.done
+      ..bytes = p.bytes;
+    if (p.done > 0) {
       regions.add(region);
       await _saveRegions();
     }

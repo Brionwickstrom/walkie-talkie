@@ -105,7 +105,15 @@ class FakeHost implements TripHost {
   @override
   Future<void> saveTripSettings() async {}
   @override
-  Future<bool> startLocation(Duration interval) async => true;
+  Future<bool> startLocation(
+    Duration interval, {
+    bool highAccuracy = true,
+  }) async {
+    locationStarts.add((interval: interval, highAccuracy: highAccuracy));
+    return true;
+  }
+
+  final locationStarts = <({Duration interval, bool highAccuracy})>[];
   @override
   Future<void> stopLocation() async {}
   @override

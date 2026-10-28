@@ -4314,9 +4314,12 @@ class _WalkieTripHost implements TripHost {
   }
 
   @override
-  Future<bool> startLocation(Duration interval) async {
+  Future<bool> startLocation(
+    Duration interval, {
+    bool highAccuracy = true,
+  }) async {
     if (!await _permission()) return false;
-    return c.bridge.startLocationUpdates(interval);
+    return c.bridge.startLocationUpdates(interval, highAccuracy: highAccuracy);
   }
 
   @override

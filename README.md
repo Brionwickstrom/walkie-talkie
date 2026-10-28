@@ -1524,3 +1524,26 @@ Tests: `test/v195_gateway_test.dart`, `test/v195_quiet_test.dart`.
 
 Tests: `test/v197_meshtastic_import_test.dart` (vectors from the official
 apps and the Python library), `test/v195_quiet_test.dart`.
+
+## v2.2.0: Save route for offline
+
+On a drive, hike, drive then hike (or Gentle compass route), the card has one
+button, **Save route for offline**. It shows the size first, then downloads a
+strip of map tiles along every leg (wider and lower zoom for the drive, tighter
+and higher zoom for the hike), roads and trails in a buffer (unnamed paths
+too), elevation tiles for the hike strip, the turn list and trailhead info, as
+ONE item in **Offline areas** named after the destination. It has **Cancel**
+(partial work is kept) and **Resume**; ⋮ has **Download again** and **Delete**.
+When signal drops mid-route, a failed online reroute uses the saved turns,
+tiles and trails ("from your saved route"); when signal returns the app goes
+back to online routing.
+
+Fair use: tiles are fetched one at a time, about 1 request a second, with the
+app's User-Agent, and the map attribution stays on screen. Downloads start only
+on tap, never in the background, and stop on Cancel.
+
+Battery (same release): the speaker is released 1.5 s after the last audio and
+reopens on incoming audio without clipping the first syllable; idle,
+backgrounded friend location sharing uses balanced (network) accuracy every
+45 s (120 s with battery saver) and goes back to high accuracy while
+navigating, recording, on the Trip screen or in SOS.

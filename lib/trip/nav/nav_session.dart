@@ -54,6 +54,9 @@ class NavSession extends ChangeNotifier {
   /// A terrain-only suggestion: the straight line is drawn next to it.
   bool get terrainOnly => route?.terrainOnly ?? false;
 
+  /// v2.2.0: following the walking route saved for offline.
+  bool savedFallback = false;
+
   NavState? state;
   GeoPoint? me;
   int _seenOff = 0;

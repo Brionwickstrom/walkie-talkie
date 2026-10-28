@@ -96,6 +96,11 @@ class DriveRoute {
   static const offline = 'offline';
   static const online = 'online';
 
+  /// v2.2.0: the route saved with "Save route for offline", used when the
+  /// signal is gone and no new route can be made.
+  static const saved = 'saved';
+  bool get isSaved => source == saved;
+
   /// Where the route came from (v1.9.3): [online] (a routing server, while
   /// there was signal) or [offline] (the roads saved on this phone).
   final String source;
