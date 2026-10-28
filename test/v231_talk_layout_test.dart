@@ -5,16 +5,12 @@
 // list's Add people / Group settings.
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:walkie_talkie/app/people_refresh.dart';
 import 'package:walkie_talkie/core/transport.dart';
 import 'package:walkie_talkie/core/transport_manager.dart'
     show ConnectionSummary;
 import 'package:walkie_talkie/ui/channels_sheet.dart';
-import 'package:walkie_talkie/ui/chat_hub.dart';
-import 'package:walkie_talkie/ui/friends_page.dart';
 import 'package:walkie_talkie/ui/home_page.dart' show talkButtonSize;
 import 'package:walkie_talkie/ui/home_view.dart';
-import 'package:walkie_talkie/ui/people_tab.dart';
 import 'package:walkie_talkie/ui/quiet_widgets.dart';
 import 'package:walkie_talkie/ui/status_line.dart';
 import 'package:walkie_talkie/ui/who_can_hear.dart';
@@ -468,76 +464,6 @@ void main() {
       expect(tech, isTrue);
       await t.pumpWidget(body(const AudienceInfo(Audience.open, channel: 1)));
       expect(find.byKey(const Key('who-add-people')), findsNothing);
-    });
-  });
-
-  group('Chat tab', () {
-    testWidgets('chat, voicemail and history with badges', (t) async {
-      phone(t);
-      var chat = 0, voice = 0, hist = 0;
-      await t.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: ChatHubView(
-              chatTitle: 'Family',
-              chatPreview: 'see you at 5',
-              chatUnread: 3,
-              onOpenChat: () => chat++,
-              voiceNew: 2,
-              voiceWaiting: 0,
-              onOpenVoice: () => voice++,
-              historyUnheard: 1,
-              onOpenHistory: () => hist++,
-            ),
-          ),
-        ),
-      );
-      expect(find.text('see you at 5'), findsOneWidget);
-      expect(
-        find.descendant(
-          of: find.byKey(const Key('chat-hub-chat')),
-          matching: find.byType(Badge),
-        ),
-        findsOneWidget,
-      );
-      await t.tap(find.byKey(const Key('chat-hub-chat')));
-      await t.tap(find.byKey(const Key('chat-hub-voice')));
-      await t.tap(find.byKey(const Key('chat-hub-history')));
-      expect((chat, voice, hist), (1, 1, 1));
-    });
-  });
-
-  group('People tab', () {
-    testWidgets('count, Refresh, Who\'s where, friends; long-press', (t) async {
-      phone(t);
-      var where = 0, code = 0, scan = 0;
-      FriendItem? held;
-      await t.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: PeopleTabView(
-              here: 3,
-              channelLabel: 'Family',
-              whosWhereCount: 2,
-              onWhosWhere: () => where++,
-              friends: const [FriendItem(id: 1, name: 'Ann', online: true)],
-              onOpenFriend: (_) {},
-              onShowCode: () => code++,
-              onScan: () => scan++,
-              onLongPressFriend: (f) => held = f,
-              onRefresh: ({required bool radio}) async =>
-                  const RefreshResult(found: 1, before: 1),
-            ),
-          ),
-        ),
-      );
-      expect(find.text('3 on Family'), findsOneWidget);
-      expect(find.byTooltip("Who's where"), findsOneWidget);
-      expect(find.byIcon(Icons.refresh), findsWidgets);
-      await t.tap(find.byTooltip("Who's where"));
-      expect(where, 1);
-      await t.longPress(find.text('Ann'));
-      expect(held?.name, 'Ann');
     });
   });
 

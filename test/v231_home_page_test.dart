@@ -140,7 +140,13 @@ void main() {
     await settle(t);
     expect(addPeopleEmpty, findsNothing);
     expect(find.textContaining('Nobody on CH 1'), findsOneWidget);
-    expect(find.byIcon(Icons.lock_open), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byType(AppBar),
+        matching: find.byIcon(Icons.lock_open),
+      ),
+      findsOneWidget,
+    );
     await finish(t);
   });
 
@@ -207,7 +213,7 @@ void main() {
     await t.tap(find.descendant(of: bar, matching: find.text('People')));
     await settle(t);
     expect(find.byKey(const Key('people-count')), findsOneWidget);
-    expect(find.byTooltip("Who's where"), findsOneWidget);
+    expect(find.text('Scan for people'), findsOneWidget);
     await t.tap(find.descendant(of: bar, matching: find.text('Talk')));
     await settle(t);
     expect(find.byKey(const Key('status-line')), findsOneWidget);

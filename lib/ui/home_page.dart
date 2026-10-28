@@ -21,6 +21,7 @@ import 'history_page.dart';
 import 'home_view.dart';
 import 'link_sheet.dart';
 import 'people_tab.dart';
+import 'reach_of.dart';
 import 'person_sheet.dart';
 import 'status_line.dart';
 import 'inbox_page.dart';
@@ -834,46 +835,101 @@ class _HomePageState extends State<HomePage> {
     return 'Voice messages: ${parts.join(', ')}';
   }
 
-  /// Chat tab badge: unread channel chat + voice messages not played.
-  int get _chatBadge => c.unreadChannelChat + c.unplayedMessages;
+  /// Chat tab badge: unread channel chat and direct chats + voice messages
+  /// not played.
+  int get _chatBadge =>
+      c.unreadChannelChat + c.unreadFriendChats + c.unplayedMessages;
 
-  /// People tab badge: friend chats and requests waiting, and people on
+  /// People tab badge: friend requests waiting, and people on
   /// other channels (the old "scan" badge).
-  int get _peopleBadge =>
-      c.unreadFriendChats + c.friendRequests.length + c.whosWhereElsewhereCount;
+  int get _peopleBadge => c.friendRequests.length + c.whosWhereElsewhereCount;
 
-  /// The Chat tab: this channel's chat, Voice messages, History.
+  /// Go to the People tab (from the Chat tab's "Add a friend").
+  void _goPeople(BuildContext context) {
+    if (Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+      _openHub(this.context, 'People', _peopleHub());
+    } else {
+      _wireTrip();
+      setState(() {
+        _tab = 2;
+        _tripFull = false;
+      });
+    }
+  }
+
+  /// The Chat tab, in two sections: "Here (CH 1)" (this place's chat, its
+  /// voice messages and History) and "Direct chats" (one row per friend).
   Widget _chatHub() => ListenableBuilder(
     listenable: c,
     builder: (context, _) {
       final conv = c.channelChat;
       final last = c.chats?.lastOf(conv);
+      final here = c.inbox.where((e) => e.channel == c.scope && !e.played);
+      final fromFriends = c.inbox.where(
+        (e) => e.channel == WalkieController.friendScope && !e.played,
+      );
+      final waiting =
+          c.outgoing
+              .where((o) => o.entry.isChannel && o.entry.channel == c.scope)
+              .length +
+          c.waitingForAnyone.where((e) => e.channel == c.scope).length;
+      final direct = <DirectChatItem>[
+        for (final f in c.friends)
+          DirectChatItem(
+            id: f.id,
+            name: f.name,
+            online: c.friendOnline(f.id),
+            unread: c.unreadFriendChat(f.id),
+            last: switch (c.chats?.lastOf(friendConversation(f.id))) {
+              final m? => chatPreview(m),
+              null => null,
+            },
+          ),
+      ];
+      DateTime? at(DirectChatItem d) =>
+          c.chats?.lastOf(friendConversation(d.id))?.at;
+      direct.sort((a, b) {
+        if ((a.unread > 0) != (b.unread > 0)) return a.unread > 0 ? -1 : 1;
+        final x = at(a), y = at(b);
+        if (x != null && y != null) return y.compareTo(x);
+        if (x != null || y != null) return x != null ? -1 : 1;
+        return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+      });
       return ChatHubView(
-        chatTitle: 'Chat · ${c.chatTitle(conv)}',
+        place: c.placeReach,
         chatPreview: last == null ? null : chatPreview(last),
         chatUnread: c.unreadChannelChat,
         onOpenChat: () => _openChat(context, conv),
-        voiceNew: c.unplayedMessages,
-        voiceWaiting: c.outgoing.length + c.waitingForAnyone.length,
-        onOpenVoice: () => _openInbox(context),
+        voiceNew: here.length,
+        voiceWaiting: waiting,
+        onOpenVoice: () => _openInbox(context, InboxFilter.here),
         historyUnheard: c.unheardTakes,
         onOpenHistory: () => _openHistory(context),
+        direct: direct,
+        onOpenDirect: (d) => _openChat(context, friendConversation(d.id)),
+        onAddFriends: () => _goPeople(context),
+        directVoiceNew: fromFriends.length,
+        onOpenDirectVoice: () => _openInbox(context, InboxFilter.direct),
       );
     },
   );
 
-  /// The People tab: who is here (Refresh, Who's where) and friends.
+  /// The People tab, in two sections: "On CH 1 now" (who is present, same
+  /// people as the Talk screen) and "Friends (direct chats)".
   Widget _peopleHub() => ListenableBuilder(
     listenable: c,
     builder: (context, _) {
-      final here = _people().where((p) => p.here).length + 1;
+      final here = [
+        PersonView(id: c.nodeId, name: c.name, me: true),
+        for (final p in _people())
+          if (p.here) p,
+      ];
       return PeopleTabView(
+        place: c.placeReach,
         here: here,
-        channelLabel: c.isPrivate
-            ? c.channelTitle
-            : c.channelName == null
-            ? 'CH ${c.channel}'
-            : '${c.channelTitle} (CH ${c.channel})',
+        onOpenPerson: (p) => _openPersonSheet(context, p),
+        onAddPeople: c.isPrivate ? () => showAddPeopleSheet(context, c) : null,
         whosWhereCount: c.whosWhereElsewhereCount,
         onWhosWhere: () => _openWhosWhere(context),
         friends: [
@@ -1022,10 +1078,15 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  void _openInbox(BuildContext context) {
-    Navigator.of(
-      context,
-    ).push(MaterialPageRoute<void>(builder: (_) => InboxPage(controller: c)));
+  void _openInbox(
+    BuildContext context, [
+    InboxFilter filter = InboxFilter.all,
+  ]) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => InboxPage(controller: c, initial: filter),
+      ),
+    );
   }
 
   Future<void> _openRecordSheet(

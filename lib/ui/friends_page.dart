@@ -10,6 +10,7 @@ import '../chat/chat_body.dart';
 import '../chat/chat_store.dart';
 import 'chat_page.dart';
 import 'invite_sheet.dart';
+import 'reach.dart';
 import '../platform/platform_caps.dart';
 
 /// One row of the friends list.
@@ -43,8 +44,21 @@ class FriendsView extends StatelessWidget {
     required this.onScan,
     this.onLongPress,
     this.header,
+    this.sectionHeader,
+    this.addCaption,
+    this.showReach = false,
   });
   final List<FriendItem> friends;
+
+  /// Above the friends part (the People tab's "Friends (direct chats)"
+  /// title, v2.3.2), below [header].
+  final Widget? sectionHeader;
+
+  /// A caption over Show my code / Scan a code ("Add friends").
+  final String? addCaption;
+
+  /// Tag each friend "Direct · name · only you two" (the People tab).
+  final bool showReach;
 
   /// Above everything (the People tab's "N here" row, v2.3.1).
   final Widget? header;
@@ -64,6 +78,7 @@ class FriendsView extends StatelessWidget {
       physics: const AlwaysScrollableScrollPhysics(),
       children: [
         ?header,
+        ?sectionHeader,
         for (final r in requests)
           Card(
             margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
@@ -80,8 +95,13 @@ class FriendsView extends StatelessWidget {
               ),
             ),
           ),
+        if (addCaption != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+            child: Text(addCaption!, style: theme.textTheme.labelLarge),
+          ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
           child: Row(
             children: [
               Expanded(
@@ -131,22 +151,38 @@ class FriendsView extends StatelessWidget {
               talking: f.talking,
             ),
             title: Text(f.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-            subtitle: Text(
-              f.talking
-                  ? 'Talking to you...'
-                  : f.last ??
-                        (f.online
-                            ? 'Online${f.via != null ? ' via ${f.via}' : ''}'
-                            : 'Offline'),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
+            isThreeLine: showReach,
+            subtitle: _friendSub(f),
             trailing: f.unread > 0
                 ? Badge(label: Text('${f.unread}'))
                 : const Icon(Icons.chevron_right),
             onTap: () => onOpen(f),
             onLongPress: onLongPress == null ? null : () => onLongPress!(f),
           ),
+      ],
+    );
+  }
+}
+
+extension on FriendsView {
+  Widget _friendSub(FriendItem f) {
+    final text = Text(
+      f.talking
+          ? 'Talking to you...'
+          : f.last ??
+                (f.online
+                    ? 'Online${f.via != null ? ' via ${f.via}' : ''}'
+                    : 'Offline'),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+    );
+    if (!showReach) return text;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        text,
+        const SizedBox(height: 2),
+        ReachTag(Reach.direct(f.name)),
       ],
     );
   }

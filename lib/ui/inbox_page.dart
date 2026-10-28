@@ -1,29 +1,90 @@
 import 'package:flutter/material.dart';
 
 import '../app/walkie_controller.dart';
+import '../messaging/inbox.dart';
+import '../messaging/messenger.dart';
+import '../messaging/outbox.dart';
 import '../messaging/voice_clip.dart';
+import 'reach.dart';
+import 'reach_of.dart';
 import 'stop_on_leave.dart';
 
 /// Received voice messages (play / delete) and ones still waiting to be
 /// delivered.
-class InboxPage extends StatelessWidget {
-  const InboxPage({super.key, required this.controller});
+///
+/// v2.3.2: filter chips say whose messages these are: this channel / group
+/// ("Here"), friends ("Direct") or "All". The Chat tab opens it already on
+/// the right one.
+enum InboxFilter { here, direct, all }
+
+class InboxPage extends StatefulWidget {
+  const InboxPage({
+    super.key,
+    required this.controller,
+    this.initial = InboxFilter.all,
+  });
   final WalkieController controller;
+  final InboxFilter initial;
+
+  @override
+  State<InboxPage> createState() => _InboxPageState();
+}
+
+class _InboxPageState extends State<InboxPage> {
+  late InboxFilter _filter = widget.initial;
 
   @override
   Widget build(BuildContext context) {
-    final c = controller;
+    final c = widget.controller;
+    bool outMine(OutgoingStatus o) => switch (_filter) {
+      InboxFilter.all => true,
+      InboxFilter.here => o.entry.isChannel && o.entry.channel == c.scope,
+      InboxFilter.direct => !o.entry.isChannel,
+    };
+    bool inMine(InboxEntry e) => switch (_filter) {
+      InboxFilter.all => true,
+      InboxFilter.here => e.channel == c.scope,
+      InboxFilter.direct => e.channel == WalkieController.friendScope,
+    };
     return StopOnLeave(
       onLeave: c.stopSavedPlayback,
       child: ListenableBuilder(
         listenable: c,
         builder: (context, _) {
-          final out = c.outgoing;
-          final waiting = c.waitingForAnyone;
+          final out = c.outgoing.where(outMine).toList();
+          final waiting = _filter == InboxFilter.direct
+              ? const <OutboxEntry>[]
+              : c.waitingForAnyone
+                    .where(
+                      (e) => _filter == InboxFilter.all || e.channel == c.scope,
+                    )
+                    .toList();
+          final inbox = c.inbox.where(inMine).toList();
+          final place = c.placeReach;
           return Scaffold(
             appBar: AppBar(title: const Text('Voice messages')),
             body: ListView(
               children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                  child: Wrap(
+                    spacing: 8,
+                    children: [
+                      for (final (f, label, icon) in [
+                        (InboxFilter.here, 'Here · ${place.label}', place.icon),
+                        (InboxFilter.direct, 'Direct', Icons.person),
+                        (InboxFilter.all, 'All', Icons.all_inbox),
+                      ])
+                        ChoiceChip(
+                          key: Key('inbox-filter-${f.name}'),
+                          avatar: Icon(icon, size: 16),
+                          label: Text(label, overflow: TextOverflow.ellipsis),
+                          selected: _filter == f,
+                          onSelected: (_) => setState(() => _filter = f),
+                        ),
+                    ],
+                  ),
+                ),
                 if (out.isNotEmpty || waiting.isNotEmpty) ...[
                   const _Header('Waiting to be delivered'),
                   for (final o in out)
@@ -85,7 +146,7 @@ class InboxPage extends StatelessWidget {
                     ),
                 ],
                 const _Header('Received'),
-                if (c.inbox.isEmpty)
+                if (inbox.isEmpty)
                   const Padding(
                     padding: EdgeInsets.all(24),
                     child: Text(
@@ -94,7 +155,7 @@ class InboxPage extends StatelessWidget {
                       textAlign: TextAlign.center,
                     ),
                   ),
-                for (final e in c.inbox)
+                for (final e in inbox)
                   ListTile(
                     leading: IconButton.filledTonal(
                       icon: Icon(
@@ -113,10 +174,26 @@ class InboxPage extends StatelessWidget {
                             : FontWeight.bold,
                       ),
                     ),
-                    subtitle: Text(
-                      '${_when(e.receivedAt)}'
-                      '${e.channelMessage ? ' - to ${c.labelFor(e.channel)}' : ''}'
-                      '${e.viaRadio ? ' - via radio' : ''}',
+                    isThreeLine: true,
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${_when(e.receivedAt)}'
+                          '${e.channelMessage ? ' - to ${c.labelFor(e.channel)}' : ''}'
+                          '${e.viaRadio ? ' - via radio' : ''}',
+                        ),
+                        const SizedBox(height: 2),
+                        ReachTag(
+                          e.channel == WalkieController.friendScope
+                              ? Reach.direct(
+                                  e.senderName.isEmpty
+                                      ? c.nameOf(e.sender)
+                                      : e.senderName,
+                                )
+                              : c.reachOfScope(e.channel),
+                        ),
+                      ],
                     ),
                     trailing: IconButton(
                       tooltip: 'Delete',

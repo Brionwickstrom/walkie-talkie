@@ -4,6 +4,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:walkie_talkie/app/settings.dart';
+import 'package:walkie_talkie/core/pair_key.dart';
+import 'package:walkie_talkie/friends/friend_links.dart';
 import 'package:walkie_talkie/app/walkie_controller.dart';
 import 'package:walkie_talkie/ui/home_page.dart';
 
@@ -18,12 +20,18 @@ void quietPlugins() {
   }
 }
 
-Future<WalkieController> makeController(WidgetTester t, {String? group}) async {
+Future<WalkieController> makeController(
+  WidgetTester t, {
+  String? group,
+  List<Friend> friends = const [],
+}) async {
   quietPlugins();
   SharedPreferences.setMockInitialValues({});
   final c = (await t.runAsync(() async {
     final c = await WalkieController.load(
-      store: MemorySettingsStore(AppSettings(nodeId: 0x1234, channel: 1)),
+      store: MemorySettingsStore(
+        AppSettings(nodeId: 0x1234, channel: 1, friends: friends),
+      ),
     );
     if (group != null) {
       await c.createGroup(passcode: 'correct-horse-staple', name: group);
@@ -66,3 +74,10 @@ Future<void> finish(WidgetTester t) async {
   await t.pumpWidget(const SizedBox());
   await t.pump(const Duration(seconds: 6));
 }
+
+Friend testFriend(int id, String name) => Friend(
+  id: id,
+  name: name,
+  key: PairKey(List<int>.filled(32, id & 0xff)),
+  added: DateTime(2026, 1, 1),
+);

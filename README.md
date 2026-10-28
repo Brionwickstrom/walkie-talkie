@@ -1525,6 +1525,31 @@ Tests: `test/v195_gateway_test.dart`, `test/v195_quiet_test.dart`.
 Tests: `test/v197_meshtastic_import_test.dart` (vectors from the official
 apps and the Python library), `test/v195_quiet_test.dart`.
 
+## v2.3.2: Chat and People say who each thing reaches
+
+Every conversation now carries one tag with the same icon, colour and words on
+every tab: **Open channel - CH 1** (open lock; anyone on that number),
+**Private group - name** (lock in the group's colour; only its people) and
+**Direct - friend - only you two** (person icon).
+
+- **Chat tab:** a header with where you are ("CH 1 - open", "privates club -
+  private"), then two sections. **Here (CH 1)**: this channel's or group's chat
+  with a line like "Anyone on CH 1 can read this" or "Only people in privates
+  club", plus its Voice messages and History (only this place's). **Direct
+  chats**: one row per friend with the last message, an unread badge and "only
+  you two" (an empty state leads to adding a friend). Voice messages from friends
+  have their own row; the Voice messages page has Here / Direct / All chips.
+- **People tab:** the same header, then **On CH 1 now (n)**: the people really
+  here (the same people as the Talk screen) with Refresh and Scan for people.
+  Below it **Friends (direct chats)**: your friends with online dots, then "Add
+  friends": Show my code and Scan a code. The channel count never sits over
+  the friends list.
+- Unread direct chats now count on the Chat badge (they are in the Chat tab);
+  the People badge counts friend requests and people on other channels.
+
+Battery: no new timers, polling or wake locks. The tags and sections are
+layout over data the app already has. Tests: `test/v232_reach_test.dart`.
+
 ## v2.3.1: A Talk screen with room to breathe, and an easier Add people
 
 The Talk screen had too many rows. Nothing was removed; things moved.

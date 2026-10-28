@@ -13,7 +13,9 @@ import 'package:walkie_talkie/core/lobby.dart';
 import 'package:walkie_talkie/core/mesh.dart';
 import 'package:walkie_talkie/core/transport.dart';
 import 'package:walkie_talkie/core/transport_manager.dart';
+import 'package:walkie_talkie/ui/home_view.dart' show PersonView;
 import 'package:walkie_talkie/ui/people_tab.dart';
+import 'package:walkie_talkie/ui/reach.dart';
 import 'package:walkie_talkie/ui/whos_where_page.dart';
 
 import 'fake_transport.dart';
@@ -624,8 +626,8 @@ void main() {
     }) => MaterialApp(
       home: Scaffold(
         body: PeopleTabView(
-          here: 1,
-          channelLabel: 'CH 1',
+          place: Reach.open(1),
+          here: const [PersonView(id: 1, name: 'Me', me: true)],
           whosWhereCount: 0,
           onWhosWhere: () {},
           friends: const [],

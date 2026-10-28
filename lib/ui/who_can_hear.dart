@@ -9,7 +9,7 @@ import 'sheets.dart';
 /// (v2.3.0: its own place with a name and colour, not a channel number;
 /// only people in it) and Direct chat (one friend).
 enum Audience {
-  open('Open channel', Icons.forum_outlined),
+  open('Open channel', Icons.lock_open),
   privateGroup('Private group', Icons.lock),
   direct('Direct chat', Icons.person);
 
