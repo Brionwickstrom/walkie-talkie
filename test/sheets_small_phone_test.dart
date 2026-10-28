@@ -200,17 +200,15 @@ void main() {
             padding: const EdgeInsets.symmetric(vertical: 12),
             child: ChannelsView(
               current: 3,
-              privateRows: [
-                const ChannelRow(12, title: 'Family', emoji: '🏕'),
-                const ChannelRow(15, title: 'Crew'),
+              groupRows: [
+                const GroupRow('a1', name: 'Family', emoji: '🏕'),
+                const GroupRow('a2', name: 'Crew'),
               ],
-              openRows: [
-                for (var i = 1; i <= 16; i++)
-                  if (i != 12 && i != 15) ChannelRow(i),
-              ],
+              openRows: [for (var i = 1; i <= 16; i++) ChannelRow(i)],
               onPick: (_) {},
-              onNewPrivate: () {},
-              onJoinPrivate: () {},
+              onPickGroup: (_) {},
+              onNewGroup: () {},
+              onJoinGroup: () {},
               onMeshImport: () {},
             ),
           ),

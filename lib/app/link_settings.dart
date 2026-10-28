@@ -455,8 +455,8 @@ AloneReason aloneReason({
   }
   return AloneReason(
     'Connected to the internet relay on $channelLabel. The other phone must '
-    'be online with the app open, on the same channel'
-    '${isPrivate ? ' and the same passcode' : ''}, and not in Offline power '
-    'save. Pull down to ask again.',
+    'be online with the app open, '
+    '${isPrivate ? 'in the same private group (same code)' : 'on the same channel'}'
+    ', and not in Offline power save. Pull down to ask again.',
   );
 }

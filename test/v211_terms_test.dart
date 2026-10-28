@@ -149,7 +149,11 @@ void main() {
       );
       expect(mine.kind, Audience.privateGroup);
       expect(mine.members, 4, reason: 'you and 3 others');
-      expect(mine.channel, 5);
+      expect(
+        mine.channel,
+        isNull,
+        reason: 'a private group has no channel number',
+      );
     });
 
     // The top bar as the Talk screen builds it: title row, four action
@@ -249,10 +253,7 @@ void main() {
       expect(find.text('Private group (this one)'), findsOneWidget);
       expect(find.text('Open channel'), findsOneWidget);
       expect(find.text('Direct chat'), findsOneWidget);
-      expect(
-        find.textContaining('Only people who have the code'),
-        findsOneWidget,
-      );
+      expect(find.textContaining('Only people you invited'), findsOneWidget);
       expect(
         find.textContaining('Anyone on the same channel number'),
         findsOneWidget,

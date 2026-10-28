@@ -21,7 +21,7 @@ import 'package:walkie_talkie/ui/trip_widgets.dart';
 import 'package:walkie_talkie/ui/whos_where_page.dart';
 import 'package:walkie_talkie/update/updater.dart';
 
-import 'home_layout_test.dart' show loadFonts, people, takes;
+import 'home_layout_test.dart' show loadFonts, people;
 import 'lora_proto_test.dart'
     show configComplete, loraConfig, myInfo, nodeInfo, packetFrom;
 
@@ -43,17 +43,11 @@ Widget _talk() => HomeBody(
   onVolume: (_) {},
   onEditMe: () {},
   headerAction: WhosWhereButton(count: 2, onPressed: () {}),
-  recent: RecentStrip(
-    takes: takes,
-    unheard: 1,
-    onPlay: (_) {},
-    onPlayMissed: () {},
-    onOpenHistory: () {},
-  ),
   actions: ChannelActions(
     onRingAll: () {},
     onBeepAll: () {},
     record: OutlinedButton(onPressed: () {}, child: const Text('Message')),
+    history: HistoryButton(unheard: 1, onOpen: () {}),
   ),
   ptt: MainTalkArea(
     button: PttButton(

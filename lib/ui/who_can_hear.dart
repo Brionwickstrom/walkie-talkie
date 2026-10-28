@@ -6,7 +6,8 @@ import 'sheets.dart';
 
 /// The three kinds of conversation, in the words used everywhere in the app
 /// (v2.1.1): Open channel (CH 1-16, anyone on the number), Private group
-/// (a channel locked with a passcode) and Direct chat (one friend).
+/// (v2.3.0: its own place with a name and colour, not a channel number;
+/// only people in it) and Direct chat (one friend).
 enum Audience {
   open('Open channel', Icons.forum_outlined),
   privateGroup('Private group', Icons.lock),
@@ -22,7 +23,7 @@ class AudienceInfo {
   const AudienceInfo(this.kind, {this.channel, this.members, this.name});
   final Audience kind;
 
-  /// Channel number (open channel / private group).
+  /// Channel number (open channel only: a private group has none).
   final int? channel;
 
   /// Private group: people in it right now, you included (null = unknown).
@@ -43,11 +44,7 @@ class AudienceInfo {
 
   /// The talk screen's current channel.
   factory AudienceInfo.ofChannel(WalkieController c) => c.isPrivate
-      ? AudienceInfo(
-          Audience.privateGroup,
-          channel: c.channel,
-          members: c.channelListeners + 1,
-        )
+      ? AudienceInfo(Audience.privateGroup, members: c.channelListeners + 1)
       : AudienceInfo(Audience.open, channel: c.channel);
 
   /// A channel chat for [scope] (an open channel number or a private
@@ -60,10 +57,9 @@ class AudienceInfo {
     required int listeners,
   }) {
     if (TransportManager.isPrivateScope(scope)) {
-      // Private scopes are only ever the current channel.
+      // A private group has no channel number.
       return AudienceInfo(
         Audience.privateGroup,
-        channel: currentChannel,
         members: scope == currentScope ? listeners + 1 : null,
       );
     }
@@ -88,8 +84,11 @@ class AudienceInfo {
 /// the height follows the text size so large text never overflows. Tap
 /// for [showWhoCanHearSheet].
 class WhoCanHearLine extends StatelessWidget implements PreferredSizeWidget {
-  const WhoCanHearLine({super.key, required this.info});
+  const WhoCanHearLine({super.key, required this.info, this.trailing});
   final AudienceInfo info;
+
+  /// A small chip at the end of the line (the quiet-hours moon, v2.3.0).
+  final Widget? trailing;
 
   static double heightFor(BuildContext context) =>
       MediaQuery.textScalerOf(context).scale(13) + 16;
@@ -100,7 +99,7 @@ class WhoCanHearLine extends StatelessWidget implements PreferredSizeWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    return Semantics(
+    final line = Semantics(
       button: true,
       label: 'Who can hear this? ${info.line}',
       excludeSemantics: true,
@@ -110,7 +109,7 @@ class WhoCanHearLine extends StatelessWidget implements PreferredSizeWidget {
         child: SizedBox(
           height: heightFor(context),
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
+            padding: const EdgeInsets.only(left: 12),
             child: Row(
               children: [
                 Icon(info.kind.icon, size: 14, color: cs.primary),
@@ -126,29 +125,41 @@ class WhoCanHearLine extends StatelessWidget implements PreferredSizeWidget {
                 ),
                 const SizedBox(width: 4),
                 Icon(Icons.info_outline, size: 14, color: cs.onSurfaceVariant),
+                SizedBox(width: trailing == null ? 12 : 8),
               ],
             ),
           ),
         ),
       ),
     );
+    if (trailing == null) return line;
+    return Row(
+      children: [
+        Expanded(child: line),
+        Padding(padding: const EdgeInsets.only(right: 12), child: trailing),
+      ],
+    );
   }
 }
 
 /// App bar bottom that sizes itself to the text scale.
-PreferredSizeWidget whoCanHearBottom(BuildContext context, AudienceInfo info) =>
-    PreferredSize(
-      preferredSize: Size.fromHeight(WhoCanHearLine.heightFor(context)),
-      child: WhoCanHearLine(info: info),
-    );
+PreferredSizeWidget whoCanHearBottom(
+  BuildContext context,
+  AudienceInfo info, {
+  Widget? trailing,
+}) => PreferredSize(
+  preferredSize: Size.fromHeight(WhoCanHearLine.heightFor(context)),
+  child: WhoCanHearLine(info: info, trailing: trailing),
+);
 
 const _explain = {
   Audience.open:
       'CH 1 to 16. Anyone on the same channel number can hear you. It is '
       'not encrypted.',
   Audience.privateGroup:
-      'A channel locked with a passcode. Only people who have the code can '
-      'hear or see anything. It is encrypted.',
+      'Its own place with a name and colour, not a channel number. Only '
+      'people you invited, or who have its code, can hear or see anything. '
+      'It is encrypted.',
   Audience.direct:
       'One friend, on any channel. Only you two can read or hear it '
       '(end-to-end encrypted).',

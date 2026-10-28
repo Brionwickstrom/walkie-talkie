@@ -671,7 +671,7 @@ void main() {
 
   group('a clear home for private channels', () {
     testWidgets('Private channels section with lock, New and Join', (t) async {
-      int? picked;
+      String? picked;
       var made = 0, joined = 0;
       await t.pumpWidget(
         MaterialApp(
@@ -679,17 +679,16 @@ void main() {
             body: SingleChildScrollView(
               child: ChannelsView(
                 current: 12,
-                privateRows: const [
-                  ChannelRow(12, title: 'Family', emoji: '🏕'),
-                  ChannelRow(16),
+                currentGroup: 'g1',
+                groupRows: const [
+                  GroupRow('g1', name: 'Family', emoji: '🏕'),
+                  GroupRow('g2', name: 'Crew'),
                 ],
-                openRows: [
-                  for (var i = 1; i <= 16; i++)
-                    if (i != 12 && i != 16) ChannelRow(i),
-                ],
-                onPick: (c) => picked = c,
-                onNewPrivate: () => made++,
-                onJoinPrivate: () => joined++,
+                openRows: [for (var i = 1; i <= 16; i++) ChannelRow(i)],
+                onPick: (c) => picked = 'ch$c',
+                onPickGroup: (id) => picked = id,
+                onNewGroup: () => made++,
+                onJoinGroup: () => joined++,
               ),
             ),
           ),
@@ -697,17 +696,22 @@ void main() {
       );
       expect(find.text('Private groups'), findsOneWidget);
       expect(find.text('Open channels'), findsOneWidget);
-      expect(find.text('🏕 Family (CH 12)'), findsOneWidget);
-      expect(find.byIcon(Icons.lock), findsNWidgets(3)); // title + 2 rows
+      expect(find.text('Family'), findsOneWidget);
+      expect(find.text('Crew'), findsOneWidget);
+      // v2.3.0: a group has no channel number; CH 1-16 are all open.
+      expect(find.textContaining('CH 12'), findsOneWidget); // the open row
+      expect(find.byKey(const Key('channel-row-12')), findsOneWidget);
       // Private ones are listed above the open ones, not mixed in.
-      final privY = t.getTopLeft(find.byKey(const Key('channel-row-16'))).dy;
+      final privY = t.getTopLeft(find.byKey(const Key('group-row-g2'))).dy;
       final openY = t.getTopLeft(find.byKey(const Key('channel-row-1'))).dy;
       expect(privY, lessThan(openY));
-      expect(find.byKey(const Key('channel-row-12')), findsOneWidget);
-      await t.tap(find.byKey(const Key('new-private-channel')));
-      await t.tap(find.byKey(const Key('join-private-channel')));
+      await t.tap(find.byKey(const Key('new-private-group')));
+      await t.tap(find.byKey(const Key('join-private-group')));
+      await t.tap(find.byKey(const Key('group-row-g2')));
+      expect((made, joined, picked), (1, 1, 'g2'));
+      await t.ensureVisible(find.byKey(const Key('channel-row-16')));
       await t.tap(find.byKey(const Key('channel-row-16')));
-      expect((made, joined, picked), (1, 1, 16));
+      expect(picked, 'ch16');
     });
 
     testWidgets('Unknown listener warning', (t) async {

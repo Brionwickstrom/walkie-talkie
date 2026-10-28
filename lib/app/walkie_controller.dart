@@ -74,6 +74,8 @@ import '../trip/trip_controller.dart';
 import '../trip/trip_route.dart';
 import 'call_signs.dart';
 import 'config.dart';
+import 'group_handoff.dart';
+import 'groups.dart';
 import 'passcodes.dart';
 import 'playback_log.dart';
 import 'private_reply.dart';
@@ -181,9 +183,13 @@ class WalkieController extends ChangeNotifier {
       if (p == null) return false;
       return manager.usableLinks(p, DateTime.now()).contains(TransportKind.lan);
     };
-    if (channelKey != null) {
-      _keys['${channelKey.channel}\u0000${settings.passcodeFor(channelKey.channel)}'] =
-          channelKey;
+    final startGroup = settings.currentGroup;
+    if (channelKey != null && startGroup != null) {
+      _keys[startGroup.keyId] = channelKey;
+      startGroup.scope = TransportManager.scopeFor(
+        settings.channel,
+        channelKey,
+      );
     }
     ringer = Ringer(
       link: FriendAwareRingLink(
@@ -225,7 +231,7 @@ class WalkieController extends ChangeNotifier {
     );
     whosWhere.replyPresence = _replyPresence;
     whosWhere.addListener(notifyListeners);
-    debugLog.secrets = () => settings.privateChannels.values;
+    debugLog.secrets = () => settings.groups.map((g) => g.secret);
     _relay.onRoleChange = _logRelayRole;
     _relay.direct!
       ..attach(manager)
@@ -556,18 +562,26 @@ class WalkieController extends ChangeNotifier {
 
   // invites
 
-  /// Invite for the current channel (public or private) and / or a friend
-  /// add (valid for [friendValid]).
+  /// Invite for the current open channel or private group and / or a
+  /// friend add (valid for [friendValid]). A group made before v2.3.0 also
+  /// carries its old channel number, so phones on older versions can join.
   Invite makeInvite({
     bool channel = true,
     bool friend = false,
     Duration friendValid = const Duration(hours: 1),
-  }) => Invite(
-    channel: channel ? this.channel : null,
-    passcode: channel ? settings.passcodeFor(this.channel) : null,
-    name: name,
-    friendCode: friend ? friendQrText(validFor: friendValid) : null,
-  );
+  }) {
+    final g = settings.currentGroup;
+    return Invite(
+      channel: channel ? (g == null ? this.channel : g.legacyChannel) : null,
+      passcode: channel ? g?.secret : null,
+      groupId: channel ? g?.id : null,
+      groupName: channel ? g?.name : null,
+      groupEmoji: channel ? g?.emoji : null,
+      groupColor: channel ? g?.color : null,
+      name: name,
+      friendCode: friend ? friendQrText(validFor: friendValid) : null,
+    );
+  }
 
   /// Apply a confirmed invite. Returns a short summary for a snackbar.
   Future<String> applyInvite(
@@ -576,18 +590,13 @@ class WalkieController extends ChangeNotifier {
     bool addFriend = true,
   }) async {
     final done = <String>[];
-    if (joinChannel && inv.channel != null) {
+    if (joinChannel && inv.hasGroup) {
+      final g = await joinGroupFromInvite(inv);
+      done.add('joined ${g.label} (private group)');
+    } else if (joinChannel && inv.hasChannel) {
       final ch = inv.channel!;
-      if (inv.isPrivate) {
-        settings.privateChannels[ch] = ChannelKey.normalize(inv.passcode!);
-        await settingsStore.save(settings);
-      } else if (settings.isPrivate(ch)) {
-        // The invite is for the public channel with that number.
-        settings.privateChannels.remove(ch);
-        await settingsStore.save(settings);
-      }
       await setChannel(ch);
-      done.add('joined CH $ch${inv.isPrivate ? ' (private group)' : ''}');
+      done.add('joined CH $ch');
     }
     if (addFriend && inv.friendCode != null) {
       final err = await addFriendFromQr(inv.friendCode!);
@@ -627,7 +636,7 @@ class WalkieController extends ChangeNotifier {
   }
 
   Future<void> _attachDebugLog() async {
-    debugLog.secrets = () => settings.privateChannels.values;
+    debugLog.secrets = () => settings.groups.map((g) => g.secret);
     try {
       final base = await bridge.filesDir();
       final root = base != null
@@ -985,12 +994,14 @@ class WalkieController extends ChangeNotifier {
     SettingsStore store = const SharedPrefsSettingsStore(),
   }) async {
     final s = await store.load(defaultChannel: AppConfig.defaultChannel);
-    final pass = s.passcodeFor(s.channel);
+    final g = s.currentGroup;
     ChannelKey? key;
-    if (pass != null) {
+    if (g != null) {
       try {
-        key = await ChannelKey.derive(s.channel, pass);
+        key = await g.deriveKey();
       } catch (_) {}
+      // The key could not be made: do not pretend to be in the group.
+      if (key == null) s.activeGroup = null;
     }
     return WalkieController(settings: s, settingsStore: store, channelKey: key);
   }
@@ -1205,24 +1216,42 @@ class WalkieController extends ChangeNotifier {
   /// Channel number, or a private-channel scope; see [TransportManager.scope].
   int get scope => manager.scope;
 
-  /// Current channel is private (encrypted, passcode protected).
+  /// Current place is a private group (encrypted, secret protected).
   bool get isPrivate => manager.isPrivate;
 
-  /// e.g. "CH 3" or "CH 3 (private group)".
-  String get channelLabel =>
-      'CH $channel${isPrivate ? ' (private group)' : ''}';
+  /// The private group we are in, or null on an open channel.
+  PrivateGroup? get currentGroup => isPrivate ? settings.currentGroup : null;
+
+  /// "CH 3" on an open channel, "Family (private group)" in a group.
+  String get channelLabel {
+    final g = currentGroup;
+    if (!isPrivate) return 'CH $channel';
+    if (g == null) return 'a private group';
+    final l = g.label;
+    return l.toLowerCase().contains('group') ? l : '$l (private group)';
+  }
+
+  /// Group with this frame [scope] (known once its key was made).
+  PrivateGroup? groupForScope(int scope) {
+    for (final g in settings.groups) {
+      if (g.scope == scope) return g;
+    }
+    return null;
+  }
 
   /// Label for a scope stored with a ring / message.
   String labelFor(int scope) {
     if (scope == friendScope) return 'Direct chat';
     if (!TransportManager.isPrivateScope(scope)) return 'CH $scope';
-    return scope == this.scope ? channelLabel : 'a private group';
+    if (scope == this.scope) return channelLabel;
+    final g = groupForScope(scope);
+    return g == null ? 'a private group' : g.label;
   }
 
-  /// Channel number to show / switch to for [scope] (private scopes are
-  /// only ever the current channel).
+  /// Channel number to show / switch to for [scope]: 0 for a private
+  /// group (a group has no channel number).
   int displayChannel(int scope) =>
-      TransportManager.isPrivateScope(scope) ? channel : scope;
+      TransportManager.isPrivateScope(scope) ? 0 : scope;
 
   /// True while a passcode key is being derived (takes ~1 s).
   bool switchingChannel = false;
@@ -1285,6 +1314,32 @@ class WalkieController extends ChangeNotifier {
       started = true;
     } finally {
       _starting = false;
+    }
+    unawaited(_learnGroupScopes());
+  }
+
+  /// Once, for groups converted from "CH n + passcode" (or never opened):
+  /// make the key to learn the group's frame scope and the name this phone
+  /// already had for it, so the list shows real names. One background
+  /// derivation per such group, never repeated (the scope is saved).
+  Future<void> _learnGroupScopes() async {
+    var changed = false;
+    for (final g in List.of(settings.groups)) {
+      if (g.scope != null || g.invited) continue;
+      try {
+        var key = _keys[g.keyId];
+        if (key == null) {
+          key = await g.deriveKey();
+          _keys[g.keyId] = key;
+        }
+        g.scope = TransportManager.scopeFor(settings.channel, key);
+        _learnGroupName(g);
+        changed = true;
+      } catch (_) {}
+    }
+    if (changed) {
+      await settingsStore.save(settings);
+      notifyListeners();
     }
   }
 
@@ -1661,11 +1716,14 @@ class WalkieController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Lock-screen text: a group's name stays inside the app.
+  String get _serviceWhere => isPrivate ? 'a private group' : channelLabel;
+
   String get _serviceTitle {
     final q = quietStatus;
     return q != null
-        ? '\u{1F507} $q · $channelLabel'
-        : 'Walkie Talkie is listening on $channelLabel';
+        ? '\u{1F507} $q · $_serviceWhere'
+        : 'Walkie Talkie is listening on $_serviceWhere';
   }
 
   String get _serviceBody {
@@ -2238,7 +2296,11 @@ class WalkieController extends ChangeNotifier {
     };
     for (final id in talking.difference(_talkingPrev)) {
       if (!foreground) {
-        bridge.showTalking(peer: id, name: nameOf(id), channel: channel);
+        bridge.showTalking(
+          peer: id,
+          name: nameOf(id),
+          channel: isPrivate ? 0 : channel,
+        );
       }
     }
     for (final id in _talkingPrev.difference(talking)) {
@@ -2706,13 +2768,12 @@ class WalkieController extends ChangeNotifier {
       return null;
     }
     final ch = f.channel;
-    if (ch < 1 || ch > 16 || settings.isPrivate(ch)) return null;
+    if (ch < 1 || ch > 16) return null;
     return settings.meshLinks[ch]?.ref;
   }
 
   /// The Meshtastic channel [ch] is shared with, or null.
-  MeshLink? meshLinkOf(int ch) =>
-      settings.isPrivate(ch) ? null : settings.meshLinks[ch];
+  MeshLink? meshLinkOf(int ch) => settings.meshLinks[ch];
 
   /// The paired radio's channels (primary and secondary, by slot).
   List<MeshRadioChannel> get radioChannels {
@@ -2728,7 +2789,7 @@ class WalkieController extends ChangeNotifier {
   /// Walkie channel linked to [ref], or null.
   int? walkieChannelFor(MeshChannelRef ref) {
     for (final e in settings.meshLinks.entries) {
-      if (e.value.ref == ref && !settings.isPrivate(e.key)) return e.key;
+      if (e.value.ref == ref) return e.key;
     }
     return null;
   }
@@ -2736,7 +2797,7 @@ class WalkieController extends ChangeNotifier {
   /// Open channel numbers that can be linked (not private, not linked).
   List<int> get linkableChannels => [
     for (var ch = 1; ch <= 16; ch++)
-      if (!settings.isPrivate(ch) && !settings.meshLinks.containsKey(ch)) ch,
+      if (!settings.meshLinks.containsKey(ch)) ch,
   ];
 
   MeshChannelWriter meshWriter() =>
@@ -2747,9 +2808,6 @@ class WalkieController extends ChangeNotifier {
   /// else what is wrong.
   Future<String?> linkMeshChannel(int ch, MeshLink link, {String? name}) async {
     if (ch < 1 || ch > 16) return 'Pick a channel 1-16.';
-    if (settings.isPrivate(ch)) {
-      return 'Private groups cannot be shared with Meshtastic.';
-    }
     final other = walkieChannelFor(link.ref);
     if (other != null && other != ch) {
       return 'That Meshtastic channel is already shared with CH $other.';
@@ -3025,7 +3083,10 @@ class WalkieController extends ChangeNotifier {
         dirty = true;
       }
     }
-    if (dirty) unawaited(settingsStore.save(settings));
+    if (dirty) {
+      _syncGroupRecord();
+      unawaited(settingsStore.save(settings));
+    }
   }
 
   final Map<int, bool> _annSeen = {};
@@ -3043,6 +3104,8 @@ class WalkieController extends ChangeNotifier {
 
   /// "🔥 Family" or "CH 3".
   String get channelTitle {
+    final g = currentGroup;
+    if (g != null && g.label.isNotEmpty) return g.label;
     final n = channelName;
     if (n == null) return channelLabel;
     return [n.emoji, n.name].where((s) => s.isNotEmpty).join(' ');
@@ -3059,6 +3122,7 @@ class WalkieController extends ChangeNotifier {
       e.length > 8 ? e.substring(0, 8) : e,
       DateTime.now().millisecondsSinceEpoch,
     );
+    _syncGroupRecord();
     await settingsStore.save(settings);
     await manager.sendHello();
     whosWhere.announceSoon();
@@ -3083,6 +3147,7 @@ class WalkieController extends ChangeNotifier {
   Future<void> claimAdmin() async {
     if (!isPrivate) return;
     settings.channelAdmins[scope] = nodeId;
+    _syncGroupRecord();
     await settingsStore.save(settings);
     await manager.sendHello();
     notifyListeners();
@@ -3147,7 +3212,9 @@ class WalkieController extends ChangeNotifier {
   /// [rekeyFor]); the removed phone is not told it and cannot read it.
   Future<void> kick(int peerId) async {
     if (!isAdmin || kicking) return;
-    final ch = channel, oldScope = scope;
+    final g = currentGroup;
+    if (g == null) return;
+    final oldScope = scope;
     final members = manager.reachablePeersOn(oldScope)..remove(peerId);
     final kickedName = nameOf(peerId);
     kicking = true;
@@ -3187,9 +3254,10 @@ class WalkieController extends ChangeNotifier {
       ]);
       final name = settings.channelNames[oldScope];
       final ann = settings.announceScopes.contains(oldScope);
-      settings.privateChannels[ch] = pass;
+      _keys.remove(g.keyId);
+      g.secret = pass;
       await settingsStore.save(settings);
-      await setChannel(ch);
+      await _enter(group: g);
       settings.channelAdmins[scope] = nodeId;
       if (name != null) settings.channelNames[scope] = name;
       if (ann) settings.announceScopes.add(scope);
@@ -3203,10 +3271,10 @@ class WalkieController extends ChangeNotifier {
       final parts = <String>[
         missed.isEmpty
             ? 'Removed $kickedName. ${acked.length} phones moved to the new '
-                  'passcode.'
+                  'code.'
             : 'Removed $kickedName. Not confirmed: '
                   '${missed.map(nameOf).join(', ')}. Give them the new '
-                  'passcode (tap the lock).',
+                  'code (tap the lock).',
       ];
       final old = legacy.intersection(acked);
       if (old.isNotEmpty) {
@@ -3249,11 +3317,14 @@ class WalkieController extends ChangeNotifier {
     if (!_rekeysHandled.add(rid)) return;
     await Future<void>.delayed(const Duration(milliseconds: 150));
     await manager.sendControlTo(c.peerId, ack);
-    final ch = channel, oldScope = scope, admin = c.peerId;
+    final g = currentGroup;
+    if (g == null) return;
+    final oldScope = scope, admin = c.peerId;
     final name = settings.channelNames[oldScope];
-    settings.privateChannels[ch] = pc;
+    _keys.remove(g.keyId);
+    g.secret = pc;
     await settingsStore.save(settings);
-    await setChannel(ch);
+    await _enter(group: g);
     settings.channelAdmins[scope] = admin;
     if (name != null) settings.channelNames[scope] = name;
     await chats?.rename(
@@ -3262,7 +3333,7 @@ class WalkieController extends ChangeNotifier {
     );
     await settingsStore.save(settings);
     _notice(
-      '${nameOf(admin)} (admin) changed the passcode of $channelTitle; '
+      '${nameOf(admin)} (admin) changed the code of $channelTitle; '
       'you were moved automatically.',
     );
   }
@@ -3392,51 +3463,8 @@ class WalkieController extends ChangeNotifier {
     }
   }
 
-  /// Name of channel number [ch] as this phone knows it (a private
-  /// channel's name is kept under its key, known once it was opened).
-  ChannelName? nameForChannel(int ch) {
-    final pass = settings.passcodeFor(ch);
-    if (pass == null) return channelNameOf(ch);
-    final key = _keys['$ch\u0000$pass'];
-    if (key == null) return null;
-    return channelNameOf(TransportManager.scopeFor(ch, key));
-  }
-
-  /// Private channels saved on this phone (channel numbers, sorted).
-  List<int> get privateChannelNumbers =>
-      settings.privateChannels.keys.toList()..sort();
-
-  /// A channel number for a new private channel: the highest one that is
-  /// not private yet and not the one we are on (CH 16 down), so the low
-  /// numbers stay free for open talk. Null when all 16 are private.
-  int? freeChannelForPrivate() {
-    for (var ch = 16; ch >= 1; ch--) {
-      if (!settings.isPrivate(ch) && ch != channel) return ch;
-    }
-    return settings.isPrivate(channel) ? null : channel;
-  }
-
-  /// Set up a new private channel (v1.9.4): [passcode] must be strong
-  /// ([Passcodes.problemForNew]); I become its admin and move there.
-  /// Returns the problem with the passcode, or null when done.
-  Future<String?> createPrivateChannel({
-    required int ch,
-    required String passcode,
-    String name = '',
-    String emoji = '',
-  }) async {
-    final p = ChannelKey.normalize(passcode);
-    final problem = Passcodes.problemForNew(p);
-    if (problem != null) return problem;
-    settings.privateChannels[ch] = p;
-    await settingsStore.save(settings);
-    await setChannel(ch);
-    await claimAdmin();
-    if (name.trim().isNotEmpty || emoji.trim().isNotEmpty) {
-      await setChannelName(name, emoji);
-    }
-    return null;
-  }
+  /// Name of open channel number [ch] as this phone knows it.
+  ChannelName? nameForChannel(int ch) => channelNameOf(ch);
 
   // -------------------------------------------------------- mute / block
 
@@ -3813,7 +3841,7 @@ class WalkieController extends ChangeNotifier {
         bridge.showTalking(
           peer: id,
           name: friendName(id),
-          channel: channel,
+          channel: isPrivate ? 0 : channel,
           friend: true,
         );
       }
@@ -3862,6 +3890,8 @@ class WalkieController extends ChangeNotifier {
     if (f != null) return friendName(f);
     final s = int.tryParse(conv.substring(1)) ?? 0;
     if (s == scope) return channelTitle;
+    final gg = groupForScope(s);
+    if (gg != null) return gg.label;
     final n = channelNameOf(s);
     return n != null ? '${n.emoji} ${n.name}'.trim() : labelFor(s);
   }
@@ -4067,6 +4097,10 @@ class WalkieController extends ChangeNotifier {
   Future<void> _onChat(ChatArrival a, {required bool friend}) async {
     final store = chats;
     if (store == null) return;
+    if (a.body.type == ChatType.groupInvite) {
+      // Only a friend can hand us a group, and it must open (v2.3.0).
+      if (!friend || !takeGroupInvite(a)) return;
+    }
     final conv = friend
         ? friendConversation(a.sender)
         : channelConversation(a.channel);
@@ -4097,6 +4131,7 @@ class WalkieController extends ChangeNotifier {
         ChatType.photo => 'Photo',
         ChatType.location =>
           a.body.liveUntil != null ? 'Live location' : 'Location',
+        ChatType.groupInvite => 'Invitation to a private group',
       };
       if (foreground) {
         _notice('$name: $what');
@@ -4116,64 +4151,287 @@ class WalkieController extends ChangeNotifier {
 
   // ---------------------------------------------------------------- settings
 
-  Future<void> setChannel(int ch) async {
+  /// Go to open channel [ch] (CH 1-16: open only, no passcode).
+  Future<void> setChannel(int ch) => _enter(ch: ch);
+
+  /// Go into private group [id] (a group has no channel number).
+  Future<void> setGroup(String id) async {
+    final g = settings.groupById(id);
+    if (g == null) return;
+    await _enter(group: g);
+  }
+
+  /// Switch to open channel [ch], or to [group] (the open channel we come
+  /// back to stays [AppSettings.channel]).
+  Future<void> _enter({int? ch, PrivateGroup? group}) async {
     final token = ++_channelToken;
-    final pass = settings.passcodeFor(ch);
+    final open = ch ?? settings.channel;
     ChannelKey? key;
-    if (pass != null) {
-      final cacheKey = '$ch\u0000$pass';
-      key = _keys[cacheKey];
+    if (group != null) {
+      key = _keys[group.keyId];
       if (key == null) {
         switchingChannel = true;
         notifyListeners();
         try {
-          key = await ChannelKey.derive(ch, pass);
-          _keys[cacheKey] = key;
+          key = await group.deriveKey();
+          _keys[group.keyId] = key;
         } finally {
           if (token == _channelToken) switchingChannel = false;
         }
       }
     }
     if (token != _channelToken) return; // a newer switch won
-    await manager.setChannel(ch, key: key);
+    await manager.setChannel(open, key: key);
     listenerWatch.clear();
     hiddenListeners = 0;
     _joinQuietUntil = DateTime.now().add(const Duration(seconds: 8));
     debugLog.add(
       'channel',
-      'CH $ch${key != null ? ' (private group, room ${RelayTransport.roomFor(manager.scope)})' : ''}',
+      key != null
+          ? 'private group (room ${RelayTransport.roomFor(manager.scope)})'
+          : 'CH $open',
     );
     whosWhere.announceSoon();
     _left.clear(); // a private switch forgets everyone; not "left"
 
-    settings.channel = ch;
+    settings.channel = open;
+    settings.activeGroup = group?.id;
+    if (group != null) {
+      group.invited = false;
+      group.scope = manager.scope;
+      _learnGroupName(group);
+    }
     unawaited(settingsStore.save(settings));
     _updateServiceText();
     notifyListeners();
   }
 
-  /// Make [ch] private with [passcode], or public again with null. Applies
-  /// right away when [ch] is the current channel.
-  /// [makeAdmin]: I am setting this channel up and become its admin
-  /// (can rename it, remove people and turn on announcement mode).
-  Future<void> setChannelPrivacy(
-    int ch,
-    String? passcode, {
-    bool makeAdmin = false,
+  /// A converted "CH 3 group" takes the name this phone already knew for
+  /// that private channel (kept under its key), and a group with a real
+  /// name makes sure the name is known under its key for the others.
+  void _learnGroupName(PrivateGroup g) {
+    final sc = g.scope;
+    if (sc == null) return;
+    final known = settings.channelNames[sc];
+    if (g.autoNamed && known != null && !known.isEmpty) {
+      g.name = known.name;
+      g.emoji = known.emoji;
+      g.autoNamed = false;
+    } else if (!g.autoNamed && (known == null || known.isEmpty)) {
+      settings.channelNames[sc] = ChannelName(g.name, g.emoji, g.createdAt);
+    }
+    final ad = settings.channelAdmins[sc];
+    if (ad != null) g.adminId = ad;
+  }
+
+  /// Keep the group record in step with the name / admin learned from the
+  /// group's presence (see [_adoptChannelInfo], [setChannelName]).
+  void _syncGroupRecord() {
+    final g = currentGroup;
+    if (g == null) return;
+    final n = settings.channelNames[scope];
+    if (n != null && !n.isEmpty && (n.name != g.name || n.emoji != g.emoji)) {
+      g.name = n.name.isEmpty ? g.name : n.name;
+      g.emoji = n.emoji;
+      g.autoNamed = false;
+    }
+    final ad = settings.channelAdmins[scope];
+    if (ad != null) g.adminId = ad;
+  }
+
+  // ------------------------------------------------ private groups (v2.3.0)
+
+  /// New private group: [passcode] must be strong ([Passcodes.problemForNew]).
+  /// I become its admin and move there. Returns the problem with the
+  /// passcode, or null when done.
+  Future<String?> createGroup({
+    required String passcode,
+    String name = '',
+    String emoji = '',
+    int? color,
   }) async {
-    final p = passcode == null ? null : ChannelKey.normalize(passcode);
-    if (p == null || p.isEmpty) {
-      settings.privateChannels.remove(ch);
+    final p = ChannelKey.normalize(passcode);
+    final problem = Passcodes.problemForNew(p);
+    if (problem != null) return problem;
+    final n = name.trim();
+    final g = PrivateGroup(
+      id: GroupIds.generate(),
+      name: n.isEmpty
+          ? 'Private group'
+          : (n.length > 30 ? n.substring(0, 30) : n),
+      emoji: emoji.trim().length > 8
+          ? emoji.trim().substring(0, 8)
+          : emoji.trim(),
+      color: color != null && GroupColors.valid(color)
+          ? color
+          : GroupColors.next(settings.groups.map((x) => x.color)),
+      secret: p,
+      autoNamed: n.isEmpty,
+    );
+    settings.groups.add(g);
+    await settingsStore.save(settings);
+    await _enter(group: g);
+    await claimAdmin();
+    await setChannelName(g.name, g.emoji);
+    return null;
+  }
+
+  /// Join the private group in [inv] (a v2.3.0 group, or "CH n + passcode"
+  /// from an older phone / link, which becomes a "CH n group" that keeps
+  /// the old key so older phones can still hear it) and move there. A
+  /// group we already have (same id) takes the invite's secret: that is
+  /// how a new code after "remove someone" reaches a phone.
+  Future<PrivateGroup> joinGroupFromInvite(Invite inv) async {
+    final secret = ChannelKey.normalize(inv.passcode ?? '');
+    final legacy = inv.channel;
+    final id = legacy != null
+        ? GroupIds.legacy(legacy)
+        : (inv.groupId ?? GroupIds.generate());
+    final named = (inv.groupName ?? '').trim();
+    var g = settings.groupById(id);
+    if (g != null) {
+      if (g.secret != secret) _keys.remove(g.keyId);
+      g.secret = secret;
+      g.invited = false;
+      if (legacy != null) g.legacyChannel = legacy;
+      if (g.autoNamed && named.isNotEmpty) {
+        g.name = named;
+        g.emoji = inv.groupEmoji ?? g.emoji;
+        g.autoNamed = false;
+      }
     } else {
-      settings.privateChannels[ch] = p;
+      g = PrivateGroup(
+        id: id,
+        name: named.isNotEmpty
+            ? named
+            : (legacy != null
+                  ? PrivateGroup.legacyName(legacy)
+                  : 'Private group'),
+        emoji: inv.groupEmoji ?? '',
+        color:
+            inv.groupColor ??
+            GroupColors.next(settings.groups.map((x) => x.color)),
+        secret: secret,
+        legacyChannel: legacy,
+        autoNamed: named.isEmpty,
+      );
+      settings.groups.add(g);
     }
     await settingsStore.save(settings);
-    if (ch == channel) {
-      await setChannel(ch);
-      if (makeAdmin && isPrivate) await claimAdmin();
+    await _enter(group: g);
+    return g;
+  }
+
+  /// Colour of the group we are in (kept on this phone; the invite carries
+  /// it to the people you add).
+  Future<void> setGroupColor(int color) async {
+    final g = currentGroup;
+    if (g == null || !GroupColors.valid(color)) return;
+    g.color = color;
+    await settingsStore.save(settings);
+    notifyListeners();
+  }
+
+  /// Join with the channel number and passcode of a group made on an older
+  /// version (typed in). Same as scanning its old-style invite.
+  Future<PrivateGroup> joinGroupWithCode({
+    required int channel,
+    required String passcode,
+  }) => joinGroupFromInvite(Invite(channel: channel, passcode: passcode));
+
+  /// Accept a friend's invitation (it was saved as an invitation).
+  Future<void> acceptGroupInvite(String id) async {
+    final g = settings.groupById(id);
+    if (g == null) return;
+    g.invited = false;
+    await _enter(group: g);
+  }
+
+  /// Remove group [id] from this phone (leave it, or turn down an
+  /// invitation). Others keep it; their group does not change.
+  Future<void> leaveGroup(String id) async {
+    final g = settings.groupById(id);
+    if (g == null) return;
+    final wasHere = settings.activeGroup == id;
+    settings.groups.remove(g);
+    _keys.remove(g.keyId);
+    await settingsStore.save(settings);
+    if (wasHere) {
+      await _enter(ch: settings.channel);
     } else {
       notifyListeners();
     }
+  }
+
+  /// People the current group could be handed to: friends (any of them,
+  /// online or not; Direct chat delivers when they are back).
+  List<Friend> get groupInviteCandidates => [
+    for (final f in settings.friends)
+      if (!isBlocked(f.id)) f,
+  ];
+
+  /// "Add people": send the current group to each of [friendIds] as a
+  /// Direct chat invitation (secret sealed with the friend pair key).
+  /// Returns how many were sent.
+  Future<int> inviteFriendsToGroup(Iterable<int> friendIds) async {
+    final g = currentGroup;
+    if (g == null) return 0;
+    var sent = 0;
+    for (final id in friendIds) {
+      final secret = friendLinks.friend(id)?.key.secret;
+      if (secret == null) continue;
+      final body = ChatBody(
+        type: ChatType.groupInvite,
+        text: g.label,
+        sentAt: DateTime.now(),
+        invite: GroupHandoff.build(
+          group: g,
+          from: nodeId,
+          to: id,
+          friendSecret: secret,
+        ),
+      );
+      final m = await _sendChat(friendConversation(id), body, quiet: true);
+      if (m != null) sent++;
+    }
+    if (sent > 0) {
+      _notice(
+        sent == 1
+            ? 'Invitation to ${g.label} sent. It arrives when they are '
+                  'in reach (Direct chat keeps it up to 24 h).'
+            : 'Invitations to ${g.label} sent to $sent friends.',
+      );
+    }
+    return sent;
+  }
+
+  /// A friend's invitation arrived in Direct chat: keep it as an
+  /// invitation in our group list (nothing is joined until we accept).
+  @visibleForTesting
+  bool takeGroupInvite(ChatArrival a) {
+    final x = a.body.invite;
+    final secret = friendLinks.friend(a.sender)?.key.secret;
+    if (x == null || secret == null) return false;
+    final g = GroupHandoff.open(
+      invite: x,
+      from: a.sender,
+      me: nodeId,
+      friendSecret: secret,
+      fromName: friendName(a.sender),
+    );
+    if (g == null) return false;
+    if (settings.groupLike(g) != null) return false; // already ours
+    final old = settings.groupById(g.id);
+    if (old != null) {
+      if (!old.invited) return false; // never replace a group we are in
+      settings.groups.remove(old);
+    }
+    settings.groups.add(g);
+    unawaited(settingsStore.save(settings));
+    _notice(
+      '${friendName(a.sender)} invited you to ${g.label} (a private group).',
+    );
+    return true;
   }
 
   /// Empty resets to the call sign.

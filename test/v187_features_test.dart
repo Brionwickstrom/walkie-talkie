@@ -551,7 +551,7 @@ void main() {
       await t.tap(find.byKey(const Key('invite-reveal')));
       await t.pumpWidget(view());
       expect(find.byKey(const Key('invite-qr')), findsOneWidget);
-      expect(find.text('Contains the passcode.'), findsOneWidget);
+      expect(find.text('Contains the code.'), findsOneWidget);
     });
 
     testWidgets('invite confirm dialog returns the choice', (t) async {
@@ -582,7 +582,7 @@ void main() {
       await t.tap(find.text('open'));
       await t.pumpAndSettle();
       expect(find.text('Invite from Bandit'), findsOneWidget);
-      expect(find.text('Join CH 4 (private group)'), findsOneWidget);
+      expect(find.text('Join the private group'), findsOneWidget);
       await t.tap(find.byKey(const Key('invite-add-friend')));
       await t.pump();
       await t.tap(find.byKey(const Key('invite-accept')));

@@ -17,7 +17,8 @@ Future<void> showInviteSheet(BuildContext context, WalkieController c) async {
   Invite? cached;
   String? cacheKey;
   Invite inviteFor() {
-    final k = '$withChannel/$withFriend/${c.channel}';
+    final k =
+        '$withChannel/$withFriend/${c.channel}/${c.currentGroup?.id}/${c.currentGroup?.secret}';
     if (cached == null || cacheKey != k) {
       cached = c.makeInvite(channel: withChannel, friend: withFriend);
       cacheKey = k;
@@ -41,6 +42,8 @@ Future<void> showInviteSheet(BuildContext context, WalkieController c) async {
             withChannel: withChannel,
             withFriend: withFriend,
             isPrivate: c.isPrivate,
+            needsNewVersion:
+                c.currentGroup != null && !c.currentGroup!.isLegacy,
             revealed: revealed,
             invite: inv,
             onChannel: (v) => setSheet(() => withChannel = v),
@@ -79,6 +82,7 @@ class InviteView extends StatelessWidget {
     required this.withChannel,
     required this.withFriend,
     required this.isPrivate,
+    this.needsNewVersion = false,
     required this.revealed,
     required this.invite,
     required this.onChannel,
@@ -92,6 +96,10 @@ class InviteView extends StatelessWidget {
   final bool withChannel;
   final bool withFriend;
   final bool isPrivate;
+
+  /// v2.3.0: a group without an old channel number: phones on older
+  /// versions have to update to join it.
+  final bool needsNewVersion;
   final bool revealed;
 
   /// Null: nothing picked, or a private channel not revealed yet.
@@ -125,7 +133,7 @@ class InviteView extends StatelessWidget {
           title: Text('Join $channelLabel'),
           subtitle: Text(
             isPrivate
-                ? 'Includes the passcode of this private group.'
+                ? 'Includes the code of this private group.'
                 : 'Open channel: anyone on it can hear you.',
           ),
         ),
@@ -151,7 +159,7 @@ class InviteView extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   const Text(
-                    'This QR code and link contain the passcode of your '
+                    'This QR code and link contain the code of your '
                     'private group. Anyone who sees or gets them can join '
                     'and listen. Only share with people you trust, and not '
                     'in public posts.',
@@ -186,11 +194,22 @@ class InviteView extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(top: 4),
               child: Text(
-                'Contains the passcode.',
+                'Contains the code.',
                 textAlign: TextAlign.center,
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.colorScheme.error,
                 ),
+              ),
+            ),
+          if (inv.isPrivate && needsNewVersion)
+            Padding(
+              key: const Key('invite-needs-update'),
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                'Older versions must update to 2.3.0 or newer to join this '
+                'group.',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodySmall,
               ),
             ),
           const SizedBox(height: 8),
@@ -279,8 +298,13 @@ class InviteConfirmDialog extends StatefulWidget {
   State<InviteConfirmDialog> createState() => _InviteConfirmDialogState();
 }
 
+String _groupLabel(Invite inv) => [
+  inv.groupEmoji,
+  inv.groupName,
+].whereType<String>().where((e) => e.isNotEmpty).join(' ');
+
 class _InviteConfirmDialogState extends State<InviteConfirmDialog> {
-  late bool _join = widget.invite.hasChannel;
+  late bool _join = widget.invite.hasChannel || widget.invite.hasGroup;
   late bool _friend = widget.invite.hasFriend;
 
   @override
@@ -294,18 +318,21 @@ class _InviteConfirmDialogState extends State<InviteConfirmDialog> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (inv.hasChannel)
+          if (inv.hasGroup || inv.hasChannel)
             CheckboxListTile(
               key: const Key('invite-join'),
               contentPadding: EdgeInsets.zero,
               value: _join,
               onChanged: (v) => setState(() => _join = v ?? false),
               title: Text(
-                'Join CH ${inv.channel}${inv.isPrivate ? ' (private group)' : ''}',
+                inv.hasGroup
+                    ? 'Join the private group'
+                          '${_groupLabel(inv).isEmpty ? '' : ' “${_groupLabel(inv)}”'}'
+                    : 'Join CH ${inv.channel}',
               ),
               subtitle: Text(
                 'You leave ${widget.currentChannel}.'
-                '${inv.isPrivate ? ' The passcode is saved for that channel.' : ''}',
+                '${inv.hasGroup ? ' The code is saved for this group.' : ''}',
               ),
             ),
           if (inv.hasFriend)

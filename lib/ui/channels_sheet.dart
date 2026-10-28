@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
+import '../app/groups.dart';
 import '../app/passcodes.dart';
 import '../app/walkie_controller.dart';
 import 'invite_sheet.dart';
 import 'mesh_channels.dart';
 import 'sheets.dart';
 
-/// One channel row in [ChannelsView].
+/// One open channel row in [ChannelsView].
 class ChannelRow {
   const ChannelRow(
     this.channel, {
@@ -29,26 +31,66 @@ class ChannelRow {
   ].join(' ');
 }
 
-/// The channel picker (v1.9.4): a "Private channels" section with a lock,
-/// with "New private channel" and "Join with a code or QR" right there,
-/// and the open channels CH 1-16 below it. Pure view, for tests.
+/// One private group row in [ChannelsView] (v2.3.0): a group has its own
+/// name, emoji and colour and no channel number.
+class GroupRow {
+  const GroupRow(
+    this.id, {
+    required this.name,
+    this.emoji = '',
+    this.color = 0xFF1E88E5,
+    this.legacy = false,
+    this.invitedBy,
+    this.invited = false,
+  });
+  final String id;
+  final String name;
+  final String emoji;
+  final int color;
+
+  /// Made before 2.3.0: phones on older versions can still join it.
+  final bool legacy;
+
+  /// A friend invited us and we did not accept yet.
+  final bool invited;
+  final String? invitedBy;
+
+  String get label => [if (emoji.isNotEmpty) emoji, name].join(' ');
+}
+
+/// The channel picker: a "Private groups" section (each group has its own
+/// name and colour, no channel number) with "New private group" and "Join
+/// with a code or QR" right there, and the open channels CH 1-16 below it.
+/// Pure view, for tests.
 class ChannelsView extends StatelessWidget {
   const ChannelsView({
     super.key,
     required this.current,
-    required this.privateRows,
+    this.currentGroup,
+    required this.groupRows,
     required this.openRows,
     required this.onPick,
-    required this.onNewPrivate,
-    required this.onJoinPrivate,
+    required this.onPickGroup,
+    required this.onNewGroup,
+    required this.onJoinGroup,
+    this.onAcceptInvite,
+    this.onDeclineInvite,
     this.onMeshImport,
   });
+
+  /// The open channel we are on (ignored while [currentGroup] is set).
   final int current;
-  final List<ChannelRow> privateRows;
+
+  /// The private group we are in, or null.
+  final String? currentGroup;
+  final List<GroupRow> groupRows;
   final List<ChannelRow> openRows;
   final ValueChanged<int> onPick;
-  final VoidCallback onNewPrivate;
-  final VoidCallback onJoinPrivate;
+  final ValueChanged<String> onPickGroup;
+  final VoidCallback onNewGroup;
+  final VoidCallback onJoinGroup;
+  final ValueChanged<String>? onAcceptInvite;
+  final ValueChanged<String>? onDeclineInvite;
 
   /// "Share with Meshtastic" (import a Meshtastic channel QR), v1.9.7.
   final VoidCallback? onMeshImport;
@@ -56,39 +98,94 @@ class ChannelsView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    Widget row(ChannelRow r, {required bool private}) => ListTile(
-      key: Key('channel-row-${r.channel}'),
-      dense: true,
-      leading: Icon(
-        private ? Icons.lock : Icons.forum_outlined,
-        color: private ? theme.colorScheme.primary : null,
-      ),
-      title: Text(r.label),
-      subtitle: r.meshName == null
-          ? null
-          : Row(
-              key: Key('mesh-badge-${r.channel}'),
-              children: [
-                Icon(
-                  Icons.hub_outlined,
-                  size: 14,
-                  color: theme.colorScheme.primary,
-                ),
-                const SizedBox(width: 4),
-                Flexible(
-                  child: Text(
-                    'Shared with Meshtastic · ${r.meshName}',
-                    overflow: TextOverflow.ellipsis,
+    Widget row(ChannelRow r) {
+      final here = currentGroup == null && r.channel == current;
+      return ListTile(
+        key: Key('channel-row-${r.channel}'),
+        dense: true,
+        leading: const Icon(Icons.forum_outlined),
+        title: Text(r.label),
+        subtitle: r.meshName == null
+            ? null
+            : Row(
+                key: Key('mesh-badge-${r.channel}'),
+                children: [
+                  Icon(
+                    Icons.hub_outlined,
+                    size: 14,
+                    color: theme.colorScheme.primary,
                   ),
-                ),
-              ],
-            ),
-      trailing: r.channel == current
-          ? Icon(Icons.check, color: theme.colorScheme.primary)
-          : null,
-      selected: r.channel == current,
-      onTap: () => onPick(r.channel),
-    );
+                  const SizedBox(width: 4),
+                  Flexible(
+                    child: Text(
+                      'Shared with Meshtastic · ${r.meshName}',
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+        trailing: here
+            ? Icon(Icons.check, color: theme.colorScheme.primary)
+            : null,
+        selected: here,
+        onTap: () => onPick(r.channel),
+      );
+    }
+
+    Widget group(GroupRow g) {
+      final here = currentGroup == g.id;
+      final color = Color(g.color);
+      return ListTile(
+        key: Key('group-row-${g.id}'),
+        dense: true,
+        leading: CircleAvatar(
+          radius: 16,
+          backgroundColor: color,
+          foregroundColor:
+              ThemeData.estimateBrightnessForColor(color) == Brightness.dark
+              ? Colors.white
+              : Colors.black87,
+          child: g.emoji.isNotEmpty
+              ? Text(g.emoji, style: const TextStyle(fontSize: 16))
+              : const Icon(Icons.lock, size: 16),
+        ),
+        title: Text(g.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+        subtitle: g.invited
+            ? Text(
+                'Invitation${g.invitedBy == null ? '' : ' from ${g.invitedBy}'}',
+                key: Key('group-invited-${g.id}'),
+              )
+            : g.legacy
+            ? const Text('Older phones can join too')
+            : null,
+        trailing: g.invited
+            ? Wrap(
+                spacing: 4,
+                children: [
+                  TextButton(
+                    key: Key('group-decline-${g.id}'),
+                    onPressed: onDeclineInvite == null
+                        ? null
+                        : () => onDeclineInvite!(g.id),
+                    child: const Text('Decline'),
+                  ),
+                  FilledButton(
+                    key: Key('group-accept-${g.id}'),
+                    onPressed: onAcceptInvite == null
+                        ? null
+                        : () => onAcceptInvite!(g.id),
+                    child: const Text('Join'),
+                  ),
+                ],
+              )
+            : here
+            ? Icon(Icons.check, color: theme.colorScheme.primary)
+            : null,
+        selected: here,
+        onTap: g.invited ? null : () => onPickGroup(g.id),
+      );
+    }
+
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -112,15 +209,16 @@ class ChannelsView extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 2, 16, 4),
           child: Text(
-            privateRows.isEmpty
-                ? 'None yet. Only phones with the passcode can hear or see '
-                      'anything in a private group.'
-                : 'Encrypted: only phones with the passcode hear or see '
+            groupRows.isEmpty
+                ? 'None yet. A private group is its own place, not a '
+                      'channel number. Only people you invite, or who have '
+                      'its code, can hear or see anything.'
+                : 'Encrypted: only people in the group hear or see '
                       'anything.',
             style: theme.textTheme.bodySmall,
           ),
         ),
-        for (final r in privateRows) row(r, private: true),
+        for (final g in groupRows) group(g),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12),
           child: Wrap(
@@ -128,16 +226,16 @@ class ChannelsView extends StatelessWidget {
             runSpacing: 4,
             children: [
               FilledButton.tonalIcon(
-                key: const Key('new-private-channel'),
+                key: const Key('new-private-group'),
                 icon: const Icon(Icons.add),
                 label: const Text('New private group'),
-                onPressed: onNewPrivate,
+                onPressed: onNewGroup,
               ),
               OutlinedButton.icon(
-                key: const Key('join-private-channel'),
+                key: const Key('join-private-group'),
                 icon: const Icon(Icons.qr_code_scanner),
                 label: const Text('Join with a code or QR'),
-                onPressed: onJoinPrivate,
+                onPressed: onJoinGroup,
               ),
             ],
           ),
@@ -162,11 +260,11 @@ class ChannelsView extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 2, 16, 4),
           child: Text(
-            'Anyone on the same channel number can hear you.',
+            'CH 1 to 16. Anyone on the same channel number can hear you.',
             style: theme.textTheme.bodySmall,
           ),
         ),
-        for (final r in openRows) row(r, private: false),
+        for (final r in openRows) row(r),
         if (onMeshImport != null)
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
@@ -195,34 +293,63 @@ ChannelRow _rowFor(WalkieController c, int ch) {
   );
 }
 
+/// The group rows as the picker shows them: invitations first.
+List<GroupRow> groupRowsFor(WalkieController c) {
+  final all = c.settings.groups;
+  GroupRow row(PrivateGroup g) => GroupRow(
+    g.id,
+    name: g.name,
+    emoji: g.emoji,
+    color: g.color,
+    legacy: g.isLegacy,
+    invited: g.invited,
+    invitedBy: g.invitedBy,
+  );
+  return [
+    for (final g in all)
+      if (g.invited) row(g),
+    for (final g in all)
+      if (!g.invited) row(g),
+  ];
+}
+
 /// Open the channel picker.
 Future<void> showChannelsSheet(BuildContext context, WalkieController c) async {
-  final private = [for (final ch in c.privateChannelNumbers) _rowFor(c, ch)];
-  final open = [
-    for (var ch = 1; ch <= 16; ch++)
-      if (!c.settings.isPrivate(ch)) _rowFor(c, ch),
-  ];
   final pick = await showAppSheet<Object>(
     context: context,
     scrollable: false,
-    builder: (ctx) => SingleChildScrollView(
-      padding: const EdgeInsets.only(top: 12, bottom: 12),
-      child: ChannelsView(
-        current: c.channel,
-        privateRows: private,
-        openRows: open,
-        onPick: (ch) => Navigator.pop(ctx, ch),
-        onNewPrivate: () => Navigator.pop(ctx, 'new'),
-        onJoinPrivate: () => Navigator.pop(ctx, 'join'),
-        onMeshImport: c.radioPaired ? () => Navigator.pop(ctx, 'mesh') : null,
+    builder: (ctx) => ListenableBuilder(
+      listenable: c,
+      builder: (ctx, _) => SingleChildScrollView(
+        padding: const EdgeInsets.only(top: 12, bottom: 12),
+        child: ChannelsView(
+          current: c.channel,
+          currentGroup: c.currentGroup?.id,
+          groupRows: groupRowsFor(c),
+          openRows: [for (var ch = 1; ch <= 16; ch++) _rowFor(c, ch)],
+          onPick: (ch) => Navigator.pop(ctx, ch),
+          onPickGroup: (id) => Navigator.pop(ctx, 'g:$id'),
+          onNewGroup: () => Navigator.pop(ctx, 'new'),
+          onJoinGroup: () => Navigator.pop(ctx, 'join'),
+          onAcceptInvite: (id) => Navigator.pop(ctx, 'a:$id'),
+          onDeclineInvite: (id) async {
+            await c.leaveGroup(id);
+          },
+          onMeshImport: c.radioPaired ? () => Navigator.pop(ctx, 'mesh') : null,
+        ),
       ),
     ),
   );
   if (!context.mounted) return;
   if (pick is int) {
-    if (pick != c.channel) await c.setChannel(pick);
+    if (c.isPrivate || pick != c.channel) await c.setChannel(pick);
+  } else if (pick is String && pick.startsWith('g:')) {
+    final id = pick.substring(2);
+    if (c.currentGroup?.id != id) await c.setGroup(id);
+  } else if (pick is String && pick.startsWith('a:')) {
+    await c.acceptGroupInvite(pick.substring(2));
   } else if (pick == 'new') {
-    await showNewPrivateChannelSheet(context, c);
+    await showNewGroupSheet(context, c);
   } else if (pick == 'join') {
     await showJoinPrivateSheet(context, c);
   } else if (pick == 'mesh') {
@@ -230,25 +357,55 @@ Future<void> showChannelsSheet(BuildContext context, WalkieController c) async {
   }
 }
 
-/// New private channel (v1.9.4): a strong passcode is made for you (or
-/// type your own, 10+ characters), you become its admin, then share it
-/// with the invite QR.
-Future<void> showNewPrivateChannelSheet(
-  BuildContext context,
-  WalkieController c,
-) async {
-  final free = c.freeChannelForPrivate();
-  if (free == null) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('All 16 channels are private groups already.'),
-      ),
-    );
-    return;
-  }
-  var ch = free;
+/// Colour dots to pick from (v2.3.0).
+class GroupColorPicker extends StatelessWidget {
+  const GroupColorPicker({
+    super.key,
+    required this.value,
+    required this.onChanged,
+  });
+  final int value;
+  final ValueChanged<int> onChanged;
+
+  @override
+  Widget build(BuildContext context) => Wrap(
+    spacing: 8,
+    runSpacing: 4,
+    children: [
+      for (var i = 0; i < GroupColors.palette.length; i++)
+        Semantics(
+          button: true,
+          selected: GroupColors.palette[i] == value,
+          label: '${GroupColors.names[i]} colour',
+          child: InkWell(
+            key: Key('group-color-$i'),
+            customBorder: const CircleBorder(),
+            onTap: () => onChanged(GroupColors.palette[i]),
+            child: Padding(
+              padding: const EdgeInsets.all(4),
+              child: CircleAvatar(
+                radius: 14,
+                backgroundColor: Color(GroupColors.palette[i]),
+                child: GroupColors.palette[i] == value
+                    ? const Icon(Icons.check, size: 16, color: Colors.white)
+                    : null,
+              ),
+            ),
+          ),
+        ),
+    ],
+  );
+}
+
+/// New private group (v2.3.0): a name, an emoji and a colour; a strong
+/// passcode is made for you (or type your own, 10+ characters). You become
+/// its admin, then add friends or show the QR code. A group is not a
+/// channel: there is no channel number to pick.
+Future<void> showNewGroupSheet(BuildContext context, WalkieController c) async {
   final passCtl = TextEditingController(text: Passcodes.generate());
   final nameCtl = TextEditingController();
+  final emojiCtl = TextEditingController();
+  var color = GroupColors.next(c.settings.groups.map((g) => g.color));
   String? err;
   var busy = false;
   final made = await showAppSheet<bool>(
@@ -281,35 +438,41 @@ Future<void> showNewPrivateChannelSheet(
                 ),
                 const SizedBox(height: 8),
                 const Text(
-                  'Everything on it is encrypted. A strong passcode is '
-                  'already filled in; after you create it, show the QR '
-                  'code so others join with one scan.',
+                  'A private group is its own place, not a channel. '
+                  'Everything in it is encrypted. A strong code is already '
+                  'filled in; after you create it, add friends or show the '
+                  'QR code.',
                 ),
                 const SizedBox(height: 8),
-                TextField(
-                  key: const Key('new-private-name'),
-                  controller: nameCtl,
-                  maxLength: 30,
-                  decoration: const InputDecoration(
-                    labelText: 'Name (optional, e.g. Family)',
-                    counterText: '',
-                  ),
-                ),
                 Row(
                   children: [
-                    const Text('Channel number'),
-                    const SizedBox(width: 12),
-                    DropdownButton<int>(
-                      key: const Key('new-private-number'),
-                      value: ch,
-                      items: [
-                        for (var i = 1; i <= 16; i++)
-                          if (!c.settings.isPrivate(i))
-                            DropdownMenuItem(value: i, child: Text('CH $i')),
-                      ],
-                      onChanged: (v) => setSheet(() => ch = v ?? ch),
+                    SizedBox(
+                      width: 64,
+                      child: TextField(
+                        key: const Key('new-private-emoji'),
+                        controller: emojiCtl,
+                        textAlign: TextAlign.center,
+                        decoration: const InputDecoration(labelText: 'Emoji'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextField(
+                        key: const Key('new-private-name'),
+                        controller: nameCtl,
+                        maxLength: 30,
+                        decoration: const InputDecoration(
+                          labelText: 'Name (e.g. Family)',
+                          counterText: '',
+                        ),
+                      ),
                     ),
                   ],
+                ),
+                const SizedBox(height: 4),
+                GroupColorPicker(
+                  value: color,
+                  onChanged: (v) => setSheet(() => color = v),
                 ),
                 TextField(
                   key: const Key('new-private-passcode'),
@@ -318,7 +481,7 @@ Future<void> showNewPrivateChannelSheet(
                   enableSuggestions: false,
                   decoration: InputDecoration(
                     labelText:
-                        'Passcode (at least ${Passcodes.minNew} '
+                        'Code (at least ${Passcodes.minNew} '
                         'characters)',
                     errorText: err,
                     suffixIcon: IconButton(
@@ -355,10 +518,11 @@ Future<void> showNewPrivateChannelSheet(
                             return;
                           }
                           setSheet(() => busy = true);
-                          final e = await c.createPrivateChannel(
-                            ch: ch,
+                          final e = await c.createGroup(
                             passcode: passCtl.text,
                             name: nameCtl.text,
+                            emoji: emojiCtl.text,
+                            color: color,
                           );
                           if (!ctx.mounted) return;
                           if (e != null) {
@@ -378,12 +542,137 @@ Future<void> showNewPrivateChannelSheet(
       },
     ),
   );
-  if (made == true && context.mounted) await showInviteSheet(context, c);
+  if (made == true && context.mounted) await showAddPeopleSheet(context, c);
 }
 
-/// Join someone's private channel: scan / paste their invite, or type the
-/// channel number and passcode they give you (any saved passcode of 6+
-/// characters works, also from older phones).
+/// "Add people" (v2.3.0): pick friends and the group goes to each of them
+/// as a Direct chat invitation (the secret sealed with the friend pair
+/// key). People who are not friends join with the QR / link, offered here
+/// too.
+Future<void> showAddPeopleSheet(
+  BuildContext context,
+  WalkieController c,
+) async {
+  final g = c.currentGroup;
+  if (g == null) return;
+  final friends = c.groupInviteCandidates;
+  final picked = <int>{};
+  final go = await showAppSheet<String>(
+    context: context,
+    scrollable: false,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setSheet) {
+        final theme = Theme.of(ctx);
+        return SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+          child: AddPeopleView(
+            groupLabel: g.label,
+            friends: [
+              for (final f in friends)
+                (
+                  id: f.id,
+                  name: c.friendName(f.id),
+                  online: c.friendLinks.isOnline(f.id),
+                ),
+            ],
+            picked: picked,
+            onToggle: (id, v) => setSheet(() {
+              v ? picked.add(id) : picked.remove(id);
+            }),
+            onSend: () => Navigator.pop(ctx, 'send'),
+            onQr: () => Navigator.pop(ctx, 'qr'),
+            theme: theme,
+          ),
+        );
+      },
+    ),
+  );
+  if (!context.mounted) return;
+  if (go == 'send' && picked.isNotEmpty) {
+    await c.inviteFriendsToGroup(picked);
+  } else if (go == 'qr') {
+    await showInviteSheet(context, c);
+  }
+}
+
+/// Content of the "Add people" sheet (pure, for tests).
+class AddPeopleView extends StatelessWidget {
+  const AddPeopleView({
+    super.key,
+    required this.groupLabel,
+    required this.friends,
+    required this.picked,
+    required this.onToggle,
+    required this.onSend,
+    required this.onQr,
+    required this.theme,
+  });
+  final String groupLabel;
+  final List<({int id, String name, bool online})> friends;
+  final Set<int> picked;
+  final void Function(int id, bool on) onToggle;
+  final VoidCallback onSend;
+  final VoidCallback onQr;
+  final ThemeData theme;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('Add people to $groupLabel', style: theme.textTheme.titleLarge),
+        const SizedBox(height: 4),
+        Text(
+          friends.isEmpty
+              ? 'You have no friends added yet. Add friends first, or share '
+                    'the QR code or link instead.'
+              : 'Pick friends. Each gets an invitation in their Direct chat '
+                    'with you (kept up to 24 hours if they are out of '
+                    'reach). The group code is sealed so only that friend '
+                    'can open it. They need Walkie Talkie 2.3.0 or newer.',
+          key: const Key('add-people-note'),
+          style: theme.textTheme.bodySmall,
+        ),
+        for (final f in friends)
+          CheckboxListTile(
+            key: Key('add-people-${f.id}'),
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            value: picked.contains(f.id),
+            onChanged: (v) => onToggle(f.id, v ?? false),
+            title: Text(f.name, overflow: TextOverflow.ellipsis),
+            subtitle: Text(f.online ? 'In reach' : 'Out of reach for now'),
+          ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 4,
+          children: [
+            FilledButton.icon(
+              key: const Key('add-people-send'),
+              icon: const Icon(Icons.send),
+              label: Text(
+                picked.isEmpty ? 'Send invitations' : 'Send (${picked.length})',
+              ),
+              onPressed: picked.isEmpty ? null : onSend,
+            ),
+            OutlinedButton.icon(
+              key: const Key('add-people-qr'),
+              icon: const Icon(Icons.qr_code),
+              label: const Text('QR or link instead'),
+              onPressed: onQr,
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+/// Join someone's private group: scan / paste their invite. A group made
+/// on an older version can also be joined by typing its channel number and
+/// passcode (that is all those phones know).
 Future<void> showJoinPrivateSheet(
   BuildContext context,
   WalkieController c,
@@ -418,7 +707,10 @@ Future<void> showJoinPrivateSheet(
                   onPressed: () => Navigator.pop(ctx, 'scan'),
                 ),
                 const Divider(height: 32),
-                const Text('Or type what they tell you:'),
+                const Text(
+                  'Group made on an older version? Type the channel number '
+                  'and passcode they gave you:',
+                ),
                 Row(
                   children: [
                     const Text('Channel number'),
@@ -469,9 +761,15 @@ Future<void> showJoinPrivateSheet(
   if (pick == 'scan') {
     await scanInvite(context, c);
   } else if (pick == 'type') {
-    await c.setChannelPrivacy(ch, passCtl.text);
-    if (ch != c.channel) await c.setChannel(ch);
+    await c.joinGroupWithCode(channel: ch, passcode: passCtl.text);
   }
+}
+
+/// Copy [text] for the group's code.
+void copyToClipboard(BuildContext context, String text) {
+  Clipboard.setData(ClipboardData(text: text));
+  ScaffoldMessenger.of(context)
+      .showSnackBar(const SnackBar(content: Text('Copied')));
 }
 
 /// "Unknown listener" warning (v1.9.4) under the people header.
@@ -550,9 +848,9 @@ Future<void> explainUnknownListener(
           ? 'The internet relay has $count more '
                 '${count == 1 ? 'connection' : 'connections'} in this '
                 "private group's room than the people you can see. Without "
-                'the passcode it only gets scrambled data, and the updated '
+                'the code it only gets scrambled data, and the updated '
                 'relay stops sending anything to a connection that stays '
-                "silent. If you think someone has the passcode who "
+                "silent. If you think someone has the code who "
                 "shouldn't, ${isAdmin ? 'remove them (long-press their name), or make a new private group and share the new QR.' : 'ask the admin to remove them, or make a new private group together.'}"
                 '\n\nIt can also be a phone that just lost signal; '
                 'that clears in about a minute.'

@@ -96,8 +96,13 @@ class ControllerSetupHost implements SetupHost {
   Future<void> openVendorBattery() => c.openVendorBattery();
   @override
   int get channel => c.channel;
+
+  /// In a private group now, or a group made on an older version has
+  /// this channel number.
   @override
-  bool isPrivate(int ch) => c.settings.isPrivate(ch);
+  bool isPrivate(int ch) =>
+      c.isPrivate ||
+      c.settings.groups.any((g) => g.legacyChannel == ch && !g.invited);
 
   @override
   Future<void> finish({
@@ -109,11 +114,14 @@ class ControllerSetupHost implements SetupHost {
     await c.start();
     if (name.trim() != customName) c.setName(name);
     if (private && passcode != null && passcode.trim().isNotEmpty) {
-      await c.setChannelPrivacy(channel, passcode);
-    } else if (!private && c.settings.isPrivate(channel)) {
-      await c.setChannelPrivacy(channel, null);
+      // Channel number + passcode: a group like the ones older versions
+      // make ("CH n group"), so older phones with the same two can join.
+      await c.joinGroupWithCode(channel: channel, passcode: passcode);
+    } else if (private && c.isPrivate) {
+      // Keep the group we are in.
+    } else if (c.isPrivate || channel != c.channel) {
+      await c.setChannel(channel);
     }
-    if (channel != c.channel) await c.setChannel(channel);
     await c.markSetupDone();
   }
 
@@ -219,7 +227,8 @@ class _SetupWizardPageState extends State<SetupWizardPage> {
     }
     if (_step == SetupStep.channel && _private) {
       final p = _pass.text.trim();
-      if (p.length < 6 && !h.isPrivate(_channel)) {
+      if ((p.isEmpty && !h.isPrivate(_channel)) ||
+          (p.isNotEmpty && p.length < 6)) {
         setState(() => _passErr = 'Use at least 6 characters');
         return;
       }
@@ -473,8 +482,11 @@ class _SetupWizardPageState extends State<SetupWizardPage> {
       case SetupStep.channel:
         return [
           const Text(
-            'Everyone on the same open channel hears each other. A private '
-            'group needs the same passcode on every phone.',
+            'Everyone on the same open channel (CH 1 to 16) hears each other. '
+            'A private group is separate from channels: make or join one '
+            'from the Channels list after setup, or scan an invite below. To '
+            'join a group made on an older version, pick Private group and '
+            'type its channel number and passcode.',
           ),
           const SizedBox(height: 12),
           Row(

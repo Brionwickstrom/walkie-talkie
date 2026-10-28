@@ -7,6 +7,7 @@ import '../core/link_policy.dart';
 import '../friends/friend_links.dart';
 import '../trip/trip_settings.dart';
 import 'call_signs.dart';
+import 'groups.dart';
 import 'mesh_links.dart';
 import 'quiet.dart';
 
@@ -67,7 +68,9 @@ class AppSettings {
     this.radioId,
     this.radioName,
     TripSettings? trip,
-    Map<int, String>? privateChannels,
+    List<PrivateGroup>? groups,
+    this.activeGroup,
+    Map<int, String>? legacyPrivate,
     Map<int, double>? peerVolumes,
     List<Friend>? friends,
     Map<int, ChannelName>? channelNames,
@@ -78,7 +81,7 @@ class AppSettings {
     Map<int, MeshLink>? meshLinks,
   }) : quiet = quiet ?? QuietHours(),
        trip = trip ?? TripSettings(),
-       privateChannels = privateChannels ?? {},
+       groups = groups ?? PrivateGroup.migrate(legacyPrivate ?? const {}),
        peerVolumes = peerVolumes ?? {},
        friends = friends ?? [],
        channelNames = channelNames ?? {},
@@ -93,6 +96,19 @@ class AppSettings {
         customName!.trim() == legacyDefaultNameFor(nodeId)) {
       customName = null;
     }
+    // v2.3.0: the old settings had the current channel number and, if it
+    // was a private group, its passcode. The number is an open channel
+    // now; the group is "CH n group" and stays the one we are in.
+    final lp = legacyPrivate;
+    if (groups == null && lp != null && lp.containsKey(channel)) {
+      activeGroup ??= GroupIds.legacy(channel);
+      // Leaving the group lands on CH 1, not on the open channel that
+      // happens to share the old number (nobody should end up talking in
+      // the open by accident).
+      channel = 1;
+    }
+    final ag = activeGroup;
+    if (ag != null && groupById(ag) == null) activeGroup = null;
   }
 
   /// Generated once on first launch, never changes.
@@ -218,12 +234,39 @@ class AppSettings {
   /// Trip tab settings (v1.8.0).
   final TripSettings trip;
 
-  /// Passcodes of the channels marked private (channel -> passcode).
-  /// Channels not in the map are public.
-  final Map<int, String> privateChannels;
+  /// Private groups (v2.3.0). CH 1-16 are open only; a group has its own
+  /// id, name, colour and secret and no channel number.
+  final List<PrivateGroup> groups;
 
-  String? passcodeFor(int channel) => privateChannels[channel];
-  bool isPrivate(int channel) => privateChannels.containsKey(channel);
+  /// Group we are in now (id), or null when on the open [channel].
+  String? activeGroup;
+
+  PrivateGroup? groupById(String id) {
+    for (final g in groups) {
+      if (g.id == id) return g;
+    }
+    return null;
+  }
+
+  /// The group we are in, or null on an open channel.
+  PrivateGroup? get currentGroup {
+    final id = activeGroup;
+    return id == null ? null : groupById(id);
+  }
+
+  /// Groups we joined (not just invited to).
+  List<PrivateGroup> get joinedGroups => [
+    for (final g in groups)
+      if (!g.invited) g,
+  ];
+
+  /// Group with the same key as [g] that we already have, or null.
+  PrivateGroup? groupLike(PrivateGroup g) {
+    for (final o in groups) {
+      if (o.sameKeyAs(g)) return o;
+    }
+    return null;
+  }
 
   static String encodePrivate(Map<int, String> m) =>
       jsonEncode({for (final e in m.entries) '${e.key}': e.value});
@@ -364,6 +407,8 @@ class SharedPrefsSettingsStore implements SettingsStore {
   static const _kSetupDone = 'setup_done';
   static const _kSetupPrompt = 'setup_prompt_shown';
   static const _kPrivate = 'private_channels';
+  static const _kGroups = 'private_groups';
+  static const _kActiveGroup = 'active_group';
   static const _kDiag = 'show_diagnostics';
   static const _kVolumes = 'peer_volumes';
   static const _kSaver = 'power_saver';
@@ -435,7 +480,13 @@ class SharedPrefsSettingsStore implements SettingsStore {
       setupDone: prefs?.getBool(_kSetupDone) ?? false,
       setupPromptShown: prefs?.getBool(_kSetupPrompt) ?? false,
       newInstall: fresh,
-      privateChannels: AppSettings.decodePrivate(prefs?.getString(_kPrivate)),
+      // v2.3.0: groups. Phones coming from an older version only have the
+      // old "channel -> passcode" map: it is converted once.
+      groups: prefs?.containsKey(_kGroups) == true
+          ? PrivateGroup.decodeList(prefs?.getString(_kGroups))
+          : null,
+      activeGroup: prefs?.getString(_kActiveGroup),
+      legacyPrivate: AppSettings.decodePrivate(prefs?.getString(_kPrivate)),
       showDiagnostics: prefs?.getBool(_kDiag) ?? false,
       peerVolumes: AppSettings.decodeVolumes(prefs?.getString(_kVolumes)),
       powerSaver: prefs?.getBool(_kSaver) ?? false,
@@ -521,9 +572,18 @@ class SharedPrefsSettingsStore implements SettingsStore {
       await prefs.setString(_kTrip, s.trip.encode());
       await prefs.setString(_kMeshLinks, MeshLink.encodeMap(s.meshLinks));
       await prefs.setString(_kSocial, AppSettings.encodeSocial(s));
+      await prefs.setString(_kGroups, PrivateGroup.encodeList(s.groups));
+      final ag = s.activeGroup;
+      if (ag == null) {
+        await prefs.remove(_kActiveGroup);
+      } else {
+        await prefs.setString(_kActiveGroup, ag);
+      }
+      // Also the old key (groups that have a channel number), so going
+      // back to an older app keeps them.
       await prefs.setString(
         _kPrivate,
-        AppSettings.encodePrivate(s.privateChannels),
+        AppSettings.encodePrivate(PrivateGroup.toLegacyMap(s.groups)),
       );
     } catch (_) {}
   }

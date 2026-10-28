@@ -213,6 +213,25 @@ class _Bubble extends StatelessWidget {
         content = Text(m.text, style: TextStyle(color: fg, fontSize: 15));
       case ChatType.photo:
         content = _Photo(m: m, load: loadPhoto, fg: fg);
+      case ChatType.groupInvite:
+        content = Row(
+          key: const Key('chat-group-invite'),
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.lock, color: fg, size: 24),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                m.mine
+                    ? 'You invited them to the private group '
+                          '“${m.text}”.'
+                    : 'Invitation to the private group “${m.text}”. '
+                          'Open Channels to join or decline.',
+                style: TextStyle(color: fg, fontSize: 15),
+              ),
+            ),
+          ],
+        );
       case ChatType.location:
         final live = m.isLive(now);
         content = InkWell(

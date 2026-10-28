@@ -44,23 +44,10 @@ class _WhosWherePageState extends State<WhosWherePage> {
   Future<void> _jump(WhoGroup g) async {
     final ch = g.channel;
     if (ch == null) return;
-    final privateHere = c.settings.passcodeFor(ch) != null;
-    final messenger = ScaffoldMessenger.maybeOf(context);
     Navigator.of(context).pop();
+    // CH 1-16 are open channels only (v2.3.0): going there leaves a
+    // private group; the people are on the open channel, as listed.
     await c.setChannel(ch);
-    // This phone has a passcode saved for that number: we are now on our
-    // private CH n, not the public one those people are on.
-    if (privateHere) {
-      messenger?.showSnackBar(
-        SnackBar(
-          content: Text(
-            'CH $ch is a private group on this phone, so you joined your '
-            'private group CH $ch. Make it an open channel (lock icon) to '
-            'join them.',
-          ),
-        ),
-      );
-    }
   }
 
   void _person(WhoGroup g, WhoPerson p) {
@@ -93,11 +80,6 @@ class _WhosWherePageState extends State<WhosWherePage> {
         showMe: c.settings.showInWhosWhere,
         offline: c.settings.offlineSaver,
         lobbyOnline: c.whosWhere.relayOpen,
-        privateNumbers: {
-          for (final g in c.whosWhereGroups)
-            if (g.channel != null && c.settings.passcodeFor(g.channel!) != null)
-              g.channel!,
-        },
         onJump: _jump,
         onPerson: _person,
         onShowMe: c.setShowInWhosWhere,
@@ -500,8 +482,8 @@ class WhoPersonSheet extends StatelessWidget {
             )
           else if (group.kind == WhoGroupKind.private)
             Text(
-              'Private groups stay hidden. Ask them for the channel and '
-              'passcode, or add them as a friend for a Direct chat.',
+              'Private groups stay hidden. Ask them for an invite to the '
+              'group, or add them as a friend for a Direct chat.',
               style: theme.textTheme.bodySmall,
             ),
         ],

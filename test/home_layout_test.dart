@@ -187,15 +187,6 @@ Widget app({
       onVolume: (_) {},
       onEditMe: () {},
       headerAction: WhosWhereButton(count: 5, onPressed: () {}),
-      recent: peers.isEmpty
-          ? null
-          : RecentStrip(
-              takes: takes,
-              unheard: 2,
-              onPlay: (_) {},
-              onPlayMissed: () {},
-              onOpenHistory: () {},
-            ),
       actions: ChannelActions(
         onRingAll: () {},
         onBeepAll: () {},
@@ -205,6 +196,7 @@ Widget app({
           icon: const Icon(Icons.keyboard_voice),
           label: const Text('Hold: message'),
         ),
+        history: HistoryButton(unheard: 2, onOpen: () {}),
       ),
       ptt: MainTalkArea(
         replyName: replyFrom,
@@ -437,7 +429,9 @@ void main() {
     expect(find.text('Lord of the Pings'), findsOneWidget);
     expect(find.text('Rubber Duck'), findsOneWidget);
     // Scroll to the end: every card lays out without overflow.
-    expect(find.text('Missed'), findsOneWidget);
+    // The recent clips are one History button (with a dot while unheard).
+    expect(find.byKey(const Key('open-history')), findsOneWidget);
+    expect(find.text('Missed'), findsNothing);
     await tester.drag(find.byType(ListView).last, const Offset(0, -2000));
     await tester.pump(const Duration(milliseconds: 300));
     expect(tester.takeException(), isNull);

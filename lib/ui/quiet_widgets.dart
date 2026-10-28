@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../app/quiet.dart';
 import '../app/walkie_controller.dart';
+import 'sheets.dart';
 
 /// Mute button on the talk screen: a plain on/off switch, no time limit.
 /// v1.9.9: both ways need a deliberate 2.5 s hold (a ring fills up while
@@ -236,6 +237,82 @@ class QuietBanner extends StatelessWidget {
     );
   }
 }
+
+/// v2.3.0: the quiet-hours / muted state as a small moon (or speaker-off)
+/// chip on the "Who can hear this?" line instead of a big card on the Talk
+/// screen. Tap it for [showQuietSheet] (the same Change / Unmute options
+/// the card had).
+class QuietChip extends StatelessWidget {
+  const QuietChip({
+    super.key,
+    required this.text,
+    required this.muted,
+    required this.onTap,
+  });
+
+  final String text;
+  final bool muted;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Semantics(
+      button: true,
+      label: '$text. Tap for options',
+      excludeSemantics: true,
+      child: Tooltip(
+        message: text,
+        child: InkWell(
+          key: const Key('quiet-chip'),
+          borderRadius: BorderRadius.circular(12),
+          onTap: onTap,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: muted ? cs.errorContainer : cs.secondaryContainer,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              child: Icon(
+                muted ? Icons.volume_off : Icons.bedtime,
+                size: 16,
+                color: muted ? cs.onErrorContainer : cs.onSecondaryContainer,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The options behind [QuietChip]: what is quiet, "Change" (quiet hours) or
+/// the held "Unmute" (muted). Closes itself when one is used.
+Future<void> showQuietSheet(
+  BuildContext context, {
+  required String text,
+  required bool muted,
+  required VoidCallback onUnmute,
+  required VoidCallback onSettings,
+}) => showAppSheet<void>(
+  context: context,
+  builder: (ctx) => Padding(
+    padding: const EdgeInsets.only(bottom: 8),
+    child: QuietBanner(
+      text: text,
+      muted: muted,
+      onUnmute: () {
+        Navigator.of(ctx).pop();
+        onUnmute();
+      },
+      onSettings: () {
+        Navigator.of(ctx).pop();
+        onSettings();
+      },
+    ),
+  ),
+);
 
 /// Settings > Mute & quiet hours.
 class QuietSettings extends StatelessWidget {

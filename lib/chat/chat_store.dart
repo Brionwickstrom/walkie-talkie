@@ -100,6 +100,7 @@ class ChatMessage {
     ChatType.text: 't',
     ChatType.photo: 'p',
     ChatType.location: 'l',
+    ChatType.groupInvite: 'g',
   };
 
   Map<String, Object?> toJson() => {

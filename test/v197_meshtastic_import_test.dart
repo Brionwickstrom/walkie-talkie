@@ -816,14 +816,15 @@ void main() {
             body: SingleChildScrollView(
               child: ChannelsView(
                 current: 1,
-                privateRows: const [],
+                groupRows: const [],
                 openRows: const [
                   ChannelRow(1),
                   ChannelRow(16, title: 'Trail', meshName: 'Trail'),
                 ],
                 onPick: (_) {},
-                onNewPrivate: () {},
-                onJoinPrivate: () {},
+                onPickGroup: (_) {},
+                onNewGroup: () {},
+                onJoinGroup: () {},
                 onMeshImport: () => mesh++,
               ),
             ),

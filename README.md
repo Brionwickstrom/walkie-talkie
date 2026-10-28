@@ -1525,6 +1525,49 @@ Tests: `test/v195_gateway_test.dart`, `test/v195_quiet_test.dart`.
 Tests: `test/v197_meshtastic_import_test.dart` (vectors from the official
 apps and the Python library), `test/v195_quiet_test.dart`.
 
+## v2.3.0: Private groups, and a tidier Talk screen
+
+**Private groups are their own thing now.** CH 1 to 16 are open channels only
+(anyone on the same number can hear you, nothing is encrypted). A private group
+is separate: it has its own random id, a name, a colour and an emoji, and a
+secret, and it is not tied to any channel number. The channel number never goes
+on the air for a group: frames carry only a 16 bit tag made from the key, so
+the relay, the gateway, LoRa and Meshtastic see no channel number for private
+traffic (Meshtastic links, which are for open channels only, are untouched).
+The key is made from the group id plus the secret (PBKDF2, 120000 rounds, in a
+background isolate, once per group; the result is remembered).
+
+On the Channels screen there are two sections: **Private groups** (with **New
+private group** and **Join with a code or QR**) above **Open channels**.
+**Add people** sends an invitation to the friends you pick, in their Direct
+chat with you (kept up to 24 hours if they are out of reach). The group secret
+is sealed with the friend pair key, so only that friend can open it; they
+choose **Join** or **Decline** and nothing is joined by itself. People who are
+not friends can use the QR code or the link. Invites carry the group id and a
+note: phones on older versions have to update first. Old links and QR text
+(`ch=3&p=...`) still work.
+
+**Moving over.** Every "CH 3 + passcode" group becomes a group named "CH 3
+group" (rename it any time), once, and the one you were in stays the one you are
+in. Those groups keep the old key derivation (channel number as the salt), so
+phones that are still on an older version stay in the same room. The old
+settings key is still written for them, so going back to an older app keeps
+your groups. Groups made in 2.3.0 are new-style and only 2.3.0+ can join them.
+
+**Talk screen clean-up.** Quiet hours is a small moon chip on the "Who can hear
+this?" line (tap it for Change, or the held Unmute while muted) instead of a
+big card; the connection icons and the backup line are one line ("Internet via
+Wi-Fi · Home relay 42 ms · 1 backup ready", Details has the full text); the
+recent-clips row is a History button with a dot while something is unheard;
+Ring all, Beep, Hold: message, Mute (still a 2.5 s hold plus a confirm) and
+History share one row that wraps; the Talk button shrinks on short screens and
+with large text (never below 96 dp); the people list gets the rest. On a 360 x
+640 phone at 1.3x text the list went from about 44 dp to about 197 dp.
+
+Battery: nothing new runs in the background. A group key is derived once
+(then cached, and its tag is saved); there are no new timers, polling or wake
+locks.
+
 ## v2.2.0: Save route for offline
 
 On a drive, hike, drive then hike (or Gentle compass route), the card has one

@@ -6,7 +6,6 @@ import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../app/config.dart';
-import '../app/passcodes.dart';
 import '../app/walkie_controller.dart';
 import '../core/link_policy.dart';
 import '../core/peer.dart';
@@ -43,6 +42,13 @@ import 'setup_wizard.dart';
 import 'dart:io' show Platform;
 
 import '../trip/sos.dart';
+
+/// Size of the Talk button: 17% of the screen height, divided down for
+/// large text (the caption and rows grow with it), 96..160 dp.
+double talkButtonSize(double screenHeight, TextScaler scaler) {
+  final ts = scaler.scale(10) / 10;
+  return (screenHeight * 0.17 / ts.clamp(1.0, 1.6)).clamp(96.0, 160.0);
+}
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key, required this.controller});
@@ -306,7 +312,9 @@ class _HomePageState extends State<HomePage> {
       listenable: c,
       builder: (context, _) {
         final mq = MediaQuery.of(context);
-        final pttSize = (mq.size.height * 0.17).clamp(104.0, 160.0);
+        // Big and easy to hit, but smaller on short screens and with large
+        // text so the people list keeps its room (never below 96 dp).
+        final pttSize = talkButtonSize(mq.size.height, mq.textScaler);
         // v1.9.6: tablets and the desktop window get Talk and the Trip map
         // side by side; phones keep the two tabs.
         final wide = isTwoPane(mq.size.width, mq.size.height);
@@ -319,13 +327,6 @@ class _HomePageState extends State<HomePage> {
         );
         final talk = HomeBody(
           banners: [
-            if (c.quietStatus != null)
-              QuietBanner(
-                text: c.quietStatus!,
-                muted: c.quiet.muted,
-                onUnmute: c.unmute,
-                onSettings: () => _openSettings(context),
-              ),
             if (c.playingSomething)
               Card(
                 margin: const EdgeInsets.fromLTRB(8, 4, 8, 0),
@@ -369,7 +370,9 @@ class _HomePageState extends State<HomePage> {
           showDetails: c.settings.showDiagnostics,
           onToggleDetails: c.setShowDiagnostics,
           details: _detailLines(),
-          channelLabel: c.channelName == null
+          channelLabel: c.isPrivate
+              ? c.channelTitle
+              : c.channelName == null
               ? 'CH ${c.channel}'
               : '${c.channelTitle} (CH ${c.channel})',
           isPrivate: c.isPrivate,
@@ -454,18 +457,6 @@ class _HomePageState extends State<HomePage> {
                   onPressed: () => _openInbox(context),
                 )
               : null,
-          recent: c.takes.isEmpty
-              ? null
-              : RecentStrip(
-                  takes: [for (final t in c.takes.take(8)) takeView(c, t)],
-                  unheard: c.unheardTakes,
-                  onPlay: (v) {
-                    final t = c.takes.where((x) => x.id == v.id);
-                    if (t.isNotEmpty) c.playTake(t.first);
-                  },
-                  onPlayMissed: c.playAllMissed,
-                  onOpenHistory: () => _openHistory(context),
-                ),
           headerAction: WhosWhereButton(
             count: c.whosWhereElsewhereCount,
             onPressed: () => _openWhosWhere(context),
@@ -479,6 +470,12 @@ class _HomePageState extends State<HomePage> {
               onMute: c.mute,
               onUnmute: c.unmute,
             ),
+            history: c.takes.isEmpty
+                ? null
+                : HistoryButton(
+                    unheard: c.unheardTakes,
+                    onOpen: () => _openHistory(context),
+                  ),
           ),
           ptt: _mainTalk(context, pttSize),
         );
@@ -492,6 +489,19 @@ class _HomePageState extends State<HomePage> {
                     bottom: whoCanHearBottom(
                       context,
                       AudienceInfo.ofChannel(c),
+                      trailing: c.quietStatus == null
+                          ? null
+                          : QuietChip(
+                              text: c.quietStatus!,
+                              muted: c.quiet.muted,
+                              onTap: () => showQuietSheet(
+                                context,
+                                text: c.quietStatus!,
+                                muted: c.quiet.muted,
+                                onUnmute: c.unmute,
+                                onSettings: () => _openSettings(context),
+                              ),
+                            ),
                     ),
                     title: Row(
                       mainAxisSize: MainAxisSize.min,
@@ -500,12 +510,15 @@ class _HomePageState extends State<HomePage> {
                           channel: c.channel,
                           isPrivate: c.isPrivate,
                           emoji: c.channelName?.emoji ?? '',
+                          groupName: c.currentGroup?.name,
+                          groupEmoji: c.currentGroup?.emoji,
+                          groupColor: c.currentGroup?.color,
                           onTap: () => showChannelsSheet(context, c),
                         ),
                         IconButton(
                           tooltip: c.isPrivate
-                              ? 'Private group (tap for passcode)'
-                              : 'Make this channel a private group',
+                              ? 'Private group (tap for settings)'
+                              : 'Private groups',
                           icon: c.switchingChannel
                               ? const SizedBox(
                                   width: 20,
@@ -772,11 +785,11 @@ class _HomePageState extends State<HomePage> {
             final ok = await _confirm(
               ctx,
               'Remove ${p.name} from ${c.channelTitle}?',
-              'Everyone else is moved to a new passcode '
+              'Everyone else is moved to a new code '
                   'automatically. ${p.name} keeps the old one '
-                  'and can no longer hear or see the channel. '
+                  'and can no longer hear or see the group. '
                   'Phones out of range right now need the '
-                  'new passcode from you.',
+                  'new code from you.',
               'Remove',
             );
             if (ok && ctx.mounted) {
@@ -846,7 +859,8 @@ class _HomePageState extends State<HomePage> {
         private: reply != null,
         caption: name != null
             ? 'Reply privately to $name'
-            : 'Talk to CH ${c.channel} ($n ${n == 1 ? 'person' : 'people'})'
+            : 'Talk to ${c.isPrivate ? c.channelTitle : 'CH ${c.channel}'} '
+                  '($n ${n == 1 ? 'person' : 'people'})'
                   '${PlatformCaps.desktop ? ' · or hold Space' : ''}',
       ),
     );
@@ -1848,11 +1862,19 @@ class _ChannelPicker extends StatelessWidget {
     required this.isPrivate,
     required this.emoji,
     required this.onTap,
+    this.groupName,
+    this.groupEmoji,
+    this.groupColor,
   });
   final int channel;
   final bool isPrivate;
   final String emoji;
   final VoidCallback onTap;
+
+  /// In a private group: its name, emoji and colour instead of CH n.
+  final String? groupName;
+  final String? groupEmoji;
+  final int? groupColor;
 
   @override
   Widget build(BuildContext context) {
@@ -1865,7 +1887,26 @@ class _ChannelPicker extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('${emoji.isEmpty ? '' : '$emoji '}CH $channel'),
+            if (isPrivate && groupName != null) ...[
+              if (groupColor != null)
+                Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: CircleAvatar(
+                    radius: 6,
+                    backgroundColor: Color(groupColor!),
+                  ),
+                ),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 130),
+                child: Text(
+                  '${(groupEmoji ?? '').isEmpty ? '' : '$groupEmoji '}$groupName',
+                  key: const Key('group-picker-label'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ] else
+              Text('${emoji.isEmpty ? '' : '$emoji '}CH $channel'),
             const Icon(Icons.arrow_drop_down),
           ],
         ),
@@ -1931,24 +1972,32 @@ String peerDebugLine(Peer p, DateTime now, {String? path}) {
   return parts.join(' | ');
 }
 
-/// Make the current channel private / public, and show its passcode with a
-/// QR code so others can join.
+/// The lock button (v2.3.0). On an open channel (CH 1-16, open only): its
+/// name, and the way to a private group. In a private group: its name,
+/// emoji and colour, code with a QR, add people, admin tools and Leave.
 Future<void> showPrivacySheet(BuildContext context, WalkieController c) async {
-  final ch = c.channel;
-  final passCtl = TextEditingController();
-  final nameCtl = TextEditingController(text: c.channelName?.name ?? '');
-  final emojiCtl = TextEditingController(text: c.channelName?.emoji ?? '');
+  final g0 = c.currentGroup;
+  final nameCtl = TextEditingController(
+    text: g0 != null ? g0.name : c.channelName?.name ?? '',
+  );
+  final emojiCtl = TextEditingController(
+    text: g0 != null ? g0.emoji : c.channelName?.emoji ?? '',
+  );
   var show = false;
-  var makeAdmin = true;
-  String? err;
+  String? choice;
   await showAppSheet<void>(
     context: context,
     scrollable: false,
     builder: (ctx) => StatefulBuilder(
       builder: (ctx, setSheet) {
-        final pass = c.settings.passcodeFor(ch);
+        final g = c.currentGroup;
         final theme = Theme.of(ctx);
         final key = c.manager.channelKey;
+        void pick(String v) {
+          choice = v;
+          Navigator.pop(ctx);
+        }
+
         return Padding(
           padding: EdgeInsets.fromLTRB(
             16,
@@ -1963,13 +2012,16 @@ Future<void> showPrivacySheet(BuildContext context, WalkieController c) async {
               children: [
                 Row(
                   children: [
-                    Icon(pass != null ? Icons.lock : Icons.lock_open),
+                    Icon(g != null ? Icons.lock : Icons.lock_open),
                     const SizedBox(width: 8),
-                    Text(
-                      pass != null
-                          ? 'CH $ch is a private group'
-                          : 'CH $ch is an open channel',
-                      style: theme.textTheme.titleLarge,
+                    Expanded(
+                      child: Text(
+                        g != null
+                            ? 'Private group'
+                            : 'CH ${c.channel} is an open channel',
+                        key: const Key('privacy-title'),
+                        style: theme.textTheme.titleLarge,
+                      ),
                     ),
                   ],
                 ),
@@ -1979,6 +2031,7 @@ Future<void> showPrivacySheet(BuildContext context, WalkieController c) async {
                     SizedBox(
                       width: 64,
                       child: TextField(
+                        key: const Key('privacy-emoji'),
                         controller: emojiCtl,
                         textAlign: TextAlign.center,
                         decoration: const InputDecoration(labelText: 'Emoji'),
@@ -1987,15 +2040,19 @@ Future<void> showPrivacySheet(BuildContext context, WalkieController c) async {
                     const SizedBox(width: 8),
                     Expanded(
                       child: TextField(
+                        key: const Key('privacy-name'),
                         controller: nameCtl,
                         maxLength: 30,
-                        decoration: const InputDecoration(
-                          labelText: 'Channel name (optional)',
+                        decoration: InputDecoration(
+                          labelText: g != null
+                              ? 'Group name'
+                              : 'Channel name (optional)',
                           counterText: '',
                         ),
                       ),
                     ),
                     IconButton(
+                      key: const Key('privacy-save-name'),
                       tooltip: 'Save name',
                       icon: const Icon(Icons.check),
                       onPressed: () async {
@@ -2007,109 +2064,75 @@ Future<void> showPrivacySheet(BuildContext context, WalkieController c) async {
                   ],
                 ),
                 Text(
-                  'Everyone on this channel sees the name (phones with app '
-                  '1.5 or newer).',
+                  g != null
+                      ? 'Everyone in this group sees the name.'
+                      : 'Everyone on this channel sees the name (phones with '
+                            'app 1.5 or newer).',
                   style: theme.textTheme.bodySmall,
                 ),
+                if (g != null) ...[
+                  const SizedBox(height: 8),
+                  GroupColorPicker(
+                    value: g.color,
+                    onChanged: (v) async {
+                      await c.setGroupColor(v);
+                      setSheet(() {});
+                    },
+                  ),
+                ],
                 const SizedBox(height: 12),
-                if (pass == null) ...[
+                if (g == null) ...[
                   const Text(
-                    'Set a passcode to make this channel a private group. Everything '
-                    'on it (talk, rings, beeps, voice messages, who is here) '
-                    'is encrypted. Only phones on the same channel number '
-                    'with the same passcode can hear or see each other.',
+                    'CH 1 to 16 are open: anyone on the same channel number '
+                    'can hear you, and nothing is encrypted. For talk that '
+                    'only your people can hear, use a private group. It is '
+                    'its own place with its own name and colour, not a '
+                    'channel number.',
                   ),
                   const SizedBox(height: 12),
-                  TextField(
-                    controller: passCtl,
-                    obscureText: !show,
-                    autocorrect: false,
-                    enableSuggestions: false,
-                    decoration: InputDecoration(
-                      labelText: makeAdmin
-                          ? 'New passcode (at least ${Passcodes.minNew} '
-                                'characters)'
-                          : 'Passcode they gave you',
-                      errorText: err,
-                      suffixIcon: IconButton(
-                        icon: Icon(
-                          show ? Icons.visibility_off : Icons.visibility,
-                        ),
-                        onPressed: () => setSheet(() => show = !show),
-                      ),
-                    ),
-                  ),
-                  if (makeAdmin)
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: TextButton.icon(
-                        key: const Key('privacy-generate'),
-                        icon: const Icon(Icons.casino_outlined),
-                        label: const Text('Make one for me'),
-                        onPressed: () => setSheet(() {
-                          passCtl.text = Passcodes.generate();
-                          show = true;
-                          err = null;
-                        }),
-                      ),
-                    ),
-                  CheckboxListTile(
-                    contentPadding: EdgeInsets.zero,
-                    value: makeAdmin,
-                    onChanged: (v) => setSheet(() => makeAdmin = v ?? false),
-                    title: const Text("I'm setting up this channel"),
-                    subtitle: const Text(
-                      'You become its admin: you can remove people and '
-                      'turn on announcement mode. Untick when joining '
-                      "someone else's channel.",
-                    ),
-                  ),
-                  const SizedBox(height: 4),
                   FilledButton.icon(
-                    icon: const Icon(Icons.lock),
-                    label: const Text('Make private group'),
-                    onPressed: () async {
-                      final p = passCtl.text.trim();
-                      // v1.9.4: a new channel needs a strong passcode;
-                      // joining someone's channel takes theirs as it is.
-                      final problem = makeAdmin
-                          ? Passcodes.problemForNew(p)
-                          : Passcodes.problemForJoin(p);
-                      if (problem != null) {
-                        setSheet(() => err = problem);
-                        return;
-                      }
-                      await c.setChannelPrivacy(ch, p, makeAdmin: makeAdmin);
-                      setSheet(() => err = null);
-                    },
+                    key: const Key('privacy-new-group'),
+                    icon: const Icon(Icons.add),
+                    label: const Text('New private group'),
+                    onPressed: () => pick('new'),
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    key: const Key('privacy-join-group'),
+                    icon: const Icon(Icons.qr_code_scanner),
+                    label: const Text('Join a private group'),
+                    onPressed: () => pick('join'),
                   ),
                 ] else ...[
                   const Text(
-                    'To join: on the other phone pick the same channel '
-                    'number, tap the lock and type this passcode.',
+                    'To join: add them as friends with Add people, or show '
+                    'them the QR code or link. People on older versions '
+                    'must update to 2.3.0 first (groups made before 2.3.0 '
+                    'still work with older versions by channel number and '
+                    'passcode).',
                   ),
                   const SizedBox(height: 12),
                   Center(
                     child: Container(
+                      key: const Key('privacy-qr'),
                       color: Colors.white,
                       padding: const EdgeInsets.all(8),
                       child: QrImageView(
-                        data:
-                            'Walkie Talkie private channel\nCH $ch\nPasscode: $pass',
+                        data: c.makeInvite().webLink,
                         size: 180,
                       ),
                     ),
                   ),
                   const SizedBox(height: 8),
                   SelectableText(
-                    show ? pass : '\u2022' * pass.length,
+                    show ? g.secret : '\u2022' * g.secret.length,
                     textAlign: TextAlign.center,
                     style: theme.textTheme.headlineSmall,
                   ),
-                  if (key != null && key.channel == ch)
+                  if (key != null)
                     Text(
                       'Check code ${key.fingerprint} (same on every phone '
-                      'with the right passcode)',
+                      'with the right code)',
                       textAlign: TextAlign.center,
                       style: theme.textTheme.bodySmall,
                     ),
@@ -2128,11 +2151,7 @@ Future<void> showPrivacySheet(BuildContext context, WalkieController c) async {
                         label: const Text('Copy'),
                         onPressed: () {
                           Clipboard.setData(
-                            ClipboardData(
-                              text:
-                                  'Walkie Talkie private channel: CH $ch, '
-                                  'passcode: $pass',
-                            ),
+                            ClipboardData(text: c.makeInvite().shareText()),
                           );
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(content: Text('Copied')),
@@ -2149,7 +2168,7 @@ Future<void> showPrivacySheet(BuildContext context, WalkieController c) async {
                       Expanded(
                         child: Text(
                           c.isAdmin
-                              ? 'You are the admin of this channel'
+                              ? 'You are the admin of this group'
                               : c.adminId != null
                               ? 'Admin: ${c.nameOf(c.adminId!)}'
                               : 'No admin yet',
@@ -2196,7 +2215,7 @@ Future<void> showPrivacySheet(BuildContext context, WalkieController c) async {
                     ),
                     Text(
                       'To remove someone: long-press them on the main '
-                      'screen > Remove from channel.',
+                      'screen > Remove from group.',
                       style: theme.textTheme.bodySmall,
                     ),
                   ] else if (c.announcementMode)
@@ -2204,23 +2223,25 @@ Future<void> showPrivacySheet(BuildContext context, WalkieController c) async {
                       'Announcement mode is on: only the admin talks.',
                     ),
                   const SizedBox(height: 8),
+                  FilledButton.icon(
+                    key: const Key('privacy-add-people'),
+                    icon: const Icon(Icons.person_add_alt_1),
+                    label: const Text('Add people'),
+                    onPressed: () => pick('people'),
+                  ),
+                  const SizedBox(height: 8),
                   OutlinedButton.icon(
                     key: const Key('privacy-invite'),
                     icon: const Icon(Icons.qr_code),
                     label: const Text('Invite with QR / link'),
-                    onPressed: () {
-                      Navigator.pop(ctx);
-                      showInviteSheet(context, c);
-                    },
+                    onPressed: () => pick('invite'),
                   ),
                   const SizedBox(height: 8),
                   OutlinedButton.icon(
-                    icon: const Icon(Icons.lock_open),
-                    label: const Text('Make open channel again'),
-                    onPressed: () async {
-                      await c.setChannelPrivacy(ch, null);
-                      setSheet(() {});
-                    },
+                    key: const Key('privacy-leave'),
+                    icon: const Icon(Icons.logout),
+                    label: const Text('Leave this group'),
+                    onPressed: () => pick('leave'),
                   ),
                 ],
               ],
@@ -2230,6 +2251,28 @@ Future<void> showPrivacySheet(BuildContext context, WalkieController c) async {
       },
     ),
   );
+  if (!context.mounted) return;
+  switch (choice) {
+    case 'new':
+      await showNewGroupSheet(context, c);
+    case 'join':
+      await showJoinPrivateSheet(context, c);
+    case 'people':
+      await showAddPeopleSheet(context, c);
+    case 'invite':
+      await showInviteSheet(context, c);
+    case 'leave':
+      final g = c.currentGroup;
+      if (g == null) return;
+      final ok = await _confirm(
+        context,
+        'Leave ${g.label}?',
+        'It is removed from this phone, with its code. The others keep it. '
+            'To come back you need an invitation or its QR code again.',
+        'Leave',
+      );
+      if (ok) await c.leaveGroup(g.id);
+  }
 }
 
 /// Full playback log in a dialog (screenshot-friendly).

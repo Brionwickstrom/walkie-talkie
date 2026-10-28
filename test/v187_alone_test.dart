@@ -47,7 +47,7 @@ void main() {
   test('relay connected: the other phone is the problem', () {
     final r = why(private: true);
     expect(r.text, contains('Connected to the internet relay on CH 1'));
-    expect(r.text, contains('same passcode'));
+    expect(r.text, contains('same code'));
     expect(r.fix, isNull);
     expect(why().text, isNot(contains('passcode')));
   });

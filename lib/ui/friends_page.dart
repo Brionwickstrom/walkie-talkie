@@ -153,6 +153,7 @@ String chatPreview(ChatMessage m) {
         ChatType.text => m.text,
         ChatType.photo => 'Photo',
         ChatType.location => m.liveUntil != null ? 'Live location' : 'Location',
+        ChatType.groupInvite => 'Private group invitation',
       };
 }
 

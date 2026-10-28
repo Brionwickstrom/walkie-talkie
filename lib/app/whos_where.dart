@@ -551,6 +551,10 @@ class WhoGroup {
   String get title => switch (kind) {
     WhoGroupKind.private => 'Private groups',
     WhoGroupKind.friends => 'Friends',
+    WhoGroupKind.mine when isPrivate => [
+      if ((emoji ?? '').isNotEmpty) emoji!,
+      (name ?? '').isNotEmpty ? name! : 'Private group',
+    ].join(' '),
     _ => [
       if ((emoji ?? '').isNotEmpty) emoji!,
       if ((name ?? '').isNotEmpty) '${name!} ·',
@@ -615,7 +619,8 @@ List<WhoGroup> buildWhosWhere({
 }) {
   final mine = WhoGroup(
     kind: WhoGroupKind.mine,
-    channel: myChannel,
+    // A private group has no channel number.
+    channel: iAmPrivate ? null : myChannel,
     name: myChannelName,
     emoji: myChannelEmoji,
     isPrivate: iAmPrivate,

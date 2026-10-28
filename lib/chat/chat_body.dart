@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-enum ChatType { text, photo, location }
+enum ChatType { text, photo, location, groupInvite }
 
 /// A chat message on the wire: 'WM', version 1, header length (u16 BE),
 /// JSON header, then raw data (the JPEG for photos).
@@ -9,7 +9,10 @@ enum ChatType { text, photo, location }
 /// Header fields: t (text/photo/loc), s (text), w/h (photo size), th (the
 /// data is only a small thumbnail: the full photo was not sent, e.g. over
 /// Bluetooth), lat/lng/acc (location), live (live-location end time, ms
-/// since epoch), lid (live share id: later updates replace earlier ones).
+/// since epoch), lid (live share id: later updates replace earlier ones),
+/// gi (v2.3.0 private group invitation: id, name, emoji, colour, channel
+/// number of an old group, and the secret sealed to the friend; s is the
+/// group's name for the chat list).
 class ChatBody {
   ChatBody({
     required this.type,
@@ -24,6 +27,7 @@ class ChatBody {
     this.liveUntil,
     this.liveId,
     this.sentAt,
+    this.invite,
   });
 
   ChatBody.text(String s, {DateTime? sentAt})
@@ -42,6 +46,9 @@ class ChatBody {
   final int? liveId;
   final DateTime? sentAt;
 
+  /// [ChatType.groupInvite]: the invitation (see header `gi`).
+  final Map<String, Object?>? invite;
+
   static const _magic0 = 0x57; // W
   static const _magic1 = 0x4D; // M
   static const _version = 1;
@@ -50,6 +57,7 @@ class ChatBody {
     ChatType.text: 'text',
     ChatType.photo: 'photo',
     ChatType.location: 'loc',
+    ChatType.groupInvite: 'gi',
   };
 
   Map<String, Object?> header() => {
@@ -64,6 +72,7 @@ class ChatBody {
     if (liveUntil != null) 'live': liveUntil!.millisecondsSinceEpoch,
     'lid': ?liveId,
     if (sentAt != null) 'at': sentAt!.millisecondsSinceEpoch,
+    'gi': ?invite,
   };
 
   Uint8List encode() {
@@ -93,6 +102,7 @@ class ChatBody {
     liveUntil: liveUntil,
     liveId: liveId,
     sentAt: sentAt,
+    invite: invite,
   );
 
   static bool looksLike(Uint8List b) =>
@@ -117,6 +127,9 @@ class ChatBody {
       final at = i('at');
       final lat = d('lat'), lng = d('lng');
       if (t == ChatType.location && (lat == null || lng == null)) return null;
+      final giRaw = j['gi'];
+      final gi = giRaw is Map ? Map<String, Object?>.from(giRaw) : null;
+      if (t == ChatType.groupInvite && gi == null) return null;
       return ChatBody(
         type: t,
         text: j['s'] is String ? j['s'] as String : '',
@@ -132,6 +145,7 @@ class ChatBody {
             : DateTime.fromMillisecondsSinceEpoch(live),
         liveId: i('lid'),
         sentAt: at == null ? null : DateTime.fromMillisecondsSinceEpoch(at),
+        invite: gi,
       );
     } catch (_) {
       return null;

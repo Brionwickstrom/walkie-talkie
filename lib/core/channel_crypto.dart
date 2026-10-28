@@ -28,10 +28,22 @@ import 'frame.dart';
 /// Frames that do not decrypt (wrong passcode, other group with the same
 /// tag, tampering) are dropped without a trace.
 class ChannelKey {
-  ChannelKey._(this.channel, this._encKey, this.tag, this.fingerprint);
+  ChannelKey._(
+    this.channel,
+    this._encKey,
+    this.tag,
+    this.fingerprint, {
+    this.groupId,
+  });
 
-  /// Fixed app salt; the channel number is appended.
+  /// Fixed app salt; the channel number is appended. Used by private
+  /// groups made before v2.3.0 ("legacy": the old phones still derive the
+  /// key this way, so they keep working together).
   static const String salt = 'WalkieTalkie/private-channel/v1/ch=';
+
+  /// v2.3.0 private groups: the random group id is appended instead of a
+  /// channel number (a group is not tied to any channel).
+  static const String groupSalt = 'WalkieTalkie/private-group/v2/id=';
   static const int iterations = 120000;
   static const int nonceLength = 12;
   static const int macLength = 16;
@@ -43,7 +55,11 @@ class ChannelKey {
   static final _aes = DartAesGcm(secretKeyLength: 32, nonceLength: nonceLength);
   static final _rng = Random.secure();
 
+  /// Channel number for a legacy group key, 0 for a v2.3.0 group key.
   final int channel;
+
+  /// Group id of a v2.3.0 group key, null for a legacy (channel number) key.
+  final String? groupId;
   final SecretKeyData _encKey;
 
   /// 16 bit identifier sent in place of the channel number.
@@ -77,8 +93,39 @@ class ChannelKey {
     await _stretch(channel, normalize(passcode), iterations),
   );
 
+  /// Key of a v2.3.0 private group: the random group [id] plus the group's
+  /// secret (a generated passcode, or one typed). No channel number.
+  static Future<ChannelKey> deriveGroup(
+    String id,
+    String secret, {
+    int iterations = iterations,
+  }) async {
+    final pass = normalize(secret);
+    final master = await Isolate.run(
+      () => _stretchWith('$groupSalt$id', pass, iterations),
+    );
+    return fromMaster(0, master, groupId: id);
+  }
+
+  /// Same as [deriveGroup] without the isolate (tests).
+  static Future<ChannelKey> deriveGroupInline(
+    String id,
+    String secret, {
+    int iterations = iterations,
+  }) async => fromMaster(
+    0,
+    await _stretchWith('$groupSalt$id', normalize(secret), iterations),
+    groupId: id,
+  );
+
   static Future<List<int>> _stretch(
     int channel,
+    String passcode,
+    int iterations,
+  ) => _stretchWith('$salt$channel', passcode, iterations);
+
+  static Future<List<int>> _stretchWith(
+    String saltText,
     String passcode,
     int iterations,
   ) async {
@@ -90,12 +137,16 @@ class ChannelKey {
     );
     final k = await kdf.deriveKeyFromPassword(
       password: passcode,
-      nonce: utf8.encode('$salt$channel'),
+      nonce: utf8.encode(saltText),
     );
     return k.extractBytes();
   }
 
-  static ChannelKey fromMaster(int channel, List<int> master) {
+  static ChannelKey fromMaster(
+    int channel,
+    List<int> master, {
+    String? groupId,
+  }) {
     final hmac = DartHmac.sha256();
     final mk = SecretKeyData(master);
     List<int> sub(String label) => hmac
@@ -115,6 +166,7 @@ class ChannelKey {
       [for (final b in fp.take(3)) b.toRadixString(16).padLeft(2, '0')]
           .join()
           .toUpperCase(),
+      groupId: groupId,
     );
   }
 

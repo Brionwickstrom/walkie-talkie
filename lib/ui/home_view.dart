@@ -202,102 +202,29 @@ String clockText(DateTime t, {DateTime? now}) {
   return '${days[t.weekday - 1]} $hm';
 }
 
-/// Last few transmissions on this channel, one tap to replay; "Missed"
-/// plays everything not heard yet; History opens the full list.
-class RecentStrip extends StatelessWidget {
-  const RecentStrip({
-    super.key,
-    required this.takes,
-    required this.unheard,
-    required this.onPlay,
-    required this.onPlayMissed,
-    required this.onOpenHistory,
-  });
-  final List<TakeView> takes;
+/// v2.3.0: the recent-clips strip became this one button: History with a
+/// dot while something is unheard (the list there has Play, Play all missed
+/// and the rest).
+class HistoryButton extends StatelessWidget {
+  const HistoryButton({super.key, required this.unheard, required this.onOpen});
   final int unheard;
-  final ValueChanged<TakeView> onPlay;
-  final VoidCallback onPlayMissed;
-  final VoidCallback onOpenHistory;
+  final VoidCallback onOpen;
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-    return SizedBox(
-      height: 44,
-      child: Row(
-        children: [
-          IconButton(
-            key: const Key('open-history'),
-            tooltip: 'History: replay what was said',
-            icon: Badge(
-              isLabelVisible: unheard > 0,
-              label: Text('$unheard'),
-              child: const Icon(Icons.history),
-            ),
-            onPressed: onOpenHistory,
-          ),
-          if (unheard > 0)
-            Padding(
-              padding: const EdgeInsets.only(right: 4),
-              child: FilledButton.tonalIcon(
-                style: FilledButton.styleFrom(
-                  visualDensity: VisualDensity.compact,
-                  padding: const EdgeInsets.symmetric(horizontal: 10),
-                ),
-                icon: const Icon(Icons.playlist_play, size: 18),
-                label: const Text('Missed'),
-                onPressed: onPlayMissed,
-              ),
-            ),
-          Expanded(
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.only(right: 8),
-              itemCount: takes.length,
-              separatorBuilder: (_, _) => const SizedBox(width: 6),
-              itemBuilder: (context, i) {
-                final t = takes[i];
-                return ActionChip(
-                  visualDensity: VisualDensity.compact,
-                  padding: const EdgeInsets.symmetric(horizontal: 2),
-                  backgroundColor: t.playing ? cs.primaryContainer : null,
-                  avatar: Icon(
-                    t.playing ? Icons.pause : Icons.play_arrow,
-                    size: 18,
-                    color: !t.heard ? cs.primary : null,
-                  ),
-                  label: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 160),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Flexible(
-                          child: Text(
-                            t.who,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontWeight: t.heard
-                                  ? FontWeight.normal
-                                  : FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                        Text(
-                          ' · ${clipLength(t.durationMs)}'
-                          '${t.hops > 1 ? ' · ${t.hops} hops' : ''}',
-                        ),
-                      ],
-                    ),
-                  ),
-                  onPressed: () => onPlay(t),
-                );
-              },
-            ),
-          ),
-        ],
+    return IconButton(
+      key: const Key('open-history'),
+      tooltip: unheard > 0
+          ? 'History: $unheard not heard yet'
+          : 'History: replay what was said',
+      visualDensity: VisualDensity.compact,
+      icon: Badge(
+        // A dot, not a number: it only says "something is new".
+        isLabelVisible: unheard > 0,
+        smallSize: 9,
+        child: const Icon(Icons.history),
       ),
+      onPressed: onOpen,
     );
   }
 }
@@ -326,7 +253,6 @@ class HomeBody extends StatelessWidget {
     this.onEditMe,
     this.error,
     this.queued,
-    this.recent,
     this.headerAction,
     this.onRefresh,
     this.radioAvailable,
@@ -366,9 +292,6 @@ class HomeBody extends StatelessWidget {
 
   /// Trailing button on the "N on CH 3" header (Who's where).
   final Widget? headerAction;
-
-  /// The "recent talk" strip (replay), or null when there is none.
-  final Widget? recent;
 
   final List<Widget> banners;
   final List<(TransportKind, TransportStatus)> links;
@@ -412,9 +335,12 @@ class HomeBody extends StatelessWidget {
       child: Column(
         children: [
           ...banners,
+          // One compact line: icons, "Internet via Wi-Fi · Direct 42 ms ·
+          // 1 backup ready" and Details (v2.3.0). Details has the full text.
           StatusRow(
             links: links,
             internet: internet,
+            extra: bestPath,
             showDetails: showDetails,
             onToggleDetails: onToggleDetails,
             onLinkTap: onLinkTap,
@@ -423,36 +349,14 @@ class HomeBody extends StatelessWidget {
             cellLevel: cellLevel,
             onCellTap: onCellTap,
           ),
-          if (bestPath != null)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 2),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.swap_horiz,
-                    size: 15,
-                    color: theme.colorScheme.outline,
-                  ),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      bestPath!,
-                      key: const Key('best-path'),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.bodySmall,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          if (showDetails && details.isNotEmpty)
+          if (showDetails)
             ConstrainedBox(
               constraints: const BoxConstraints(maxHeight: 120),
               child: SingleChildScrollView(
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 child: SelectableText(
-                  details.join('\n'),
+                  [internet.text, ?bestPath, ...details].join('\n'),
+                  key: const Key('best-path'),
                   style: theme.textTheme.bodySmall?.copyWith(
                     fontFamily: 'monospace',
                     fontSize: 11,
@@ -462,7 +366,6 @@ class HomeBody extends StatelessWidget {
               ),
             ),
           ?notice,
-          ?recent,
           if (error != null)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
@@ -601,12 +504,22 @@ class HomeBody extends StatelessWidget {
   }
 }
 
+/// "Internet: connected via Wi-Fi (Home relay)" -> "Internet via Wi-Fi" (the
+/// one-line status; the full text is in Details).
+String compactInternetText(String t) {
+  var s = t.replaceFirst(RegExp(r'^Internet: connected via '), 'Internet via ');
+  final i = s.indexOf(' (');
+  if (i > 0) s = s.substring(0, i);
+  return s;
+}
+
 /// Small link icons + "Internet: connected via Wi-Fi" + Details toggle.
 class StatusRow extends StatelessWidget {
   const StatusRow({
     super.key,
     required this.links,
     required this.internet,
+    this.extra,
     required this.showDetails,
     required this.onToggleDetails,
     this.onLinkTap,
@@ -616,6 +529,11 @@ class StatusRow extends StatelessWidget {
     this.onCellTap,
   });
   final List<(TransportKind, TransportStatus)> links;
+
+  /// More for the same line ("Direct 42 ms · 1 backup ready"). With it the
+  /// internet text is shortened to "Internet via Wi-Fi"; null keeps the
+  /// full text.
+  final String? extra;
 
   /// The Cell / mobile data icon (v1.8.6), null = not shown.
   final CellState? cell;
@@ -689,15 +607,30 @@ class StatusRow extends StatelessWidget {
               onTap: onLinkTap == null
                   ? null
                   : () => onLinkTap!(TransportKind.internet),
-              child: Text(
-                internet.text,
+              child: Text.rich(
+                TextSpan(
+                  children: [
+                    TextSpan(
+                      text: extra == null
+                          ? internet.text
+                          : compactInternetText(internet.text),
+                      style: TextStyle(
+                        color: netColor,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    if (extra != null)
+                      TextSpan(
+                        text: ' · $extra',
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.outline,
+                        ),
+                      ),
+                  ],
+                ),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: netColor,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                ),
+                style: const TextStyle(fontSize: 12.5),
               ),
             ),
           ),
@@ -713,12 +646,21 @@ class StatusRow extends StatelessWidget {
               onPressed: () => onLinkTap!(TransportKind.internet),
             ),
           TextButton(
+            key: const Key('toggle-details'),
+            style: TextButton.styleFrom(
+              visualDensity: VisualDensity.compact,
+              padding: const EdgeInsets.only(left: 6, right: 2),
+              minimumSize: const Size(0, 36),
+            ),
             onPressed: () => onToggleDetails(!showDetails),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Text('Details'),
-                Icon(showDetails ? Icons.expand_less : Icons.expand_more),
+                const Text('Details', style: TextStyle(fontSize: 13)),
+                Icon(
+                  showDetails ? Icons.expand_less : Icons.expand_more,
+                  size: 20,
+                ),
               ],
             ),
           ),
@@ -1436,6 +1378,7 @@ class ChannelActions extends StatelessWidget {
     required this.onBeepAll,
     required this.record,
     this.mute,
+    this.history,
   });
   final VoidCallback onRingAll;
   final VoidCallback onBeepAll;
@@ -1443,6 +1386,9 @@ class ChannelActions extends StatelessWidget {
 
   /// Hold-to-mute button (v1.9.5).
   final Widget? mute;
+
+  /// The History button with its unread dot (v2.3.0).
+  final Widget? history;
 
   @override
   Widget build(BuildContext context) {
@@ -1454,8 +1400,9 @@ class ChannelActions extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 6),
       child: Wrap(
         alignment: WrapAlignment.center,
+        crossAxisAlignment: WrapCrossAlignment.center,
         spacing: 6,
-        runSpacing: 4,
+        runSpacing: 2,
         children: [
           OutlinedButton.icon(
             style: style,
@@ -1471,6 +1418,7 @@ class ChannelActions extends StatelessWidget {
           ),
           record,
           ?mute,
+          ?history,
         ],
       ),
     );
