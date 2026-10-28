@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../geo.dart';
 import '../imports/geo_import.dart';
+import '../nav/trail_graph.dart';
 import 'drive_nav.dart';
 import 'road_router.dart';
 
@@ -11,7 +12,7 @@ class DriveSession extends ChangeNotifier {
     required this.target,
     required this.name,
     required this.route,
-    required bool imperial,
+    required this.imperial,
     this.hikeTo,
     this.hikeName = '',
   }) : follower = DriveFollower(route),
@@ -19,6 +20,7 @@ class DriveSession extends ChangeNotifier {
 
   final GeoPoint target;
   final String name;
+  final bool imperial;
   DriveRoute route;
   final DriveFollower follower;
   final VoicePrompter voice;
@@ -26,6 +28,11 @@ class DriveSession extends ChangeNotifier {
   /// "Drive to trailhead, then hike": where to walk to after arriving.
   final GeoPoint? hikeTo;
   final String hikeName;
+
+  /// v2.1.0: the walking leg planned ahead (shown on the map and in the
+  /// combined distance and time). Null when it is planned on arrival.
+  TrailRoute? hikePreview;
+  String hikeNote = '';
 
   DriveState? state;
   GeoPoint? me;

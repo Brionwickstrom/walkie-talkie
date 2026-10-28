@@ -2,6 +2,9 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+
+import '../trip/map_net.dart' show MapNetState;
+
 import 'package:flutter/services.dart';
 
 import '../app/walkie_controller.dart';
@@ -875,4 +878,57 @@ Future<String?> askText(
     ),
   );
   return ok == true ? ctrl.text : null;
+}
+
+/// "Online" / "Weak signal" / "Offline maps": how the map features are
+/// getting their data right now (v2.1.0). Tap to check again.
+class MapNetChip extends StatelessWidget {
+  const MapNetChip({super.key, required this.state, required this.onTap});
+  final MapNetState state;
+  final VoidCallback onTap;
+
+  static String labelOf(MapNetState s) => switch (s) {
+    MapNetState.online => 'Online',
+    MapNetState.weak => 'Weak signal',
+    MapNetState.offline => 'Offline maps',
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final (color, icon) = switch (state) {
+      MapNetState.online => (Colors.green.shade700, Icons.cloud_done),
+      MapNetState.weak => (Colors.amber.shade800, Icons.cloud_queue),
+      MapNetState.offline => (Colors.blueGrey.shade700, Icons.cloud_off),
+    };
+    return Material(
+      color: cs.surface.withValues(alpha: 0.92),
+      shape: const StadiumBorder(),
+      elevation: 2,
+      child: InkWell(
+        key: const Key('netChip'),
+        customBorder: const StadiumBorder(),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 18, color: color),
+              const SizedBox(width: 4),
+              Text(
+                labelOf(state),
+                key: const Key('netChipText'),
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: cs.onSurface,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }

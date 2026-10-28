@@ -8,6 +8,7 @@ import '../search/fetch.dart';
 import '../search/rate_limiter.dart';
 import 'road_data.dart' show RoadRules;
 import 'road_router.dart';
+import '../nav/valhalla.dart';
 
 /// Why an online route was not made.
 enum OnlineFail {
@@ -41,6 +42,7 @@ class OnlineRouter {
     RateLimiter? limiter,
     this.endpoints = defaultEndpoints,
     this.timeout = const Duration(seconds: 7),
+    this.valhallaAuto = false,
     DateTime Function()? clock,
   }) : limiter = limiter ?? RateLimiter(const Duration(milliseconds: 1100)),
        _clock = clock ?? DateTime.now;
@@ -57,6 +59,10 @@ class OnlineRouter {
 
   /// The whole wait, all servers together.
   final Duration timeout;
+
+  /// v2.1.0: when the OSRM servers answer with an error, ask Valhalla
+  /// (valhalla1.openstreetmap.de, car) as a second opinion.
+  final bool valhallaAuto;
   final DateTime Function() _clock;
 
   /// Farther than this from a road the server knows: not covered.
@@ -95,9 +101,11 @@ class OnlineRouter {
     String name = '',
     bool imperial = true,
     double? course,
+    Duration? timeout,
   }) async {
+    final budget = timeout ?? this.timeout;
     final start = _clock();
-    Duration left() => timeout - _clock().difference(start);
+    Duration left() => budget - _clock().difference(start);
     OnlineRouteException? last;
     for (final base in endpoints) {
       final t = left();
@@ -135,6 +143,47 @@ class OnlineRouter {
       } on OnlineRouteException catch (e) {
         if (e.kind == OnlineFail.noRoute) rethrow;
         last = e;
+      }
+    }
+    if (valhallaAuto && last != null && left() > const Duration(seconds: 1)) {
+      final t = left();
+      try {
+        final body = await limiter
+            .run(
+              () => fetch(
+                FetchRequest(
+                  Uri.parse(Valhalla.endpoint),
+                  method: 'POST',
+                  headers: const {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                  },
+                  body: Valhalla.autoBody(from, to),
+                  timeout: t,
+                  maxBytes: 6 * 1024 * 1024,
+                ),
+              ),
+            )
+            .timeout(t);
+        return Valhalla.parseDrive(
+          body,
+          from: from,
+          to: to,
+          name: name,
+          imperial: imperial,
+        );
+      } on TimeoutException {
+        throw OnlineRouteException(
+          OnlineFail.noSignal,
+          'No answer from the online router (weak signal?).',
+        );
+      } on NoSignalException {
+        throw OnlineRouteException(OnlineFail.noSignal, 'No signal.');
+      } on OnlineRouteException catch (e) {
+        if (e.kind == OnlineFail.noRoute) rethrow;
+        last = e;
+      } catch (e) {
+        last = OnlineRouteException(OnlineFail.failed, '$e');
       }
     }
     throw last ??

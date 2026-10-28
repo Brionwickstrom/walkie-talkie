@@ -98,6 +98,11 @@ String buildTrailQuery(
     if (areaId != null) 'area($areaId)->.a;',
     '(',
     '  way["highway"~"^(path|footway|track|bridleway)\$"]["name"]$f;',
+    // v2.1.0: unnamed paths and tracks too, so offline trail routes have no
+    // gaps (not sidewalks or crossings, not private ground).
+    '  way["highway"~"^(path|footway|track|bridleway)\$"][!"name"]'
+        '["footway"!~"^(sidewalk|crossing)\$"]'
+        '["access"!~"^(private|no)\$"]$f;',
     '  relation["route"="hiking"]$f;',
     ')->.t;',
     '.t out geom qt;',
@@ -271,9 +276,17 @@ OverpassResult overpassToData(Object? json, {String name = 'OSM trails'}) {
         continue;
       }
       if (inRoute.contains(id)) continue;
-      final n = _trailName(tags);
+      var n = _trailName(tags);
       final g = _geom(e['geometry']);
-      if (n.isEmpty || g.length < 2) continue;
+      if (g.length < 2) continue;
+      if (n.isEmpty) {
+        // v2.1.0: unnamed ways are kept (the graph needs them).
+        if (hw == 'footway' &&
+            (tags['footway'] == 'sidewalk' || tags['footway'] == 'crossing')) {
+          continue;
+        }
+        n = 'Unnamed $hw';
+      }
       (ways[n] ??= []).add(g);
       continue;
     }

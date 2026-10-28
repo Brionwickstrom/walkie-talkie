@@ -7,6 +7,7 @@ import '../geo.dart';
 import '../imports/geo_import.dart';
 import '../imports/map_layers.dart';
 import '../slope.dart';
+import 'gentle_route.dart' show SlopeLimit;
 import 'navigator.dart';
 import 'trail_graph.dart';
 
@@ -45,6 +46,13 @@ class NavSession extends ChangeNotifier {
 
   /// Why compass mode / how the route was made ("No trails here").
   String note;
+
+  /// v2.1.0: the slope limit of a gentle (terrain-only) route, for
+  /// re-planning when you wander off it. Null for other routes.
+  SlopeLimit? gentleLimit;
+
+  /// A terrain-only suggestion: the straight line is drawn next to it.
+  bool get terrainOnly => route?.terrainOnly ?? false;
 
   NavState? state;
   GeoPoint? me;

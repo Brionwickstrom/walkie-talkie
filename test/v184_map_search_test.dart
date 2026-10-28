@@ -69,6 +69,8 @@ void main() {
         'Observation Trail #132',
         'Forest Road 5401',
         'Trapper Creek Trail #192',
+        // v2.1.0: unnamed paths are kept (offline routing needs them).
+        'Unnamed path',
       ]);
       // Two route members touching end to end (one reversed) -> one line.
       expect(d.lines[0].points, hasLength(3));
@@ -76,8 +78,9 @@ void main() {
       expect(d.lines[0].points.last, const GeoPoint(45.89, -121.97));
       // Two ways of the same trail -> one line of 4 points.
       expect(d.lines[2].points, hasLength(4));
-      expect(r.trails, 3);
-      // Unnamed path and a street are left out.
+      expect(r.trails, 4);
+      // The unnamed path is now kept; a street is still left out.
+      expect(d.lines[3].points.length, greaterThanOrEqualTo(2));
       expect(names.any((n) => n.contains('Main')), isFalse);
 
       final kinds = d.waypoints.map((w) => w.kind).toList();
@@ -344,7 +347,7 @@ void main() {
         final r = overpassToData(fixture(), name: 'Trapper Creek trails');
         final l = await layers.addTrail(r.data, attribution: osmAttribution);
         expect(layers.index.hasLayer(l.id), isTrue);
-        expect(layers.index.size, 3 + 7);
+        expect(layers.index.size, 4 + 7);
 
         var hits = layers.index.search('trapper');
         expect(hits.first.title, 'Trapper Creek Trail #192');
@@ -610,7 +613,7 @@ void main() {
 
       expect(got.layer.name, 'Trapper Creek Wilderness trails');
       expect(got.layer.attribution, osmAttribution);
-      expect(got.result.trails, 3);
+      expect(got.result.trails, 4);
       expect(got.trimmed, isFalse);
       expect(t.layers.trails.single.id, got.layer.id);
       // Indexed on import: found with no network.
@@ -657,7 +660,7 @@ void main() {
     );
     final r = await c.trails(const GeoBounds(45.85, -122.03, 45.92, -121.93));
     expect(n, 2);
-    expect(r.trails, 3);
+    expect(r.trails, 4);
     final limited = OverpassClient(
       limiter: instantLimiter(),
       fetch: (r) async => throw FetchException('slow down', status: 429),

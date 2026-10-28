@@ -56,8 +56,17 @@ class RouteJunction {
   final String next;
 
   String get text => [
-    turn == 'straight' ? 'Go straight' : 'Turn $turn',
-    if (next.isNotEmpty) 'onto $next',
+    turn == 'straight'
+        ? 'Go straight'
+        : turn == 'around'
+        ? 'Turn around'
+        : turn.startsWith('slight')
+        ? 'Bear ${turn.substring(7)}'
+        : 'Turn $turn',
+    if (next.isNotEmpty && turn != 'around')
+      next.startsWith('Unnamed ')
+          ? 'onto the ${next.toLowerCase()}'
+          : 'onto $next',
   ].join(' ');
 }
 
@@ -80,6 +89,18 @@ class TrailRoute {
 
   /// Off-trail straight legs: GPS position -> trail, trail -> target.
   final double startOffM, endOffM;
+
+  /// Where the route came from (v2.1.0): '' = saved trails, 'valhalla',
+  /// 'brouter', 'osrm' = online walking routers, 'gentle' = suggested from
+  /// the terrain only (no trail or road data behind it).
+  String source = '';
+
+  /// Made by the online walking routers.
+  bool get isOnline =>
+      source == 'valhalla' || source == 'brouter' || source == 'osrm';
+
+  /// Suggested from the elevation grid only.
+  bool get terrainOnly => source == 'gentle';
 
   double get lengthM => cum.isEmpty ? 0 : cum.last;
   bool get hasElevation => ele.where((e) => e.isFinite).length >= 2;

@@ -8,6 +8,7 @@ import '../trip/drive/drive_session.dart';
 import '../trip/drive/online_router.dart';
 import '../trip/drive/road_router.dart';
 import '../trip/geo.dart';
+import '../trip/nav/trail_graph.dart' show TrailRoute, naismith;
 import '../trip/trip_controller.dart';
 import 'map_layer_widgets.dart';
 import 'nav_page.dart' show navBuzz;
@@ -96,6 +97,39 @@ List<RoadWarning> mainWarnings(DriveRoute r) => [
     if (w.kind != 'unknown' && (w.kind != 'unpaved' || w.lengthM > 1000)) w,
 ];
 
+/// "Then hike to X: 8.3 km · 2 h 10 min. Total ...": both legs of a
+/// drive-then-hike (v2.1.0). Null for a plain drive.
+String? hikeLegLine(DriveSession s, bool imperial) {
+  if (s.hikeTo == null) return null;
+  final h = s.hikePreview;
+  if (h == null) {
+    return 'Then walk to ${s.hikeName}: planned when you reach ${s.name}.';
+  }
+  final gain = h.climb().gain;
+  final ht = naismith(h.lengthM, gain);
+  final total = s.route.lengthM + h.lengthM;
+  final tt = s.route.duration + ht;
+  final up = !h.hasElevation
+      ? ''
+      : ' · up ${imperial ? '${(gain * 3.28084).round()} ft' : '${gain.round()} m'}';
+  return 'Then hike to ${s.hikeName}: '
+      '${formatDistance(h.lengthM, imperial: imperial)} · ${driveDuration(ht)}$up. '
+      'Total ${formatDistance(total, imperial: imperial)} · ${driveDuration(tt)}.';
+}
+
+/// Colour of the walking leg on the map (the drive is blue, brown or red).
+const Color hikeColor = Color(0xFF2E7D32);
+
+/// The planned walking leg on the map: green, dashed until it starts.
+Polyline hikePreviewLine(TrailRoute r) => Polyline(
+  points: [for (final p in r.points) LatLng(p.lat, p.lng)],
+  strokeWidth: 5,
+  color: hikeColor.withValues(alpha: 0.85),
+  borderStrokeWidth: 1.5,
+  borderColor: Colors.white,
+  pattern: StrokePattern.dashed(segments: const [10, 7]),
+);
+
 /// "Online route" / "Offline route", and what is not known.
 class DriveSourceLine extends StatelessWidget {
   const DriveSourceLine({super.key, required this.session, this.color});
@@ -138,6 +172,12 @@ class DriveSourceLine extends StatelessWidget {
             session.notice,
             key: const Key('driveNotice'),
             style: style?.copyWith(fontWeight: FontWeight.w600),
+          ),
+        if (hikeLegLine(session, session.imperial) != null)
+          Text(
+            hikeLegLine(session, session.imperial)!,
+            key: const Key('hikeLeg'),
+            style: style?.copyWith(color: color ?? hikeColor),
           ),
       ],
     );
@@ -460,7 +500,12 @@ class _DriveFollowPageState extends State<DriveFollowPage> {
       ),
       children: [
         ...baseTileLayers(trip),
-        PolylineLayer(polylines: driveLines(s.route)),
+        PolylineLayer(
+          polylines: [
+            ...driveLines(s.route),
+            if (s.hikePreview != null) hikePreviewLine(s.hikePreview!),
+          ],
+        ),
         MarkerLayer(
           markers: [
             Marker(

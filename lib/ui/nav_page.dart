@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../trip/geo.dart';
+import '../trip/nav/foot_router.dart' show FootRouter;
+import '../trip/nav/gentle_route.dart' show gentleLabel;
 import '../trip/nav/nav_session.dart';
 import '../trip/nav/trail_graph.dart';
 import '../trip/trip_controller.dart';
@@ -281,7 +283,24 @@ class NavFollowPage extends StatelessWidget {
                 s.note.isEmpty ? 'No elevation data for this route.' : s.note,
                 style: theme.textTheme.bodySmall,
               ),
-            if (r.startOffM > 30)
+            if (r.terrainOnly)
+              Card(
+                key: const Key('terrainOnly'),
+                color: Colors.orange.shade100,
+                child: Padding(
+                  padding: const EdgeInsets.all(10),
+                  child: Text(
+                    '$gentleLabel.\nThe plain straight line to ${s.name} is '
+                    '${formatDistance(s.straightM ?? r.lengthM, imperial: imperial)} '
+                    '${s.straightBearing == null ? '' : cardinal(s.straightBearing!)} '
+                    '(the dashed grey line on the map).',
+                    style: theme.textTheme.bodySmall,
+                  ),
+                ),
+              ),
+            if (r.isOnline)
+              Text(FootRouter.attribution, style: theme.textTheme.bodySmall),
+            if (r.startOffM > 30 && !r.isOnline)
               Text(
                 'Starts with ${formatDistance(r.startOffM, imperial: imperial)} '
                 'off trail to the nearest trail.',
@@ -290,7 +309,7 @@ class NavFollowPage extends StatelessWidget {
             if (r.endOffM > 30)
               Text(
                 'Ends with ${formatDistance(r.endOffM, imperial: imperial)} '
-                'off trail from the trail to the point.',
+                'without a mapped path to the point.',
                 style: theme.textTheme.bodySmall,
               ),
           ],
@@ -362,6 +381,9 @@ class NavFollowPage extends StatelessWidget {
     'right' => Icons.turn_right,
     'sharp left' => Icons.turn_sharp_left,
     'sharp right' => Icons.turn_sharp_right,
+    'slight left' => Icons.turn_slight_left,
+    'slight right' => Icons.turn_slight_right,
+    'around' => Icons.u_turn_left,
     _ => Icons.straight,
   };
 

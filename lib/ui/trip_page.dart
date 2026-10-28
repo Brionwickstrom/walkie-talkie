@@ -11,7 +11,10 @@ import '../app/walkie_controller.dart';
 import '../trip/geo.dart';
 import '../trip/imports/map_layers.dart';
 import '../trip/imports/map_packs.dart';
+import '../trip/map_net.dart';
+import '../trip/nav/gentle_route.dart';
 import '../trip/nav/nav_session.dart';
+import '../trip/smart_plan.dart';
 import '../trip/search/fetch.dart';
 import '../trip/search/map_search.dart';
 import '../trip/search/nominatim.dart';
@@ -34,6 +37,7 @@ import 'nav_page.dart';
 import 'network_map_page.dart';
 import 'offline_areas_page.dart';
 import 'sheets.dart';
+import 'smart_sheets.dart';
 import 'trip_widgets.dart';
 import '../platform/platform_caps.dart';
 
@@ -174,6 +178,7 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
           });
         }
         _buzz(trip);
+        _maybeHandoff(trip);
         final active = trip.sos.active;
         return TripLayout(
           full: _full,
@@ -202,6 +207,10 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
                 onFollow: () => _openFollow(trip),
               ),
             ?_packBanner(context, trip),
+            MapNetChip(
+              state: trip.mapNet.state,
+              onTap: () => _netChipTap(context, trip),
+            ),
             OfflineSaverChip(
               on: c.settings.offlineSaver,
               onTap: () => _toggleOffline(context),
@@ -243,11 +252,22 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
     final drive = trip.drive;
     final lines = <Polyline>[
       if (drive != null) ...driveLines(drive.route),
+      if (drive?.hikePreview != null) hikePreviewLine(drive!.hikePreview!),
+      if (nav != null && navRoute != null && navRoute.terrainOnly && me != null)
+        Polyline(
+          points: [ll(me.pos), ll(nav.target)],
+          strokeWidth: 3,
+          color: Colors.blueGrey,
+          pattern: StrokePattern.dashed(segments: const [10, 8]),
+        ),
       if (navRoute != null)
         Polyline(
           points: [for (final p in navRoute.points) ll(p)],
           strokeWidth: 6,
-          color: Colors.deepPurple.withValues(alpha: 0.8),
+          // Walking leg: green (the drive is blue / brown / red); a route
+          // from terrain alone is orange so it is not mistaken for a trail.
+          color: (navRoute.terrainOnly ? Colors.deepOrange : hikeColor)
+              .withValues(alpha: 0.85),
           borderStrokeWidth: 1.5,
           borderColor: Colors.white,
         ),
@@ -1336,6 +1356,234 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
   void _openFollow(TripController trip) => Navigator.of(context)
       .push(MaterialPageRoute<void>(builder: (_) => NavFollowPage(trip: trip)));
 
+  // ------------------------------------------------ smart navigation (2.1.0)
+
+  void _netChipTap(BuildContext context, TripController trip) {
+    final m = ScaffoldMessenger.maybeOf(context);
+    final st = trip.mapNet.state;
+    m?.showSnackBar(
+      SnackBar(
+        duration: const Duration(seconds: 5),
+        content: Text(switch (st) {
+          MapNetState.online =>
+            'Online: maps, search and routes come from the internet and '
+                'are kept for later.',
+          MapNetState.weak =>
+            'Weak signal: online routes get a couple of seconds, then the '
+                'saved maps are used.',
+          MapNetState.offline =>
+            'Offline maps: using what you saved on this phone. It switches '
+                'back by itself when the signal returns.',
+        }),
+      ),
+    );
+    unawaited(trip.mapNet.probeNow());
+  }
+
+  /// "Navigate here": drive, hike, or drive then hike, picked for you.
+  Future<void> _startSmart(
+    TripController trip,
+    GeoPoint to,
+    String name,
+  ) async {
+    final m = ScaffoldMessenger.maybeOf(context);
+    m?.showSnackBar(
+      const SnackBar(
+        duration: Duration(seconds: 3),
+        content: Text('Finding the best way there…'),
+      ),
+    );
+    final plan = await trip.planSmart(to, name: name);
+    if (!mounted) return;
+    m?.hideCurrentSnackBar();
+    switch (plan.kind) {
+      case SmartKind.needRoadEnd:
+        await _roadEndDialog(trip, plan, to, name);
+        return;
+      case SmartKind.noRoute:
+        await _noRouteDialog(trip, plan, to, name);
+        return;
+      default:
+        break;
+    }
+    await trip.startPlan(plan, to, name);
+    if (!mounted) return;
+    setState(() => _follow = false);
+    final pts = [
+      ...?plan.drive?.points,
+      ...?plan.hike?.points,
+      if (plan.drive == null && plan.hike == null) to,
+    ];
+    final b = boundsOfPoints(pts);
+    if (b != null) _fit(b, maxZoom: 16);
+    final imp = trip.settings.imperial;
+    final t = plan.totals;
+    final what = switch (plan.kind) {
+      SmartKind.drive => 'Driving to $name.',
+      SmartKind.hike => 'Walking to $name.',
+      _ =>
+        'Drive to ${plan.trailhead?.name ?? 'the trailhead'}, then hike '
+            'to $name.',
+    };
+    m?.showSnackBar(
+      SnackBar(
+        duration: const Duration(seconds: 9),
+        content: Text(
+          '$what Total ${formatDistance(t.metres, imperial: imp)}, about '
+          '${driveDuration(t.time)}.'
+          '${plan.message.isEmpty ? '' : ' ${plan.message}'}'
+          '${plan.hikeNote.isEmpty ? '' : ' ${plan.hikeNote}'}',
+        ),
+        action: SnackBarAction(
+          label: 'Follow',
+          onPressed: () =>
+              trip.drive != null ? _openDriveFollow(trip) : _openFollow(trip),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _noRouteDialog(
+    TripController trip,
+    SmartPlan plan,
+    GeoPoint to,
+    String name,
+  ) async {
+    final pick = await showDialog<String>(
+      context: context,
+      builder: (_) => NoRouteDialog(message: plan.message),
+    );
+    if (!mounted) return;
+    switch (pick) {
+      case 'offline':
+        _openOffline(context, trip);
+      case 'gentle':
+        await _gentleSheet(trip, to, name);
+      case 'compass':
+        await _startNav(trip, to, name, compass: true);
+    }
+  }
+
+  Future<void> _roadEndDialog(
+    TripController trip,
+    SmartPlan plan,
+    GeoPoint to,
+    String name,
+  ) async {
+    final end = plan.roadEnd;
+    final pick = await showDialog<String>(
+      context: context,
+      builder: (_) => RoadEndDialog(
+        name: name,
+        message: plan.message,
+        hasRoadEnd: end != null,
+        awayText: end == null
+            ? ''
+            : formatDistance(
+                plan.roadEndOffM ?? distanceM(end, to),
+                imperial: trip.settings.imperial,
+              ),
+      ),
+    );
+    if (!mounted) return;
+    if (pick == 'use' && end != null) {
+      final res = await trip.driveToRoadEnd(end, to, name: name);
+      if (!mounted) return;
+      final s = res.session;
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(
+          content: Text(
+            s == null ? res.message : 'Driving to the road end, then hiking.',
+          ),
+          action: s == null
+              ? null
+              : SnackBarAction(
+                  label: 'Follow',
+                  onPressed: () => _openDriveFollow(trip),
+                ),
+        ),
+      );
+    } else if (pick == 'gentle') {
+      await _gentleSheet(trip, to, name);
+    }
+  }
+
+  /// "Gentle compass route": choose how steep is too steep, then compute.
+  Future<void> _gentleSheet(
+    TripController trip,
+    GeoPoint to,
+    String name,
+  ) async {
+    final pick = await showAppSheet<SlopeLimit>(
+      context: context,
+      builder: (_) => GentleSheetBody(name: name),
+    );
+    if (pick == null || !mounted) return;
+    final m = ScaffoldMessenger.maybeOf(context);
+    m?.showSnackBar(
+      const SnackBar(
+        duration: Duration(seconds: 3),
+        content: Text('Working out a gentle route…'),
+      ),
+    );
+    final res = await trip.gentleTo(to, name: name, limit: pick);
+    if (!mounted) return;
+    setState(() => _follow = false);
+    final s = res.session;
+    final me = trip.myFix?.pos;
+    final b = s?.route != null
+        ? boundsOfPoints(s!.route!.points)
+        : (me == null ? null : boundsOfPoints([me, to]));
+    if (b != null) _fit(b, maxZoom: 16);
+    m?.hideCurrentSnackBar();
+    m?.showSnackBar(
+      SnackBar(
+        duration: const Duration(seconds: 10),
+        content: Text(res.message),
+        action: s == null
+            ? null
+            : SnackBarAction(
+                label: 'Follow',
+                onPressed: () => _openFollow(trip),
+              ),
+      ),
+    );
+  }
+
+  /// The drive reached the trailhead: the walk has started; say so.
+  void _maybeHandoff(TripController trip) {
+    final h = trip.handoff;
+    if (h == null || h.shown) return;
+    h.shown = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _handoffSheet(trip, h);
+    });
+  }
+
+  Future<void> _handoffSheet(TripController trip, TrailheadHandoff h) {
+    return showAppSheet<void>(
+      context: context,
+      builder: (ctx) => HandoffSheetBody(
+        handoff: h,
+        imperial: trip.settings.imperial,
+        onFollow: () {
+          Navigator.pop(ctx);
+          _openFollow(trip);
+        },
+        onRetry: () {
+          Navigator.pop(ctx);
+          trip.walkOn();
+        },
+        onGentle: () {
+          Navigator.pop(ctx);
+          final to = trip.drive?.hikeTo;
+          if (to != null) _gentleSheet(trip, to, h.targetName);
+        },
+      ),
+    );
+  }
+
   Future<void> _startNav(
     TripController trip,
     GeoPoint to,
@@ -1414,8 +1662,17 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
                 label: const Text('Navigate here'),
                 onPressed: () {
                   Navigator.pop(ctx);
-                  _startNav(trip, at, name);
+                  _startSmart(trip, at, name);
                 },
+              ),
+              Padding(
+                padding: const EdgeInsets.only(top: 2, bottom: 2),
+                child: Text(
+                  'Picks the way: drive, hike, or drive to a trailhead and '
+                  'then hike.',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(ctx).textTheme.bodySmall,
+                ),
               ),
               const SizedBox(height: 6),
               FilledButton.tonalIcon(
@@ -1441,10 +1698,20 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
               OutlinedButton.icon(
                 key: const Key('compassHere'),
                 icon: const Icon(Icons.explore),
-                label: const Text('Compass to here'),
+                label: const Text('Compass to here (straight line)'),
                 onPressed: () {
                   Navigator.pop(ctx);
                   _startNav(trip, at, name, compass: true);
+                },
+              ),
+              const SizedBox(height: 6),
+              OutlinedButton.icon(
+                key: const Key('gentleHere'),
+                icon: const Icon(Icons.terrain),
+                label: const Text('Gentle compass route'),
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  _gentleSheet(trip, at, name);
                 },
               ),
               const SizedBox(height: 6),
@@ -1593,7 +1860,7 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
                 label: const Text('Navigate here'),
                 onPressed: () {
                   Navigator.pop(ctx);
-                  _startNav(trip, p.pos, p.title);
+                  _startSmart(trip, p.pos, p.title);
                 },
               ),
               FilledButton.tonalIcon(
@@ -1606,11 +1873,21 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
                 },
               ),
               OutlinedButton.icon(
+                key: const Key('pinCompass'),
                 icon: const Icon(Icons.explore),
-                label: const Text('Compass to here'),
+                label: const Text('Compass to here (straight line)'),
                 onPressed: () {
                   Navigator.pop(ctx);
                   _startNav(trip, p.pos, p.title, compass: true);
+                },
+              ),
+              OutlinedButton.icon(
+                key: const Key('pinGentle'),
+                icon: const Icon(Icons.terrain),
+                label: const Text('Gentle compass route'),
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  _gentleSheet(trip, p.pos, p.title);
                 },
               ),
               OutlinedButton.icon(

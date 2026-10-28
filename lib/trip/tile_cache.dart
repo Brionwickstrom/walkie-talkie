@@ -456,6 +456,13 @@ class TileCache {
   /// False = never use the network (tests, airplane mode).
   bool online = true;
 
+  /// v2.1.0: the map network check says there is no signal right now: use
+  /// the saved and cached tiles at once instead of waiting for timeouts.
+  bool net = true;
+
+  /// Told how each download went (true = answered, false = no signal).
+  void Function(bool ok)? onNet;
+
   final List<OfflineRegion> regions = [];
   HttpClient? _client;
   HttpClient get _http => _client ??= (HttpClient()
@@ -506,8 +513,9 @@ class TileCache {
       }
     } catch (_) {}
     final fresh = mtime != null && DateTime.now().difference(mtime) < minFresh;
-    if (cached != null && (fresh || !online)) return cached;
-    if (!online) return null;
+    final off = !online || !net;
+    if (cached != null && (fresh || off)) return cached;
+    if (off) return null;
     final got = await _fetch(s, z, x, y, conditional: cached != null);
     if (got == null) return cached; // offline / error: stale is fine
     if (got.isEmpty && cached != null) {
@@ -546,6 +554,7 @@ class TileCache {
         } catch (_) {}
       }
       final res = await req.close().timeout(const Duration(seconds: 20));
+      onNet?.call(true);
       if (res.statusCode == 304) {
         await res.drain<void>();
         return Uint8List(0);
@@ -575,6 +584,7 @@ class TileCache {
       }
       return bytes;
     } catch (_) {
+      onNet?.call(false);
       return null;
     }
   }

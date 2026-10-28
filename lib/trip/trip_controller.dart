@@ -2,9 +2,11 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' show max;
 
 import 'package:flutter/foundation.dart';
 
+import '../app/conn_probes.dart' show probeInternet;
 import '../app/power_plan.dart';
 import '../core/transport.dart';
 import '../core/transport_manager.dart' show InboundTrip;
@@ -20,6 +22,12 @@ import 'drive/road_download.dart';
 import 'drive/road_router.dart';
 import 'drive/road_service.dart';
 import 'drive/speech.dart';
+import 'map_net.dart';
+import 'nav/foot_router.dart';
+import 'nav/gentle_route.dart';
+import 'search/trailhead_finder.dart';
+import 'slope.dart' show DemSampler;
+import 'smart_plan.dart';
 import 'imports/geo_import.dart' show ImportedWaypoint;
 import 'nav/nav_session.dart';
 import 'offline_areas.dart';
@@ -123,6 +131,7 @@ class TripController extends ChangeNotifier {
     Clock? clock,
     Fetch? fetch,
     RateLimiter? searchLimiter,
+    Future<bool> Function(Duration timeout)? netProbe,
   }) : _clock = clock ?? DateTime.now {
     sos =
         SosManager(
@@ -144,6 +153,16 @@ class TripController extends ChangeNotifier {
           _event(s.id, '${host.nameOf(s.id)} is back in contact', 'found');
     store = StoreForward(clock: _clock)..enabled = settings.baseCamp;
     tiles = TileCache(Directory('${dir.path}/tiles'), userAgent: userAgent);
+    // v2.1.0: one view of "does the internet work right now" for tiles,
+    // search, routing and rerouting.
+    mapNet = MapNet(
+      probe: netProbe ?? ((t) async => (await probeInternet(timeout: t)).ok),
+      clock: _clock,
+    );
+    tiles.onNet = (ok) => ok ? mapNet.ok() : mapNet.fail();
+    mapNet.addListener(_onNetChanged);
+    _routeLimiter =
+        searchLimiter ?? RateLimiter(const Duration(milliseconds: 1100));
     layers = MapLayers(Directory('${dir.path}/layers'), clock: _clock);
     areas = OfflineAreas(
       File('${dir.path}/offline_areas.json'),
@@ -155,8 +174,21 @@ class TripController extends ChangeNotifier {
       File('${dir.path}/weather.json'),
       userAgent: userAgent,
     );
-    final f = fetch ?? ioFetch(userAgent);
-    this.fetch = f;
+    final inner = fetch ?? ioFetch(userAgent);
+    // Every map request tells the network check how it went.
+    final f = this.fetch = (FetchRequest r) async {
+      try {
+        final b = await inner(r);
+        mapNet.ok();
+        return b;
+      } on NoSignalException {
+        mapNet.fail();
+        rethrow;
+      } on FetchException {
+        mapNet.ok(); // the server answered
+        rethrow;
+      }
+    };
     search = MapSearch(
       fetch: f,
       // Tests pass an instant limiter; the app shares the polite ones.
@@ -168,6 +200,7 @@ class TripController extends ChangeNotifier {
               'Offline search below.';
         }
         if (!tiles.online) return noSignalMessage;
+        if (mapNet.isOffline && !mapNet.allowOnline) return noSignalMessage;
         return null;
       },
     );
@@ -184,6 +217,10 @@ class TripController extends ChangeNotifier {
   late final LostContactMonitor lost;
   late final StoreForward store;
   late final TileCache tiles;
+
+  /// Online / weak / offline, for every map feature (v2.1.0).
+  late final MapNet mapNet;
+  late final RateLimiter _routeLimiter;
 
   /// Imported trails, offline MBTiles maps and park map overlays (v1.8.3).
   late final MapLayers layers;
@@ -308,6 +345,8 @@ class TripController extends ChangeNotifier {
     unawaited(speaker.stop());
     _sub?.cancel();
     _timer?.cancel();
+    mapNet.removeListener(_onNetChanged);
+    mapNet.dispose();
     tiles.close();
     layers.close();
     super.dispose();
@@ -492,6 +531,7 @@ class TripController extends ChangeNotifier {
     );
     return switch (src) {
       'dem' => '',
+      'gpx' when r.source == 'brouter' => '',
       'gpx' => 'Elevation from the GPX file.',
       _ => 'No elevation data here (save the area with Download area).',
     };
@@ -503,11 +543,20 @@ class TripController extends ChangeNotifier {
     final me = myFix?.pos;
     if (s == null || me == null || s.compass) return false;
     _lastReroute = _clock();
-    final g = await trailGraph();
-    final r = g.route(me, s.target);
-    if (r == null || nav != s) return false;
-    await _elevation(r);
-    if (nav != s || _disposed) return false;
+    TrailRoute? r;
+    if (s.route!.terrainOnly) {
+      final g = await _planGentleRoute(
+        me,
+        s.target,
+        s.gentleLimit ?? SlopeLimit.gentle,
+      );
+      r = g.plan?.route;
+    } else {
+      // Online first (v2.1.0), else the saved trails. The old route stays
+      // when neither works.
+      r = (await planWalk(me, s.target)).route;
+    }
+    if (r == null || nav != s || _disposed) return false;
     s.replaceRoute(r);
     notifyListeners();
     return true;
@@ -575,6 +624,481 @@ class TripController extends ChangeNotifier {
     return _shareData(s.asData(), s.asData().name, 0xFFE53935);
   }
 
+  // ------------------------------------------------------------ v2.1.0: smart navigation
+
+  /// The walk was started at the trailhead of a drive-then-hike (the
+  /// screen shows it once), or why it could not be.
+  TrailheadHandoff? handoff;
+
+  /// Why the last [walkTo] made no route.
+  String lastWalkMessage = '';
+
+  static const String nearestRoadName = 'the nearest road';
+
+  bool _netWasDown = false;
+  DateTime? _lastUpgrade;
+
+  /// The network check changed: tiles stop waiting for timeouts while it
+  /// is down, and a route made from saved data is refreshed online when
+  /// the signal comes back.
+  void _onNetChanged() {
+    tiles.net = !mapNet.isOffline;
+    if (_disposed) return;
+    if (mapNet.state != MapNetState.online) {
+      _netWasDown = true;
+    } else if (_netWasDown) {
+      _netWasDown = false;
+      unawaited(_upgradeRoutes());
+    }
+    notifyListeners();
+  }
+
+  /// Back online mid-route: swap a route made from saved data for an
+  /// online one, only when the online one is really there (the current
+  /// route is never dropped first).
+  Future<void> _upgradeRoutes() async {
+    final now = _clock();
+    final last = _lastUpgrade;
+    if (last != null && now.difference(last) < const Duration(seconds: 30)) {
+      return;
+    }
+    _lastUpgrade = now;
+    final d = drive;
+    if (d != null &&
+        !d.route.isOnline &&
+        !d.arrived &&
+        !d.rerouting &&
+        d.me != null &&
+        onlineRoutingAllowed) {
+      final p = await planDrive(
+        d.me!,
+        d.target,
+        name: d.name,
+        course: d.course,
+      );
+      final r = p.route;
+      if (r != null && r.isOnline && drive == d && !_disposed) {
+        d.replaceRoute(r);
+        d.notice = 'Back online: route updated.';
+        unawaited(_saveDrive());
+        notifyListeners();
+      }
+    }
+    final n = nav;
+    if (n != null &&
+        n.route != null &&
+        !n.terrainOnly &&
+        !n.route!.isOnline &&
+        n.me != null &&
+        onlineRoutingAllowed) {
+      try {
+        mapNet.attempt();
+        var r = await footRouter.route(
+          n.me!,
+          n.target,
+          timeout: mapNet.routingTimeoutOverride,
+        );
+        r = routeWithEnds(r, n.me!, n.target);
+        await _elevation(r);
+        if (nav == n && !_disposed) {
+          n.replaceRoute(r);
+          n.note = 'Back online: route updated.';
+          notifyListeners();
+        }
+      } on OnlineRouteException {
+        // keep the saved-trail route
+      }
+    }
+  }
+
+  /// A walking route from [from] to [to], never a straight line: online
+  /// first (Valhalla, then BRouter, then OSRM foot), else the trails saved
+  /// on the phone. [note] says where it came from, or why there is none.
+  Future<({TrailRoute? route, String note})> planWalk(
+    GeoPoint from,
+    GeoPoint to,
+  ) async {
+    var why = '';
+    if (onlineRoutingAllowed) {
+      mapNet.attempt();
+      try {
+        var r = await footRouter.route(
+          from,
+          to,
+          timeout: mapNet.routingTimeoutOverride,
+        );
+        if (r.startOffM > OnlineRouter.maxSnapM ||
+            r.endOffM > OnlineRouter.maxSnapM) {
+          throw OnlineRouteException(
+            OnlineFail.noRoute,
+            'No path or road near the start or the destination.',
+          );
+        }
+        r = routeWithEnds(r, from, to);
+        final e = await _elevation(r);
+        return (
+          route: r,
+          note: [
+            'Walking route, online (${footRouter.lastProvider ?? r.source}).',
+            if (r.endOffM > 40 || r.startOffM > 40)
+              'The last ${formatDistance(max(r.endOffM, r.startOffM), imperial: settings.imperial)} has no mapped path.',
+            e,
+          ].where((x) => x.isNotEmpty).join(' '),
+        );
+      } on OnlineRouteException catch (e) {
+        why = e.kind == OnlineFail.noSignal ? '' : e.message;
+      }
+    }
+    final g = await trailGraph();
+    if (!g.isEmpty) {
+      final r = g.route(from, to);
+      if (r != null) {
+        final e = await _elevation(r);
+        return (
+          route: r,
+          note: [
+            'Route along your saved trails.',
+            e,
+          ].where((x) => x.isNotEmpty).join(' '),
+        );
+      }
+      why = '$why No walking route in the saved trails.'.trim();
+    }
+    final offline = !onlineRoutingAllowed;
+    return (
+      route: null,
+      note: [
+        if (why.isNotEmpty) why,
+        offline
+            ? 'No signal, and no saved trails connect here. With signal I can '
+                  'plan the walk; to have it offline, save the area first '
+                  '(Offline areas > Save this area offline).'
+            : 'No walking route found there.',
+      ].join(' '),
+    );
+  }
+
+  /// Start walking to [to]: [planWalk], then follow it. Null (with
+  /// [lastWalkMessage]) when there is no route: a straight line is never
+  /// started by itself. [preview]: a route planned earlier, used when the
+  /// signal is gone by now.
+  Future<NavSession?> walkTo(
+    GeoPoint to, {
+    String name = 'Destination',
+    TrailRoute? preview,
+  }) async {
+    final me = myFix?.pos ?? (await host.locateOnce())?.pos;
+    if (me == null) {
+      lastWalkMessage = 'Waiting for GPS. Try again in a moment.';
+      return null;
+    }
+    final w = await planWalk(me, to);
+    var r = w.route;
+    var note = w.note;
+    if (r == null && preview != null && preview.points.length > 1) {
+      r = routeWithEnds(preview, me, to);
+      note = 'No signal here, so this is the walking route planned earlier.';
+    }
+    if (r == null) {
+      lastWalkMessage = note;
+      return null;
+    }
+    lastWalkMessage = '';
+    if (_disposed) return NavSession(target: to, name: name, route: r);
+    return _beginWalk(
+      me,
+      NavSession(target: to, name: name, route: r, note: note),
+    );
+  }
+
+  Future<NavSession> _beginWalk(GeoPoint me, NavSession s) async {
+    nav?.dispose();
+    nav = s;
+    _saidJunction = null;
+    if (drive != null) {
+      drive!.dispose();
+      drive = null;
+      try {
+        if (await _driveFile.exists()) await _driveFile.delete();
+      } catch (_) {}
+    }
+    final r = s.route;
+    if (settings.trailVoice && r != null) {
+      final first = r.junctions.firstOrNull;
+      unawaited(
+        _say(
+          '${r.terrainOnly ? 'Terrain route' : 'Route'} to ${s.name}, '
+          '${spokenDistance(r.lengthM, imperial: settings.imperial)}'
+          '${first == null ? '' : '. First: ${first.text}'}.',
+        ),
+      );
+    }
+    s.update(me);
+    await _updateLocationNeed();
+    notifyListeners();
+    return s;
+  }
+
+  /// Walk to the destination when [straightM] or less away.
+  static const double walkOnlyM = 1500;
+
+  /// A destination this close to a road (m) is reached by driving.
+  static const double onRoadM = 150;
+
+  /// "Navigate here": picks the way (v2.1.0). Close by: walk. On a road:
+  /// drive. Off the roads: drive to the best trailhead, then walk. Online
+  /// first, the saved roads and trails when there is no signal. Never a
+  /// straight line unless asked for.
+  Future<SmartPlan> planSmart(
+    GeoPoint to, {
+    String name = 'Destination',
+  }) async {
+    final me = myFix?.pos ?? (await host.locateOnce())?.pos;
+    if (me == null) {
+      return const SmartPlan(
+        SmartKind.noRoute,
+        message: 'Waiting for GPS. Try again in a moment.',
+      );
+    }
+    final straight = distanceM(me, to);
+    if (straight < 30) {
+      return const SmartPlan(
+        SmartKind.noRoute,
+        message: 'You are already there.',
+      );
+    }
+    if (straight <= walkOnlyM) {
+      final w = await planWalk(me, to);
+      return w.route == null
+          ? SmartPlan(SmartKind.noRoute, message: w.note)
+          : SmartPlan(SmartKind.hike, hike: w.route, hikeNote: w.note);
+    }
+    final p = await planDrive(me, to, name: name);
+    final dr = p.route;
+    if (dr != null && dr.endOffM <= onRoadM) {
+      return SmartPlan(SmartKind.drive, drive: dr, message: p.message);
+    }
+    final th = await _planTrailhead(me, to, name, dr, p.message);
+    if (th.kind == SmartKind.noRoute && dr == null) {
+      // Maybe we are already out on the trails: try walking all the way.
+      final w = await planWalk(me, to);
+      if (w.route != null) {
+        return SmartPlan(SmartKind.hike, hike: w.route, hikeNote: w.note);
+      }
+      return SmartPlan(
+        SmartKind.noRoute,
+        message: [p.message, th.message].where((x) => x.isNotEmpty).join(' '),
+      );
+    }
+    return th;
+  }
+
+  /// Drive to a trailhead near [to], then walk. Online: OpenStreetMap
+  /// trailheads and parking (Overpass, with Photon and Nominatim as
+  /// backups); offline: trailhead pins and trails saved on the phone.
+  Future<SmartPlan> _planTrailhead(
+    GeoPoint me,
+    GeoPoint to,
+    String name,
+    DriveRoute? direct,
+    String driveMsg,
+  ) async {
+    final notes = <String>[];
+    var cands = <TrailheadCandidate>[];
+    if (onlineRoutingAllowed) {
+      mapNet.attempt();
+      final t = await trailheadFinder.find(to);
+      cands = [...t.found];
+      if (t.note.isNotEmpty) notes.add(t.note);
+      if (t.found.isEmpty && (t.overpassFailed || t.noSignal)) {
+        notes.add(
+          t.noSignal
+              ? 'The trailhead lookup got no answer (weak signal?).'
+              : 'The trailhead lookup servers did not answer.',
+        );
+      }
+    }
+    final saved = await trailheadFor(to);
+    if (saved != null && saved.name != nearestRoadName) {
+      final c = TrailheadCandidate(
+        name: saved.name,
+        pos: saved.at,
+        kind: 'trailhead',
+        source: 'saved',
+        distToTargetM: distanceM(saved.at, to),
+      );
+      if (!cands.any((x) => distanceM(x.pos, c.pos) < 80)) cands.add(c);
+    }
+    // Several to choose from: the one with the shortest walk wins.
+    if (cands.length > 1) {
+      final scored = <(TrailheadCandidate, double)>[];
+      for (final c in cands.take(3)) {
+        final w = await planWalk(c.pos, to);
+        scored.add((c, w.route?.lengthM ?? c.distToTargetM * 1.6));
+      }
+      scored.sort((a, b) => a.$2.compareTo(b.$2));
+      cands = [for (final x in scored) x.$1, ...cands.skip(3)];
+    }
+    for (final c in cands.take(4)) {
+      final dp = await planDrive(me, c.pos, name: c.name);
+      final dr = dp.route;
+      if (dr == null || dr.endOffM > 400) continue; // no road to it
+      final w = await planWalk(c.pos, to);
+      return SmartPlan(
+        SmartKind.driveThenHike,
+        drive: dr,
+        hike: w.route,
+        trailhead: c,
+        hikeNote: w.route == null ? '' : w.note,
+        hikePending: w.route == null,
+        message: [
+          ...notes,
+          dp.message,
+          if (w.route == null)
+            'The walk from the trailhead is planned when you get there.',
+        ].where((x) => x.isNotEmpty).join(' '),
+      );
+    }
+    // No usable trailhead: offer the closest road end.
+    GeoPoint? end;
+    double? off;
+    if (direct != null) {
+      end = direct.points.last;
+      off = direct.endOffM;
+    } else if (layers.roads.isNotEmpty) {
+      await _loadRoads();
+      final sn = await roads.snap(to, maxM: 10000);
+      if (sn != null) {
+        end = sn.pos;
+        off = sn.distM;
+      }
+    }
+    final base = [
+      "I couldn't find a trailhead near $name.",
+      ...notes.where(
+        (n) => n.contains('did not answer') || n.contains('no answer'),
+      ),
+    ].join(' ');
+    if (end != null) {
+      return SmartPlan(
+        SmartKind.needRoadEnd,
+        roadEnd: end,
+        roadEndOffM: off,
+        message:
+            '$base The closest road I know ends '
+            '${formatDistance(off ?? 0, imperial: settings.imperial)} from '
+            'there. Which road end should I take you to?',
+      );
+    }
+    return SmartPlan(
+      SmartKind.noRoute,
+      message: [driveMsg, base].where((x) => x.isNotEmpty).join(' '),
+    );
+  }
+
+  /// Start a plan made by [planSmart].
+  Future<void> startPlan(SmartPlan p, GeoPoint to, String name) async {
+    if (!p.ok) return;
+    final me = myFix?.pos ?? (await host.locateOnce())?.pos;
+    if (me == null || _disposed) return;
+    switch (p.kind) {
+      case SmartKind.drive:
+        await _beginDrive(me, to, name, p.drive!, p.message);
+      case SmartKind.hike:
+        await _beginWalk(
+          me,
+          NavSession(target: to, name: name, route: p.hike, note: p.hikeNote),
+        );
+      case SmartKind.driveThenHike:
+        final th = p.trailhead!;
+        await _beginDrive(
+          me,
+          th.pos,
+          th.name,
+          p.drive!,
+          p.message,
+          hikeTo: to,
+          hikeName: name,
+          hikePreview: p.hike,
+          hikeNote: p.hikeNote,
+        );
+      default:
+        break;
+    }
+  }
+
+  /// "Navigate here": plan and start.
+  Future<SmartPlan> navigateSmart(
+    GeoPoint to, {
+    String name = 'Destination',
+  }) async {
+    final p = await planSmart(to, name: name);
+    await startPlan(p, to, name);
+    return p;
+  }
+
+  /// After "Which road end?": drive to [end], then walk to [to].
+  Future<({DriveSession? session, String message})> driveToRoadEnd(
+    GeoPoint end,
+    GeoPoint to, {
+    String name = 'Destination',
+  }) => driveTo(end, name: 'the road end', hikeTo: to, hikeName: name);
+
+  Future<({GentlePlan? plan, String reason})> _planGentleRoute(
+    GeoPoint from,
+    GeoPoint to,
+    SlopeLimit limit,
+  ) {
+    final dem = DemSampler(
+      (z, x, y) => tiles.get(MapSource.terrarium, z, x, y),
+      keep: 64,
+    );
+    return planGentle(
+      from,
+      to,
+      dem.elevationAt,
+      limit: limit,
+      trails: graphLinesOf(layers),
+    );
+  }
+
+  /// "Gentle compass route" (v2.1.0): an off-trail line from the elevation
+  /// grid that avoids steep ground and prefers trails running your way.
+  /// With no elevation data it falls back to the plain compass, saying so.
+  Future<({NavSession? session, String message})> gentleTo(
+    GeoPoint to, {
+    String name = 'Destination',
+    SlopeLimit limit = SlopeLimit.gentle,
+  }) async {
+    final me = myFix?.pos ?? (await host.locateOnce())?.pos;
+    if (me == null) {
+      return (
+        session: null,
+        message: 'Waiting for GPS. Try again in a moment.',
+      );
+    }
+    final res = await _planGentleRoute(me, to, limit);
+    final plan = res.plan;
+    if (plan == null) {
+      if (res.reason.startsWith('You are already')) {
+        return (session: null, message: res.reason);
+      }
+      final s = await navigateTo(to, name: name, compass: true);
+      s.note = '${res.reason} Showing the plain compass line instead.';
+      notifyListeners();
+      return (session: s, message: s.note);
+    }
+    if (_disposed) return (session: null, message: '');
+    final s = NavSession(
+      target: to,
+      name: name,
+      route: plan.route,
+      note: '$gentleLabel. ${plan.summary(imperial: settings.imperial)}',
+    )..gentleLimit = limit;
+    await _beginWalk(me, s);
+    return (session: s, message: s.note);
+  }
+
   // ------------------------------------------------------------ driving
 
   /// "Drive here" in progress (v1.9.2), null when not driving.
@@ -585,7 +1109,20 @@ class TripController extends ChangeNotifier {
 
   /// Online directions while there is signal (v1.9.3); tests swap in one
   /// with a fake [Fetch].
-  late OnlineRouter onlineRouter = OnlineRouter(fetch: fetch);
+  late OnlineRouter onlineRouter = OnlineRouter(
+    fetch: fetch,
+    limiter: _routeLimiter,
+    valhallaAuto: true,
+  );
+
+  /// Online walking routes (v2.1.0): Valhalla, BRouter, OSRM foot.
+  late FootRouter footRouter = FootRouter(fetch: fetch, limiter: _routeLimiter);
+
+  /// Trailheads and parking near a trail destination (v2.1.0).
+  late TrailheadFinder trailheadFinder = TrailheadFinder(
+    fetch: fetch,
+    limiter: _routeLimiter,
+  );
 
   /// Spoken directions (the phone's offline text-to-speech).
   Speaker speaker = TtsSpeaker();
@@ -598,7 +1135,8 @@ class TripController extends ChangeNotifier {
 
   /// Online directions may be tried (not in Offline power save, not
   /// told there is no network).
-  bool get onlineRoutingAllowed => plan.mapTileDownloads && tiles.online;
+  bool get onlineRoutingAllowed =>
+      plan.mapTileDownloads && tiles.online && mapNet.allowOnline;
 
   Future<void> _loadRoads() {
     final paths = [for (final l in layers.roads) layers.fileOf(l).path]..sort();
@@ -628,12 +1166,14 @@ class TripController extends ChangeNotifier {
     final haveRoads = layers.roads.isNotEmpty;
     if (onlineRoutingAllowed) {
       try {
+        mapNet.attempt();
         final r = await onlineRouter.route(
           from,
           to,
           name: name,
           imperial: settings.imperial,
           course: course,
+          timeout: mapNet.routingTimeoutOverride,
         );
         final c = await _checkOnline(r);
         if (c.locked && haveRoads) {
@@ -760,25 +1300,54 @@ class TripController extends ChangeNotifier {
     final r = p.route;
     if (r == null) return (session: null, message: p.message);
     if (_disposed) return (session: null, message: '');
-    final s = DriveSession(
-      target: to,
-      name: name,
-      route: r,
-      imperial: settings.imperial,
+    final s = await _beginDrive(
+      me,
+      to,
+      name,
+      r,
+      p.message,
       hikeTo: hikeTo,
       hikeName: hikeName,
-    )..notice = p.message;
+    );
+    return (session: s, message: p.message);
+  }
+
+  /// Start following a planned driving route.
+  Future<DriveSession> _beginDrive(
+    GeoPoint me,
+    GeoPoint to,
+    String name,
+    DriveRoute r,
+    String message, {
+    GeoPoint? hikeTo,
+    String hikeName = '',
+    TrailRoute? hikePreview,
+    String hikeNote = '',
+  }) async {
+    final s =
+        DriveSession(
+            target: to,
+            name: name,
+            route: r,
+            imperial: settings.imperial,
+            hikeTo: hikeTo,
+            hikeName: hikeName,
+          )
+          ..notice = message
+          ..hikePreview = hikePreview
+          ..hikeNote = hikeNote;
     nav?.dispose();
     nav = null;
     drive?.dispose();
     drive = s;
     _lastDriveReroute = null;
+    handoff = null;
     final f = myFix;
     _speakDrive(s.update(me, speed: f?.speedMps, at: f?.at).say);
     await _saveDrive();
     await _updateLocationNeed();
     notifyListeners();
-    return (session: s, message: p.message);
+    return s;
   }
 
   void _speakDrive(String? text) {
@@ -872,7 +1441,7 @@ class TripController extends ChangeNotifier {
       final hike = s.hikeTo;
       if (hike != null) {
         _speakDrive('Now walk to ${s.hikeName}.');
-        unawaited(walkOn());
+        unawaited(_handoffToHike(s));
       } else {
         host.notify('Arrived', 'You reached ${s.name}.');
       }
@@ -902,7 +1471,35 @@ class TripController extends ChangeNotifier {
     if (s == null) return null;
     final to = s.hikeTo ?? s.target;
     final name = s.hikeTo != null ? s.hikeName : s.name;
-    return navigateTo(to, name: name);
+    final w = await walkTo(to, name: name);
+    if (w == null && drive == s) {
+      handoff = TrailheadHandoff(
+        trailheadName: s.name,
+        targetName: name,
+        at: _clock(),
+        message: lastWalkMessage,
+      );
+      notifyListeners();
+    }
+    return w;
+  }
+
+  /// Reached the trailhead of a drive-then-hike: plan the walk from here,
+  /// start it, and tell the screen to show the handoff.
+  Future<void> _handoffToHike(DriveSession s) async {
+    final to = s.hikeTo;
+    if (to == null) return;
+    final name = s.hikeName;
+    final w = await walkTo(to, name: name, preview: s.hikePreview);
+    if (_disposed) return;
+    handoff = TrailheadHandoff(
+      trailheadName: s.name,
+      targetName: name,
+      at: _clock(),
+      route: w?.route,
+      message: w == null ? lastWalkMessage : w.note,
+    );
+    notifyListeners();
   }
 
   /// "Drive to trailhead, then hike": the trailhead to drive to for
@@ -1359,6 +1956,7 @@ class TripController extends ChangeNotifier {
     final now = _clock();
     sos.tick();
     _ticks++;
+    mapNet.tick(onScreen: _onScreen, routing: nav != null || drive != null);
     if (settings.tripMode) {
       final every = checkInMinutesNow;
       if (every > 0 && myFix != null) {
