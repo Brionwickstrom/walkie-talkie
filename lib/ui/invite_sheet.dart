@@ -125,8 +125,8 @@ class InviteView extends StatelessWidget {
           title: Text('Join $channelLabel'),
           subtitle: Text(
             isPrivate
-                ? 'Includes the passcode of this private channel.'
-                : 'Public channel: anyone on it can hear you.',
+                ? 'Includes the passcode of this private group.'
+                : 'Open channel: anyone on it can hear you.',
           ),
         ),
         CheckboxListTile(
@@ -136,7 +136,7 @@ class InviteView extends StatelessWidget {
           onChanged: (v) => onFriend(v ?? false),
           title: const Text('Add me as a friend'),
           subtitle: const Text(
-            'Private, end-to-end encrypted talk and chat from anywhere. '
+            'Direct chat: end-to-end encrypted talk and text from anywhere. '
             'Works for 1 hour.',
           ),
         ),
@@ -152,7 +152,7 @@ class InviteView extends StatelessWidget {
                 children: [
                   const Text(
                     'This QR code and link contain the passcode of your '
-                    'private channel. Anyone who sees or gets them can join '
+                    'private group. Anyone who sees or gets them can join '
                     'and listen. Only share with people you trust, and not '
                     'in public posts.',
                   ),
@@ -301,7 +301,7 @@ class _InviteConfirmDialogState extends State<InviteConfirmDialog> {
               value: _join,
               onChanged: (v) => setState(() => _join = v ?? false),
               title: Text(
-                'Join CH ${inv.channel}${inv.isPrivate ? ' (private)' : ''}',
+                'Join CH ${inv.channel}${inv.isPrivate ? ' (private group)' : ''}',
               ),
               subtitle: Text(
                 'You leave ${widget.currentChannel}.'

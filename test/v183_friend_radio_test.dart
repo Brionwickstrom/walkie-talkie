@@ -230,8 +230,8 @@ void main() {
       // No live private talk over LoRa.
       expect(a.links.canTalkLive(bob), isFalse);
       expect(
-        friendStatusLineFor(a.links.statusOf(bob), clock.now),
-        startsWith('Connected privately via radio (slow)'),
+        friendStatusLineFor(a.links.statusOf(bob), clock.now, name: 'Bob'),
+        'Connected to Bob · only you two can read this · via radio, slow',
       );
     });
 
@@ -464,8 +464,8 @@ void main() {
       expect(got.single.hops, greaterThan(1));
       expect(links.pathTo(bob)!.kind, FriendPathKind.mesh);
       expect(
-        friendStatusLineFor(links.statusOf(bob), clock.now),
-        startsWith('Connected privately via phone mesh'),
+        friendStatusLineFor(links.statusOf(bob), clock.now, name: 'Bob'),
+        'Connected to Bob · only you two can read this',
       );
       // With no direct link, our replies go back through the mesh.
       ble.sent.clear();
@@ -571,19 +571,20 @@ void main() {
       hops: hops,
     );
 
-    String line() => friendStatusLineFor(a.statusOf(bob), now);
+    String line() => friendStatusLineFor(a.statusOf(bob), now, name: 'Bob');
 
     test('never heard: not connected yet, messages wait', () {
-      expect(line(), 'Not connected privately yet · messages wait up to 24 h');
+      expect(
+        line(),
+        "Bob is out of reach · your messages will send when they're back "
+        '(up to 24 h)',
+      );
       expect(a.isOnline(bob), isFalse);
     });
 
     test('heard on Bluetooth: connected via Bluetooth', () {
       a.handle(from(TransportKind.ble, 1));
-      expect(
-        line(),
-        'Connected privately via Bluetooth · end-to-end encrypted',
-      );
+      expect(line(), 'Connected to Bob · only you two can read this');
     });
 
     test('lost beacons while the phone is still heard on Bluetooth stay '
@@ -593,7 +594,7 @@ void main() {
       expect(a.isOnline(bob), isFalse); // old rule would say "not"
       far.heard.add((TransportKind.ble, bob)); // its channel hellos arrive
       expect(a.isOnline(bob), isTrue);
-      expect(line(), startsWith('Connected privately via Bluetooth'));
+      expect(line(), startsWith('Connected to Bob'));
       now = now.add(const Duration(seconds: 40)); // > 60 s: trust ends
       expect(a.isOnline(bob), isFalse);
     });
@@ -603,16 +604,12 @@ void main() {
       radio.up = false;
       now = now.add(const Duration(seconds: 30));
       expect(a.isOnline(bob), isFalse);
-      expect(
-        line(),
-        'Connected privately via Bluetooth · last heard 30 s ago, '
-        'reconnecting',
-      );
+      expect(line(), 'Reconnecting to Bob · only you two can read this');
       now = now.add(const Duration(minutes: 3));
       expect(
         line(),
-        'Not connected privately · last heard 3 min ago · messages wait up '
-        'to 24 h',
+        'Bob is out of reach (last heard 3 min ago) · your messages will '
+        "send when they're back (up to 24 h)",
       );
     });
 
@@ -621,10 +618,13 @@ void main() {
       a.handle(from(TransportKind.ble, 1, hops: 3));
       radio.up = false; // no direct link
       expect(a.pathTo(bob)!.kind, FriendPathKind.mesh);
-      expect(line(), startsWith('Connected privately via phone mesh (3 hops)'));
+      expect(line(), 'Connected to Bob · only you two can read this');
       far.neighbours = false;
       far.radio = true;
-      expect(line(), startsWith('Connected privately via radio (slow)'));
+      expect(
+        line(),
+        'Connected to Bob · only you two can read this · via radio, slow',
+      );
       expect(a.canTalkLive(bob), isFalse);
     });
 
@@ -644,22 +644,22 @@ void main() {
     test('pure line: every path label', () {
       final t = DateTime(2026);
       String l(FriendPath p) =>
-          friendStatusLineFor(FriendLinkStatus(path: p), t);
+          friendStatusLineFor(FriendLinkStatus(path: p), t, name: 'Sam');
       expect(
         l(const FriendPath(FriendPathKind.direct, TransportKind.lan)),
-        'Connected privately via Wi-Fi · end-to-end encrypted',
+        'Connected to Sam · only you two can read this',
       );
       expect(
         l(const FriendPath(FriendPathKind.direct, TransportKind.internet)),
-        'Connected privately via Internet · end-to-end encrypted',
+        'Connected to Sam · only you two can read this',
       );
       expect(
         l(const FriendPath(FriendPathKind.mesh, TransportKind.ble, hops: 2)),
-        'Connected privately via phone mesh (2 hops) · end-to-end encrypted',
+        'Connected to Sam · only you two can read this',
       );
       expect(
         l(const FriendPath(FriendPathKind.radio, TransportKind.lora)),
-        'Connected privately via radio (slow) · end-to-end encrypted',
+        'Connected to Sam · only you two can read this · via radio, slow',
       );
     });
   });

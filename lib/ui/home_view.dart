@@ -1341,7 +1341,7 @@ class PrivateReplyBanner extends StatelessWidget {
                             transmitting
                                 ? '🔒 Talking privately to $name… '
                                       '(only $name hears you)'
-                                : '🔒 Private from $name: '
+                                : '🔒 Direct chat from $name: '
                                       'Hold here to reply privately',
                             style: const TextStyle(
                               color: Color(0xFF4A148C),
@@ -1360,7 +1360,7 @@ class PrivateReplyBanner extends StatelessWidget {
                 children: [
                   if (onOpenChat != null)
                     IconButton(
-                      tooltip: 'Open private chat',
+                      tooltip: 'Open Direct chat',
                       visualDensity: VisualDensity.compact,
                       icon: const Icon(
                         Icons.chat_bubble_outline,

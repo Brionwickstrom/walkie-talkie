@@ -100,7 +100,7 @@ class ChannelsView extends StatelessWidget {
               Icon(Icons.lock, color: theme.colorScheme.primary),
               const SizedBox(width: 8),
               Text(
-                'Private channels',
+                'Private groups',
                 key: const Key('private-channels-title'),
                 style: theme.textTheme.titleMedium?.copyWith(
                   fontWeight: FontWeight.w700,
@@ -114,7 +114,7 @@ class ChannelsView extends StatelessWidget {
           child: Text(
             privateRows.isEmpty
                 ? 'None yet. Only phones with the passcode can hear or see '
-                      'anything on a private channel.'
+                      'anything in a private group.'
                 : 'Encrypted: only phones with the passcode hear or see '
                       'anything.',
             style: theme.textTheme.bodySmall,
@@ -130,7 +130,7 @@ class ChannelsView extends StatelessWidget {
               FilledButton.tonalIcon(
                 key: const Key('new-private-channel'),
                 icon: const Icon(Icons.add),
-                label: const Text('New private channel'),
+                label: const Text('New private group'),
                 onPressed: onNewPrivate,
               ),
               OutlinedButton.icon(
@@ -240,7 +240,9 @@ Future<void> showNewPrivateChannelSheet(
   final free = c.freeChannelForPrivate();
   if (free == null) {
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('All 16 channels are private already.')),
+      const SnackBar(
+        content: Text('All 16 channels are private groups already.'),
+      ),
     );
     return;
   }
@@ -272,7 +274,7 @@ Future<void> showNewPrivateChannelSheet(
                     const Icon(Icons.lock),
                     const SizedBox(width: 8),
                     Text(
-                      'New private channel',
+                      'New private group',
                       style: theme.textTheme.titleLarge,
                     ),
                   ],
@@ -407,10 +409,7 @@ Future<void> showJoinPrivateSheet(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  'Join a private channel',
-                  style: theme.textTheme.titleLarge,
-                ),
+                Text('Join a private group', style: theme.textTheme.titleLarge),
                 const SizedBox(height: 12),
                 FilledButton.icon(
                   key: const Key('join-private-scan'),
@@ -525,7 +524,7 @@ class UnknownListenerCard extends StatelessWidget {
           ),
         ),
         subtitle: Text(
-          'Connected to this private channel without showing up. Tap '
+          'Connected to this private group without showing up. Tap '
           'for what to do.',
           style: TextStyle(color: theme.colorScheme.onErrorContainer),
         ),
@@ -550,18 +549,18 @@ Future<void> explainUnknownListener(
       isPrivate
           ? 'The internet relay has $count more '
                 '${count == 1 ? 'connection' : 'connections'} in this '
-                "private channel's room than the people you can see. Without "
+                "private group's room than the people you can see. Without "
                 'the passcode it only gets scrambled data, and the updated '
                 'relay stops sending anything to a connection that stays '
                 "silent. If you think someone has the passcode who "
-                "shouldn't, ${isAdmin ? 'remove them (long-press their name), or make a new private channel and share the new QR.' : 'ask the admin to remove them, or make a new private channel together.'}"
+                "shouldn't, ${isAdmin ? 'remove them (long-press their name), or make a new private group and share the new QR.' : 'ask the admin to remove them, or make a new private group together.'}"
                 '\n\nIt can also be a phone that just lost signal; '
                 'that clears in about a minute.'
           : 'This open channel has $count more '
                 '${count == 1 ? 'connection' : 'connections'} on the '
                 'internet relay than the people you can see. Open channels '
                 'are not encrypted, so anyone can listen. Use a private '
-                'channel for anything you want to keep private.',
+                'group for anything you want to keep private.',
     ),
     actions: [
       TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),

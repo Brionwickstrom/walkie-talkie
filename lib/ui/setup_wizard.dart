@@ -473,8 +473,8 @@ class _SetupWizardPageState extends State<SetupWizardPage> {
       case SetupStep.channel:
         return [
           const Text(
-            'Everyone on the same channel hears each other. A private '
-            'channel needs the same passcode on every phone.',
+            'Everyone on the same open channel hears each other. A private '
+            'group needs the same passcode on every phone.',
           ),
           const SizedBox(height: 12),
           Row(
@@ -500,12 +500,12 @@ class _SetupWizardPageState extends State<SetupWizardPage> {
             segments: const [
               ButtonSegment(
                 value: false,
-                label: Text('Public'),
+                label: Text('Open channel'),
                 icon: Icon(Icons.lock_open),
               ),
               ButtonSegment(
                 value: true,
-                label: Text('Private'),
+                label: Text('Private group'),
                 icon: Icon(Icons.lock),
               ),
             ],

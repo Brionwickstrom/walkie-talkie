@@ -6,6 +6,7 @@ import '../app/walkie_controller.dart';
 import 'chat_view.dart';
 import 'home_view.dart';
 import 'sheets.dart';
+import 'who_can_hear.dart';
 import '../platform/platform_caps.dart';
 
 /// Chat for the current channel, or with one friend (private, with a
@@ -152,6 +153,7 @@ class _ChatPageState extends State<ChatPage> {
         final old = c.peersWithoutChat;
         return Scaffold(
           appBar: AppBar(
+            bottom: whoCanHearBottom(context, AudienceInfo.ofChat(c, conv)),
             title: Text(
               friend == null
                   ? 'Chat · ${c.chatTitle(conv)}'
@@ -208,7 +210,7 @@ class _ChatPageState extends State<ChatPage> {
   }
 }
 
-/// Top of a friend chat: status, hold to talk privately, hold to record.
+/// Top of a Direct chat: status, hold to talk, hold to record.
 class FriendTalkBar extends StatelessWidget {
   const FriendTalkBar({
     super.key,
@@ -318,15 +320,15 @@ class FriendTalkBar extends StatelessWidget {
                     hearing
                         ? '$name is talking to you...'
                         : needsUpdate
-                        ? '$name needs to update to talk privately · '
-                              'voice messages work'
+                        ? '$name needs to update the app for Direct chat '
+                              'talk · voice messages work'
                         : status ??
                               (online
-                                  ? 'Connected privately'
-                                        '${via != null ? ' via $via' : ''} · '
-                                        'end-to-end encrypted'
-                                  : 'Not connected privately yet · messages '
-                                        'wait up to 24 h'),
+                                  ? 'Connected to $name · only you two can '
+                                        'read this'
+                                  : '$name is out of reach · your messages '
+                                        "will send when they're back (up to "
+                                        '24 h)'),
                     style: TextStyle(
                       color: hearing ? Colors.orange.shade800 : null,
                       fontWeight: hearing ? FontWeight.w600 : null,

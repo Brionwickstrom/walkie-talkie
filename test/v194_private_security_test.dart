@@ -695,7 +695,7 @@ void main() {
           ),
         ),
       );
-      expect(find.text('Private channels'), findsOneWidget);
+      expect(find.text('Private groups'), findsOneWidget);
       expect(find.text('Open channels'), findsOneWidget);
       expect(find.text('🏕 Family (CH 12)'), findsOneWidget);
       expect(find.byIcon(Icons.lock), findsNWidgets(3)); // title + 2 rows

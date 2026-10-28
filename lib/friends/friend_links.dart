@@ -130,29 +130,37 @@ class FriendLinkStatus {
   bool get connected => path != null;
 }
 
-/// Friend chat header line for [s] (pure, for tests). Connected over any
-/// path (direct, phone mesh, radio) says so; a friend heard within
-/// [FriendLinks.recentFor] still counts as connected over that path (the
-/// link is coming back, messages are being delivered); otherwise messages
-/// wait in the outbox.
-String friendStatusLineFor(FriendLinkStatus s, DateTime now) {
+/// Direct chat header line for [s] (pure, for tests), in plain words:
+///
+///  * connected (any path: direct, phone mesh, radio):
+///    "Connected to Sam · only you two can read this" (" · via radio, slow"
+///    over LoRa);
+///  * heard within [FriendLinks.recentFor] but not connected: the link is
+///    coming back: "Reconnecting to Sam · only you two can read this";
+///  * otherwise out of reach (also when never connected):
+///    "Sam is out of reach (last heard 3 h ago) · your messages will send
+///    when they're back (up to 24 h)".
+String friendStatusLineFor(
+  FriendLinkStatus s,
+  DateTime now, {
+  String name = 'Your friend',
+}) {
   final p = s.path;
   if (p != null) {
-    final slow = p.kind == FriendPathKind.radio ? ' (slow)' : '';
-    return 'Connected privately via ${p.label}$slow · end-to-end encrypted';
+    final slow = p.kind == FriendPathKind.radio ? ' · via radio, slow' : '';
+    return 'Connected to $name · only you two can read this$slow';
   }
   final last = s.lastHeard;
   final lp = s.lastPath;
+  const wait = "your messages will send when they're back (up to 24 h)";
   if (last != null && lp != null) {
     final ago = now.difference(last);
     if (ago <= FriendLinks.recentFor) {
-      return 'Connected privately via ${lp.label} · last heard '
-          '${_ago(ago)} ago, reconnecting';
+      return 'Reconnecting to $name · only you two can read this';
     }
-    return 'Not connected privately · last heard ${_ago(ago)} ago · '
-        'messages wait up to 24 h';
+    return '$name is out of reach (last heard ${_ago(ago)} ago) · $wait';
   }
-  return 'Not connected privately yet · messages wait up to 24 h';
+  return '$name is out of reach · $wait';
 }
 
 String _ago(Duration d) {

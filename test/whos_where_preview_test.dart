@@ -143,7 +143,7 @@ void main() {
     await tester.drag(find.byType(ListView), const Offset(0, -2000));
     await tester.pump(const Duration(milliseconds: 300));
     expect(tester.takeException(), isNull);
-    expect(find.text('Private'), findsOneWidget);
+    expect(find.text('Private group'), findsOneWidget);
     expect(find.text('Mom'), findsOneWidget, reason: 'friend name');
     expect(find.textContaining('CH 9'), findsNothing);
     expect(find.byKey(const Key('whosWhereShowMe')), findsOneWidget);

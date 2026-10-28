@@ -109,8 +109,8 @@ class FriendsView extends StatelessWidget {
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Text(
-              'Friends can talk and chat privately from anywhere, on any '
-              'channel, end-to-end encrypted.\n\n'
+              'Friends get a Direct chat: talk and text each other from '
+              'anywhere, on any channel, end-to-end encrypted.\n\n'
               'Add one: both open Friends, one taps "Show my code", the '
               'other "Scan a code". Or long-press someone on the main '
               'screen and tap "Add friend".',

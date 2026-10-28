@@ -60,7 +60,8 @@ class Invite {
   /// Text for the share sheet.
   String shareText() {
     final what = [
-      if (hasChannel) 'join ${isPrivate ? 'private ' : ''}channel CH $channel',
+      if (hasChannel)
+        'join ${isPrivate ? 'private group' : 'open channel'} CH $channel',
       if (hasFriend) 'add me as a friend',
     ].join(' and ');
     return 'Walkie Talkie: $what.\n'
@@ -111,7 +112,7 @@ class Invite {
 
   static Invite? _legacyPrivate(String text) {
     final m = RegExp(
-      r'Walkie Talkie private channel\s*:?\s*CH\s*(\d+)\s*,?\s*passcode:\s*(.+)',
+      r'Walkie Talkie private (?:channel|group)\s*:?\s*CH\s*(\d+)\s*,?\s*passcode:\s*(.+)',
       caseSensitive: false,
       dotAll: true,
     ).firstMatch(text);

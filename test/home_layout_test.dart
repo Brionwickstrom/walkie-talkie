@@ -494,7 +494,7 @@ void main() {
     await pumpAt(tester, chatApp(friend: true));
     expect(tester.takeException(), isNull);
     expect(find.text('Hold to talk'), findsOneWidget);
-    expect(find.textContaining('end-to-end'), findsOneWidget);
+    expect(find.textContaining('only you two can read this'), findsOneWidget);
   });
 
   testWidgets('chat at 2x text still lays out', (tester) async {
@@ -554,7 +554,7 @@ void main() {
     }
     expect(
       find.text(
-        '🔒 Private from Ginger Snap Dragon 🐉: Hold here to reply privately',
+        '🔒 Direct chat from Ginger Snap Dragon 🐉: Hold here to reply privately',
       ),
       findsOneWidget,
     );

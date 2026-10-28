@@ -587,7 +587,7 @@ class WalkieController extends ChangeNotifier {
         await settingsStore.save(settings);
       }
       await setChannel(ch);
-      done.add('joined CH $ch${inv.isPrivate ? ' (private)' : ''}');
+      done.add('joined CH $ch${inv.isPrivate ? ' (private group)' : ''}');
     }
     if (addFriend && inv.friendCode != null) {
       final err = await addFriendFromQr(inv.friendCode!);
@@ -1208,14 +1208,15 @@ class WalkieController extends ChangeNotifier {
   /// Current channel is private (encrypted, passcode protected).
   bool get isPrivate => manager.isPrivate;
 
-  /// e.g. "CH 3" or "CH 3 (private)".
-  String get channelLabel => 'CH $channel${isPrivate ? ' (private)' : ''}';
+  /// e.g. "CH 3" or "CH 3 (private group)".
+  String get channelLabel =>
+      'CH $channel${isPrivate ? ' (private group)' : ''}';
 
   /// Label for a scope stored with a ring / message.
   String labelFor(int scope) {
-    if (scope == friendScope) return 'private (friend)';
+    if (scope == friendScope) return 'Direct chat';
     if (!TransportManager.isPrivateScope(scope)) return 'CH $scope';
-    return scope == this.scope ? channelLabel : 'a private channel';
+    return scope == this.scope ? channelLabel : 'a private group';
   }
 
   /// Channel number to show / switch to for [scope] (private scopes are
@@ -2747,7 +2748,7 @@ class WalkieController extends ChangeNotifier {
   Future<String?> linkMeshChannel(int ch, MeshLink link, {String? name}) async {
     if (ch < 1 || ch > 16) return 'Pick a channel 1-16.';
     if (settings.isPrivate(ch)) {
-      return 'Private Walkie channels cannot be shared with Meshtastic.';
+      return 'Private groups cannot be shared with Meshtastic.';
     }
     final other = walkieChannelFor(link.ref);
     if (other != null && other != ch) {
@@ -3478,8 +3479,11 @@ class WalkieController extends ChangeNotifier {
   String? friendVia(int id) => friendLinks.pathTo(id)?.label;
 
   /// Friend chat header line (v1.8.3, see [friendStatusLineFor]).
-  String friendStatusLine(int id) =>
-      friendStatusLineFor(friendLinks.statusOf(id), DateTime.now());
+  String friendStatusLine(int id) => friendStatusLineFor(
+    friendLinks.statusOf(id),
+    DateTime.now(),
+    name: friendName(id),
+  );
 
   /// Not reachable now but heard privately within the last two minutes.
   bool friendRecentlyHeard(int id) {
@@ -3697,17 +3701,19 @@ class WalkieController extends ChangeNotifier {
               ? '${friendName(id)} is only reachable over the radio: send a '
                     'voice message (up to 8 s) instead.'
               : friendLinks.isFriend(id)
-              ? 'Not connected privately yet: ${friendName(id)} is not '
-                    'reachable. Send a voice message instead.'
-              : 'Not connected privately yet: you are not friends on both '
-                    'phones.',
+              ? '${friendName(id)} is out of reach. Send a voice message '
+                    "instead: it will send when they're back."
+              : 'No Direct chat with ${friendName(id)} yet: you are not '
+                    'friends on both phones.',
         );
         return;
       }
       if (friendLinks.needsUpdate(id)) {
         // Older apps answer private talk with their big button, which
         // goes to the whole channel.
-        _notice('${friendName(id)} needs to update to talk privately.');
+        _notice(
+          '${friendName(id)} needs to update the app to use Direct chat talk.',
+        );
         return;
       }
       privateTalkTo = id;
@@ -3898,8 +3904,8 @@ class WalkieController extends ChangeNotifier {
     if (!quiet) {
       if (friend != null && !friendLinks.isOnline(friend)) {
         _notice(
-          '${friendName(friend)} is offline: it is sent when they are back '
-          '(up to 24 h).',
+          "${friendName(friend)} is out of reach: your message will send when "
+          "they're back (up to 24 h).",
         );
       } else if (friend == null && e.recipients.isEmpty) {
         _notice(
@@ -4097,7 +4103,7 @@ class WalkieController extends ChangeNotifier {
       } else {
         await bridge.showInfo(
           nid: 0x20000 + (a.sender & 0xFFFF),
-          title: friend ? '$name (private)' : '$name on ${chatTitle(conv)}',
+          title: friend ? '$name (Direct chat)' : '$name on ${chatTitle(conv)}',
           text: what.length > 120 ? '${what.substring(0, 120)}...' : what,
         );
       }
@@ -4135,7 +4141,7 @@ class WalkieController extends ChangeNotifier {
     _joinQuietUntil = DateTime.now().add(const Duration(seconds: 8));
     debugLog.add(
       'channel',
-      'CH $ch${key != null ? ' (private, room ${RelayTransport.roomFor(manager.scope)})' : ''}',
+      'CH $ch${key != null ? ' (private group, room ${RelayTransport.roomFor(manager.scope)})' : ''}',
     );
     whosWhere.announceSoon();
     _left.clear(); // a private switch forgets everyone; not "left"

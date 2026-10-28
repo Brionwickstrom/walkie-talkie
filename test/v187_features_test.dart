@@ -582,7 +582,7 @@ void main() {
       await t.tap(find.text('open'));
       await t.pumpAndSettle();
       expect(find.text('Invite from Bandit'), findsOneWidget);
-      expect(find.text('Join CH 4 (private)'), findsOneWidget);
+      expect(find.text('Join CH 4 (private group)'), findsOneWidget);
       await t.tap(find.byKey(const Key('invite-add-friend')));
       await t.pump();
       await t.tap(find.byKey(const Key('invite-accept')));
@@ -639,7 +639,7 @@ void main() {
       await t.tap(find.byKey(const Key('setup-next')));
       await t.pumpAndSettle();
       // Channel: private with a too-short passcode is refused.
-      await t.tap(find.text('Private'));
+      await t.tap(find.text('Private group'));
       await t.pumpAndSettle();
       await t.enterText(find.byKey(const Key('setup-passcode')), 'abc');
       await t.tap(find.byKey(const Key('setup-next')));

@@ -81,7 +81,7 @@ class GatewayConfig {
     "Radios: add one entry per radio. USB: {\\"name\\": \\"...\\", \\"serial\\": \\"auto\\"} or a path like /dev/ttyACM0.",
     "Wi-Fi / network radio: {\\"name\\": \\"Van radio\\", \\"tcp\\": \\"192.168.1.50:4403\\"}.",
     "Turn one off without deleting it: \\"enabled\\": false.",
-    "Radios and rooms are picked up within 15 s, no restart needed. Private channels join on their own when their LoRa traffic is heard.",
+    "Radios and rooms are picked up within 15 s, no restart needed. Private groups join on their own when their LoRa traffic is heard.",
     "Optional meshChannels: {\\"5\\": {\\"name\\": \\"Trail\\", \\"hash\\": 123}} sends open Walkie channel 5 on that Meshtastic channel of each radio (the app shows name and hash under Meshtastic channels). Phones with v1.9.7 tell the gateway themselves."
   ]
 }

@@ -153,7 +153,7 @@ class PersonSheetView extends StatelessWidget {
                 FilledButton.tonalIcon(
                   key: const Key('person-chat'),
                   icon: const Icon(Icons.forum),
-                  label: const Text('Private chat'),
+                  label: const Text('Direct chat'),
                   onPressed: onPrivateChat,
                 )
               else if (!p.left)

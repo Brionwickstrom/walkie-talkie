@@ -297,7 +297,7 @@ class _RadioSettingsState extends State<RadioSettings> {
               subtitle: const Text(
                 'While you have signal, phones on this channel that are on '
                 'the internet can reach radio-only people through your '
-                'radio, and the other way round. Private channels stay '
+                'radio, and the other way round. Private groups stay '
                 'encrypted. Never live talk.',
               ),
               value: c.settings.shareRadio,

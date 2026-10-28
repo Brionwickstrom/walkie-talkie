@@ -54,8 +54,9 @@ class _WhosWherePageState extends State<WhosWherePage> {
       messenger?.showSnackBar(
         SnackBar(
           content: Text(
-            'CH $ch is private on this phone, so you joined your private '
-            'CH $ch. Make it public (lock icon) to join them.',
+            'CH $ch is a private group on this phone, so you joined your '
+            'private group CH $ch. Make it an open channel (lock icon) to '
+            'join them.',
           ),
         ),
       );
@@ -210,9 +211,9 @@ class WhosWhereView extends StatelessWidget {
                 key: const Key('whosWhereShowMe'),
                 title: const Text("Show me in Who's where"),
                 subtitle: const Text(
-                  'Lets phones on other channels see your name and public '
-                  'channel. On a private channel they only see "Private" and '
-                  'your call sign, never the channel.',
+                  'Lets phones on other channels see your name and open '
+                  'channel. In a private group they only see "Private group" '
+                  'and your call sign, never the channel.',
                 ),
                 value: showMe,
                 onChanged: onShowMe,
@@ -222,7 +223,7 @@ class WhosWhereView extends StatelessWidget {
                 child: Text(
                   'Tap a channel to go there, or a person for details. Phones '
                   'on app versions before 1.8.2 only show up when they are '
-                  'nearby on a public channel or on your channel. Pull down '
+                  'nearby on an open channel or on your channel. Pull down '
                   'to refresh; hold the refresh button to also ask over the '
                   'radio.',
                   style: theme.textTheme.bodySmall,
@@ -263,10 +264,10 @@ class _GroupCard extends StatelessWidget {
     final n = g.count;
     final subtitle = switch (g.kind) {
       WhoGroupKind.mine =>
-        'You are here${g.isPrivate ? ' (private)' : ''} · $n other${n == 1 ? '' : 's'}',
+        'You are here${g.isPrivate ? ' (private group)' : ''} · $n other${n == 1 ? '' : 's'}',
       WhoGroupKind.public =>
         '$n ${n == 1 ? 'person' : 'people'}'
-            '${privateHere ? ' · public (yours is private)' : ''}',
+            '${privateHere ? ' · open channel (yours is a private group)' : ''}',
       WhoGroupKind.private => '$n · channel not shown',
       WhoGroupKind.friends => '$n online · channel not shared',
     };
@@ -332,7 +333,7 @@ class _GroupCard extends StatelessWidget {
   }
 
   static String _title(WhoGroup g) => switch (g.kind) {
-    WhoGroupKind.private => 'Private',
+    WhoGroupKind.private => 'Private group',
     WhoGroupKind.friends => 'Friends',
     _ =>
       (g.name ?? '').isNotEmpty
@@ -449,7 +450,7 @@ class WhoPersonSheet extends StatelessWidget {
     final p = person;
     final theme = Theme.of(context);
     final where = switch (group.kind) {
-      WhoGroupKind.private => 'On a private channel',
+      WhoGroupKind.private => 'In a private group',
       WhoGroupKind.friends => 'Online (channel not shared)',
       _ => 'On ${_GroupCard._title(group)}',
     };
@@ -499,8 +500,8 @@ class WhoPersonSheet extends StatelessWidget {
             )
           else if (group.kind == WhoGroupKind.private)
             Text(
-              'Private channels stay hidden. Ask them for the channel and '
-              'passcode, or add them as a friend to talk privately.',
+              'Private groups stay hidden. Ask them for the channel and '
+              'passcode, or add them as a friend for a Direct chat.',
               style: theme.textTheme.bodySmall,
             ),
         ],

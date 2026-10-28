@@ -171,9 +171,11 @@ audio. The relay scopes by channel server-side.
   messages wait in the outbox.
 * Older (1.1.x) phones ignore rings and voice messages.
 
-## Private channels and the internet relay (v1.3)
+## Private groups and the internet relay (v1.3)
 
-**Private channels.** Tap the lock next to the channel picker, type a passcode
+*Words used in the app (v2.1.1):* **Open channel** = CH 1-16, anyone on the number can hear; **Private group** = a channel locked with a passcode; **Direct chat** = one friend, only the two of you. "Privately" only ever means a Direct chat.
+
+**Private groups** (a channel locked with a passcode). Tap the lock next to the channel picker, type a passcode
 (6+ characters) and tap *Make private*. Others join by picking the same channel
 number, tapping the lock and typing the same passcode (shown as text + QR code,
 with a short "check code" that matches on every phone with the right passcode).
@@ -187,14 +189,14 @@ with a short "check code" that matches on every phone with the right passcode).
   121 bytes so a sealed chunk still fits one 185-MTU packet.
 * Frames that fail to decrypt are dropped silently; private phones ignore plain
   frames and public phones ignore sealed ones (v1.2 phones do not know type 4).
-* Voice messages recorded on a private channel are only sent while on that
-  same private channel.
+* Voice messages recorded on a private group are only sent while on that
+  same private group.
 
 **Relay.** `relay/` is a standalone pure-Dart server (Dockerfile, `PORT` env,
 `GET /healthz`, WebSocket on `/ws?ch=<room>&id=<hex>`), deployed on Render via
 `render.yaml` (`brion-walkie-relay`). It also runs in Synology Container
 Manager unchanged. Limits: 4 KB max message, ~150 msg/s and 64 KB/s per socket,
-silent sockets dropped after 3 min, max 64 per room. Private channels use room
+silent sockets dropped after 3 min, max 64 per room. Private groups use room
 `p<tag>`, so the relay only ever sees ciphertext.
 
 The app keeps an ordered list of relays (default since v1.8.8: the home relay
@@ -217,7 +219,7 @@ played live with the app open (app closed, you were talking) counts as
 "not heard" and is badged. The home screen shows a "recent" strip (tap to
 play / pause, "Missed" plays all unheard oldest first); History has
 1x / 1.5x / 2x (pitch kept, WSOLA in `lib/audio/time_stretch.dart`),
-play all missed, swipe to delete, mark all heard, clear. Private channels
+play all missed, swipe to delete, mark all heard, clear. Private groups
 are stored under their own scope and only show while on that private
 channel. Limitation: stored unencrypted in app-private storage.
 
@@ -259,7 +261,7 @@ The 20-35 % saving shown in Settings is an estimate.
 
 ## Friends, chat, photos, location, channel names, moderation (v1.5)
 
-### Friends and private 1:1 talk
+### Friends and Direct chat (1:1 talk)
 * **Add a friend** two ways: long-press someone on the main screen >
   *Add friend* (they get an Accept/Decline prompt), or in *Friends* one phone
   taps *Show my code* and the other *Scan a code* (QR, valid 10 minutes;
@@ -279,7 +281,7 @@ The 20-35 % saving shown in Settings is an estimate.
 
 ### Chat, photos and location
 * Chat bubble icon in the top bar = chat for the current channel; each friend
-  has a private chat. Unread counts show as badges.
+  has a Direct chat. Unread counts show as badges.
 * Text, **photos** (gallery or camera, recompressed to <= 150 KB; over
   Bluetooth only a ~160 px preview is sent and marked as such) and
   **location**: one pin, or *live* for 15/30/60 min (updates every 30 s; tap
@@ -290,12 +292,12 @@ The 20-35 % saving shown in Settings is an estimate.
 
 ### Channel names, mute, block, admin
 * Tap the lock: give the channel a **name and emoji**; it is shared with
-  everyone on the channel via presence (newest wins; on private channels
+  everyone on the channel via presence (newest wins; on private groups
   only the admin's name is accepted).
 * Long-press a person: **Mute** (their live talk is not played here) or
   **Block** (nothing from them at all: talk, rings, messages, chats, friend
   traffic). Unblock in Settings > Blocked.
-* Private channels have an **admin**: tick *I'm setting up this channel* when
+* Private groups have an **admin**: tick *I'm setting up this channel* when
   making it private (or *Become admin* if nobody is). The admin can
   **Remove from channel** (everyone else gets a new random passcode,
   encrypted with the old one, and moves automatically) and turn on
@@ -317,7 +319,7 @@ decrypt).
 * Each friend uses one extra relay connection per configured relay (since
   v1.8.8 home + backup); many friends = more sockets and battery.
 * Admin is trust-on-first-use: the first phone that claims admin on a
-  private channel is accepted by the others. Anyone who knows the passcode
+  private group is accepted by the others. Anyone who knows the passcode
   could claim it first if nobody has.
 * Remove-from-channel is simple: phones out of reach at that moment (or on
   app 1.4) are not moved; give them the new passcode by hand. The removed
@@ -329,7 +331,7 @@ decrypt).
   it in the background. Location and "open in Maps" are Android-only for now.
 * Chats and photos are stored unencrypted in the app's private storage
   (at most 300 per conversation); friend keys are in app preferences.
-* Private talk to a friend is not saved in the replay history.
+* Direct chat talk to a friend is not saved in the replay history.
 * 1.4 and older phones do not see chats, names, friends or moderation.
 
 ## v1.8.9: direct phone-to-phone links over the internet
@@ -347,7 +349,7 @@ decrypt).
   other's candidates for 8 s (hole punching). The first probe that gets
   through opens the link. Every packet carries the receiver's token, so
   nobody else can inject traffic. Frames are the same bytes the relay gets
-  (sealed on private channels).
+  (sealed on private groups).
 * **Never slower:** frames go over the direct link first and through the
   relays as always; the receiver keeps the first copy (dedupe by sender +
   seq). Talk never waits for a direct link and nothing breaks when one fails
@@ -626,14 +628,14 @@ people list).
 
 * **What it shows.** Public channels: number, name/emoji and the people on
   it with their path icons (Wi-Fi, Wi-Fi Direct, Bluetooth, internet, "N
-  hops" through the phone mesh). Everyone on a private channel is listed
+  hops" through the phone mesh). Everyone on a private group is listed
   only under one **Private** group with their call sign: no channel number,
   name, emoji or key tag. Your own channel is first (marked private if it
   is; only you see that). Friends show with a star and the name you gave
   them; friends online but not in the lobby go under **Friends**.
 * **How it is discovered** (`core/lobby.dart`, `app/whos_where.dart`):
   normal presence stays inside a channel (separate relay rooms, sealed
-  hellos on private channels), so v1.8.2 adds a small public **lobby
+  hellos on private groups), so v1.8.2 adds a small public **lobby
   beacon** (frame type 7, ~30-70 bytes): call sign/name + public channel
   (+ its name/emoji), or just "private" + the call sign. It goes out every
   10 s on the local links (20 s battery saver, 60 s offline power save;
@@ -660,7 +662,7 @@ Trip message goes over whatever path reaches the person: internet relay,
 LAN, Wi-Fi Direct, Bluetooth, the phone mesh, and the Meshtastic radio
 only as the last resort, with the same fastest-path routing as talk. Trip
 packets are frame type 6 (older phones ignore them) and are sealed on
-private channels like everything else. Radio, relay and base camp options
+private groups like everything else. Radio, relay and base camp options
 stay in **Settings > Off-grid**.
 
 **Map.** `flutter_map` with OpenTopoMap (default) or OpenStreetMap, with
@@ -761,7 +763,7 @@ messages and friend (1:1 private) chats wait for a faster link.
 person; local paths are never delayed by it. LoRa frames carry the same
 mesh ids, so a copy arriving over both LoRa and Bluetooth is delivered once,
 and frames heard over LoRa are never relayed again by the phone mesh (no
-double relay). Private channels stay end-to-end encrypted: the radio only
+double relay). Private groups stay end-to-end encrypted: the radio only
 carries sealed frames. A token bucket (4 packets, then one per 8 s) and a
 priority queue (urgent > chat > voice > presence, expiring after 3 min)
 keep the channel usable.
@@ -788,7 +790,7 @@ talk on for each other so a group strung out along a trail can still talk
 - The original sender is unchanged: plain frames on the best direct link,
   no extra header, no delay. Phones close together never relay anything.
 - Packet id = 64-bit hash of the origin's encoded frame (sender + seq +
-  payload, plus the random nonce on private channels), so the direct copy
+  payload, plus the random nonce on private groups), so the direct copy
   and all relayed copies share one id. A seen-id cache (30 s, 4096 ids)
   drops duplicates; each phone relays a packet at most once, and the
   receiver keeps playing the first copy (existing per-sender dedupe).
@@ -1306,19 +1308,19 @@ Code: `lib/trip/offline_areas.dart`, `lib/trip/drive/online_router.dart`,
 Tests: `test/v193_offline_area_drive_test.dart` (`ONLINE=1` also calls the
 real router).
 
-## v1.9.4: private channels hardened, one place for them
+## v1.9.4: private groups hardened, one place for them
 
 Open channels (CH 1-16 without a passcode) work exactly as before. Private
 channels get these fixes, and everything stays compatible with older app
 versions and older relays (old phones keep working, no new steps):
 
-* **Where private channels live.** Tap the channel name in the top bar
-  ("CH 3 ▾"): the picker shows **Private channels** (lock icon, with their
-  names) at the top, with **New private channel** and **Join with a code or
+* **Where private groups live.** Tap the channel name in the top bar
+  ("CH 3 ▾"): the picker shows **Private groups** (lock icon, with their
+  names) at the top, with **New private group** and **Join with a code or
   QR** right there, and **Open channels** below. Before 1.9.4 there was one
   dropdown CH 1-16 with a small lock on private numbers, and a channel was
   made private with the lock button next to it (that still works).
-* **New private channel** fills in a strong generated passcode (12 letters
+* **New private group** fills in a strong generated passcode (12 letters
   and digits, no look-alikes), picks a free channel number (CH 16 down),
   makes you admin and opens the invite QR. A passcode you type for a NEW
   channel needs 10+ characters with 5+ different ones (no runs like
@@ -1329,7 +1331,7 @@ versions and older relays (old phones keep working, no new steps):
   claimed id, seconds idle, seconds connected) every 5 s, only to sockets
   that ask (`&r=1`; older apps never ask and ignore text anyway). The app
   compares it with the people it hears and shows **Unknown listener (n)** on
-  a private channel (and a quiet "n more connected without showing up" on
+  a private group (and a quiet "n more connected without showing up" on
   an open one). Rules (`core/listeners.dart`): connected 8 s+, and either an
   unheard id that is active, a second socket using a heard id, or silent
   for over 60 s (the relay closes dead sockets well before that). Smoothed
@@ -1340,7 +1342,7 @@ versions and older relays (old phones keep working, no new steps):
   and it stops receiving until it sends again. Text pings alone do not
   count. Open rooms, friend rooms and the lobby are unchanged.
 * **Join alert.** Settings > Privacy (and the lock sheet): "Alert when
-  someone joins" a private channel (on by default) / an open channel (off).
+  someone joins" a private group (on by default) / an open channel (off).
   A short tone (app on screen) and a note with the name; not for phones
   that were already there, came back within 30 s, or were announced in the
   last 10 min.
@@ -1356,7 +1358,7 @@ versions and older relays (old phones keep working, no new steps):
   1.9.4 only understand the old clear copy, so they get exactly what they
   got before (no worse than today); the admin's note names them, because
   the removed phone could read that copy.
-* **Direct link setup.** On private channels it was already sealed with the
+* **Direct link setup.** On private groups it was already sealed with the
   channel key (checked). Now offers/answers are also sealed to the other
   phone's own key when it has one, so a hidden listener on an open channel
   (or a removed member) does not learn addresses or link tokens; older
@@ -1365,7 +1367,7 @@ versions and older relays (old phones keep working, no new steps):
 * **Bluetooth.** Broadcast audio is only notified on our GATT server after
   some phone has written to it (every app version writes hellos). Android
   cannot notify one subscriber only, so once one real phone is connected,
-  every subscriber gets the notifications (private channels are encrypted
+  every subscriber gets the notifications (private groups are encrypted
   anyway).
 
 Limits: this protects against listening, not against a phone that has the
@@ -1383,12 +1385,12 @@ conflict). The join tone plays only while the app is on screen.
   live talk. New frame type 8 (gateway envelope, internet only; older apps
   drop it): `fromRadio` (a radio frame brought in), `toRadio` (a phone asks
   gateways to transmit a frame it already decided may use the radio, sealed
-  on private channels) and `announce` ("Home gateway", radios up). Dedupe
+  on private groups) and `announce` ("Home gateway", radios up). Dedupe
   and loop prevention by the inner frame's hash across every radio, room
   and gateway; only `toRadio` ever goes on the air, and nothing heard on
   the air goes back on it. Airtime: per-radio token bucket (4, then 1 per
   8 s), priority queue, 12 requests/min per phone, presence once per 4 min
-  per phone. Private channels: the gateway only sees ciphertext and joins a
+  per phone. Private groups: the gateway only sees ciphertext and joins a
   private room (`p` + tag) for 30 min after LoRa traffic for it is heard.
   Status: `http://<nas>:47481/healthz`.
 * **Phones sharing their radio.** A phone with a paired radio and internet
@@ -1434,7 +1436,7 @@ Tests: `test/v195_gateway_test.dart`, `test/v195_quiet_test.dart`.
   typing and under dialogs / other screens (`PushToTalkKeys`).
 * **Windows app** (`windows/`, `WalkieTalkie-Windows.zip` on the release
   next to `WalkieTalkie.apk`): internet relays, direct UDP links, the
-  local network (Wi-Fi LAN + mDNS), chat, friends, private channels, voice
+  local network (Wi-Fi LAN + mDNS), chat, friends, private groups, voice
   messages, rings, Trip map / offline areas / map packs, driving and trail
   directions with spoken turns (Windows voices), the error log in
   `%APPDATA%\Walkie Talkie\Walkie Talkie\logs`. Audio: mic through

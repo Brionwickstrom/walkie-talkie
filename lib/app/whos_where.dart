@@ -547,9 +547,9 @@ class WhoGroup {
   bool get canJump => kind == WhoGroupKind.public && channel != null;
   int get count => people.where((p) => !p.me).length;
 
-  /// "🔥 Family · CH 3", "CH 5", "Private", "Friends".
+  /// "🔥 Family · CH 3", "CH 5", "Private groups", "Friends".
   String get title => switch (kind) {
-    WhoGroupKind.private => 'Private channels',
+    WhoGroupKind.private => 'Private groups',
     WhoGroupKind.friends => 'Friends',
     _ => [
       if ((emoji ?? '').isNotEmpty) emoji!,

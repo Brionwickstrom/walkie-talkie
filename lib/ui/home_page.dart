@@ -25,6 +25,7 @@ import 'inbox_page.dart';
 import 'quiet_widgets.dart';
 import 'radio_settings.dart';
 import 'sheets.dart';
+import 'who_can_hear.dart';
 import 'trip_page.dart';
 import 'trip_widgets.dart';
 import 'whos_where_page.dart';
@@ -131,8 +132,9 @@ class _HomePageState extends State<HomePage> {
             scrollable: true,
             title: Text('${r.name} wants to be friends'),
             content: const Text(
-              'Friends can talk and chat with each other privately from '
-              'anywhere, on any channel (end-to-end encrypted).',
+              'Friends get a Direct chat: talk and text each other from '
+              'anywhere, on any channel. Only you two can read or hear it '
+              '(end-to-end encrypted).',
             ),
             actions: [
               TextButton(
@@ -487,6 +489,10 @@ class _HomePageState extends State<HomePage> {
                 ? null
                 : AppBar(
                     titleSpacing: 8,
+                    bottom: whoCanHearBottom(
+                      context,
+                      AudienceInfo.ofChannel(c),
+                    ),
                     title: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -498,8 +504,8 @@ class _HomePageState extends State<HomePage> {
                         ),
                         IconButton(
                           tooltip: c.isPrivate
-                              ? 'Private channel (tap for passcode)'
-                              : 'Make this channel private',
+                              ? 'Private group (tap for passcode)'
+                              : 'Make this channel a private group',
                           icon: c.switchingChannel
                               ? const SizedBox(
                                   width: 20,
@@ -1109,9 +1115,9 @@ class _HomePageState extends State<HomePage> {
                   title: const Text("Show me in Who's where"),
                   subtitle: const Text(
                     'Phones on other channels (nearby or online) can see '
-                    'your name and which public channel you are on. On a '
-                    'private channel they only see "Private" and your call '
-                    'sign, never the channel number or name.',
+                    'your name and which open channel you are on. In a '
+                    'private group they only see "Private group" and your '
+                    'call sign, never the channel number or name.',
                   ),
                   value: c.settings.showInWhosWhere,
                   onChanged: c.setShowInWhosWhere,
@@ -1158,9 +1164,9 @@ class _HomePageState extends State<HomePage> {
                     'With no internet or cell signal, pass talk on to phones '
                     'that are out of range of each other (up to 4 hops, '
                     'like on a hike). Phones close together still talk '
-                    'directly with no delay. Private talk stays encrypted: '
-                    'relays cannot hear it. Uses some extra battery while '
-                    'relaying.',
+                    'directly with no delay. Direct chats and private groups '
+                    'stay encrypted: relays cannot hear them. Uses some '
+                    'extra battery while relaying.',
                   ),
                   value: c.settings.relayForOthers,
                   onChanged: c.setRelayForOthers,
@@ -1300,9 +1306,7 @@ class _HomePageState extends State<HomePage> {
                 SwitchListTile(
                   key: const Key('settings-join-private'),
                   contentPadding: EdgeInsets.zero,
-                  title: const Text(
-                    'Alert when someone joins a private channel',
-                  ),
+                  title: const Text('Alert when someone joins a private group'),
                   subtitle: const Text('A short tone and their name.'),
                   value: c.settings.joinAlertPrivate,
                   onChanged: (v) => c.setJoinAlert(private: v),
@@ -1962,7 +1966,9 @@ Future<void> showPrivacySheet(BuildContext context, WalkieController c) async {
                     Icon(pass != null ? Icons.lock : Icons.lock_open),
                     const SizedBox(width: 8),
                     Text(
-                      pass != null ? 'CH $ch is private' : 'CH $ch is public',
+                      pass != null
+                          ? 'CH $ch is a private group'
+                          : 'CH $ch is an open channel',
                       style: theme.textTheme.titleLarge,
                     ),
                   ],
@@ -2008,7 +2014,7 @@ Future<void> showPrivacySheet(BuildContext context, WalkieController c) async {
                 const SizedBox(height: 12),
                 if (pass == null) ...[
                   const Text(
-                    'Set a passcode to make this channel private. Everything '
+                    'Set a passcode to make this channel a private group. Everything '
                     'on it (talk, rings, beeps, voice messages, who is here) '
                     'is encrypted. Only phones on the same channel number '
                     'with the same passcode can hear or see each other.',
@@ -2061,7 +2067,7 @@ Future<void> showPrivacySheet(BuildContext context, WalkieController c) async {
                   const SizedBox(height: 4),
                   FilledButton.icon(
                     icon: const Icon(Icons.lock),
-                    label: const Text('Make private'),
+                    label: const Text('Make private group'),
                     onPressed: () async {
                       final p = passCtl.text.trim();
                       // v1.9.4: a new channel needs a strong passcode;
@@ -2167,7 +2173,7 @@ Future<void> showPrivacySheet(BuildContext context, WalkieController c) async {
                     title: const Text('Alert when someone joins'),
                     subtitle: const Text(
                       'A short tone and a note with their name (all private '
-                      'channels).',
+                      'groups).',
                     ),
                     value: c.settings.joinAlertPrivate,
                     onChanged: (v) async {
@@ -2210,7 +2216,7 @@ Future<void> showPrivacySheet(BuildContext context, WalkieController c) async {
                   const SizedBox(height: 8),
                   OutlinedButton.icon(
                     icon: const Icon(Icons.lock_open),
-                    label: const Text('Make public again'),
+                    label: const Text('Make open channel again'),
                     onPressed: () async {
                       await c.setChannelPrivacy(ch, null);
                       setSheet(() {});
