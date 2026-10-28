@@ -75,6 +75,8 @@ class ChannelsView extends StatelessWidget {
     required this.onJoinGroup,
     this.onAcceptInvite,
     this.onDeclineInvite,
+    this.onAddPeople,
+    this.onGroupSettings,
     this.onMeshImport,
   });
 
@@ -91,6 +93,13 @@ class ChannelsView extends StatelessWidget {
   final VoidCallback onJoinGroup;
   final ValueChanged<String>? onAcceptInvite;
   final ValueChanged<String>? onDeclineInvite;
+
+  /// Add people to group [id] (v2.3.1): a person-add icon on each group.
+  final ValueChanged<String>? onAddPeople;
+
+  /// Settings of the group we are in (name, colour, code, leave...): shown
+  /// with Add people at the top while in a private group.
+  final VoidCallback? onGroupSettings;
 
   /// "Share with Meshtastic" (import a Meshtastic channel QR), v1.9.7.
   final VoidCallback? onMeshImport;
@@ -178,9 +187,19 @@ class ChannelsView extends StatelessWidget {
                   ),
                 ],
               )
-            : here
-            ? Icon(Icons.check, color: theme.colorScheme.primary)
-            : null,
+            : Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (onAddPeople != null)
+                    IconButton(
+                      key: Key('group-add-${g.id}'),
+                      tooltip: 'Add people to ${g.name}',
+                      icon: const Icon(Icons.person_add_alt_1),
+                      onPressed: () => onAddPeople!(g.id),
+                    ),
+                  if (here) Icon(Icons.check, color: theme.colorScheme.primary),
+                ],
+              ),
         selected: here,
         onTap: g.invited ? null : () => onPickGroup(g.id),
       );
@@ -190,6 +209,39 @@ class ChannelsView extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (currentGroup != null && onGroupSettings != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: FilledButton.icon(
+                    key: const Key('channels-add-people'),
+                    icon: const Icon(Icons.person_add_alt_1),
+                    label: const FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text('Add people'),
+                    ),
+                    onPressed: onAddPeople == null
+                        ? null
+                        : () => onAddPeople!(currentGroup!),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    key: const Key('channels-group-settings'),
+                    icon: const Icon(Icons.lock),
+                    label: const FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text('Group settings'),
+                    ),
+                    onPressed: onGroupSettings,
+                  ),
+                ),
+              ],
+            ),
+          ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
           child: Row(
@@ -314,7 +366,11 @@ List<GroupRow> groupRowsFor(WalkieController c) {
 }
 
 /// Open the channel picker.
-Future<void> showChannelsSheet(BuildContext context, WalkieController c) async {
+Future<void> showChannelsSheet(
+  BuildContext context,
+  WalkieController c, {
+  Future<void> Function()? onGroupSettings,
+}) async {
   final pick = await showAppSheet<Object>(
     context: context,
     scrollable: false,
@@ -335,6 +391,10 @@ Future<void> showChannelsSheet(BuildContext context, WalkieController c) async {
           onDeclineInvite: (id) async {
             await c.leaveGroup(id);
           },
+          onAddPeople: (id) => Navigator.pop(ctx, 'p:$id'),
+          onGroupSettings: onGroupSettings == null
+              ? null
+              : () => Navigator.pop(ctx, 'gs'),
           onMeshImport: c.radioPaired ? () => Navigator.pop(ctx, 'mesh') : null,
         ),
       ),
@@ -348,6 +408,13 @@ Future<void> showChannelsSheet(BuildContext context, WalkieController c) async {
     if (c.currentGroup?.id != id) await c.setGroup(id);
   } else if (pick is String && pick.startsWith('a:')) {
     await c.acceptGroupInvite(pick.substring(2));
+  } else if (pick is String && pick.startsWith('p:')) {
+    // Add people works on the group we are in: go there first.
+    final id = pick.substring(2);
+    if (c.currentGroup?.id != id) await c.setGroup(id);
+    if (context.mounted) await showAddPeopleSheet(context, c);
+  } else if (pick == 'gs') {
+    await onGroupSettings?.call();
   } else if (pick == 'new') {
     await showNewGroupSheet(context, c);
   } else if (pick == 'join') {

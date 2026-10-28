@@ -3,6 +3,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../app/walkie_controller.dart';
+import 'channels_sheet.dart';
 import 'chat_view.dart';
 import 'home_view.dart';
 import 'sheets.dart';
@@ -153,7 +154,16 @@ class _ChatPageState extends State<ChatPage> {
         final old = c.peersWithoutChat;
         return Scaffold(
           appBar: AppBar(
-            bottom: whoCanHearBottom(context, AudienceInfo.ofChat(c, conv)),
+            bottom: whoCanHearBottom(
+              context,
+              AudienceInfo.ofChat(c, conv),
+              // Only for the group we are in (its code is on this phone).
+              onAddPeople:
+                  AudienceInfo.ofChat(c, conv).kind == Audience.privateGroup &&
+                      AudienceInfo.ofChat(c, conv).members != null
+                  ? () => showAddPeopleSheet(context, c)
+                  : null,
+            ),
             title: Text(
               friend == null
                   ? 'Chat · ${c.chatTitle(conv)}'

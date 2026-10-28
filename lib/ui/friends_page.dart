@@ -42,8 +42,12 @@ class FriendsView extends StatelessWidget {
     required this.onShowCode,
     required this.onScan,
     this.onLongPress,
+    this.header,
   });
   final List<FriendItem> friends;
+
+  /// Above everything (the People tab's "N here" row, v2.3.1).
+  final Widget? header;
 
   /// (name, accept, decline)
   final List<(String, VoidCallback, VoidCallback)> requests;
@@ -57,7 +61,9 @@ class FriendsView extends StatelessWidget {
     final theme = Theme.of(context);
     final online = friends.where((f) => f.online).length;
     return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
       children: [
+        ?header,
         for (final r in requests)
           Card(
             margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
@@ -162,76 +168,60 @@ class FriendsPage extends StatelessWidget {
   final WalkieController controller;
 
   @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('Friends')),
+    body: FriendsBody(controller: controller),
+  );
+}
+
+/// The friends list bound to the controller: the Friends page and the
+/// People tab (v2.3.1) both show it.
+class FriendsBody extends StatelessWidget {
+  const FriendsBody({super.key, required this.controller, this.header});
+  final WalkieController controller;
+  final Widget? header;
+
+  @override
   Widget build(BuildContext context) {
     final c = controller;
     return ListenableBuilder(
       listenable: c,
-      builder: (context, _) => Scaffold(
-        appBar: AppBar(title: const Text('Friends')),
-        body: FriendsView(
-          friends: [
-            for (final f in c.friends)
-              FriendItem(
-                id: f.id,
-                name: f.name,
-                online: c.friendOnline(f.id),
-                via: c.friendVia(f.id),
-                unread: c.unreadFriendChat(f.id),
-                talking: c.friendsTalking.contains(f.id),
-                last: switch (c.chats?.lastOf(friendConversation(f.id))) {
-                  final m? => chatPreview(m),
-                  null => null,
-                },
-              ),
-          ],
-          requests: [
-            for (final r in List.of(c.friendRequests))
-              (
-                r.name,
-                () => answerFriendRequest(context, c, r, true),
-                () => answerFriendRequest(context, c, r, false),
-              ),
-          ],
-          onOpen: (f) => Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) =>
-                  ChatPage(controller: c, conv: friendConversation(f.id)),
+      builder: (context, _) => FriendsView(
+        header: header,
+        friends: [
+          for (final f in c.friends)
+            FriendItem(
+              id: f.id,
+              name: f.name,
+              online: c.friendOnline(f.id),
+              via: c.friendVia(f.id),
+              unread: c.unreadFriendChat(f.id),
+              talking: c.friendsTalking.contains(f.id),
+              last: switch (c.chats?.lastOf(friendConversation(f.id))) {
+                final m? => chatPreview(m),
+                null => null,
+              },
             ),
-          ),
-          onShowCode: () => showFriendCode(context, c),
-          onScan: () => scanFriendCode(context, c),
-          onLongPress: (f) => _remove(context, c, f),
-        ),
-      ),
-    );
-  }
-
-  Future<void> _remove(
-    BuildContext context,
-    WalkieController c,
-    FriendItem f,
-  ) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        scrollable: true,
-        title: Text('Remove ${f.name}?'),
-        content: const Text(
-          'You stop seeing each other in Friends. Add them again any time.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Remove'),
-          ),
         ],
+        requests: [
+          for (final r in List.of(c.friendRequests))
+            (
+              r.name,
+              () => answerFriendRequest(context, c, r, true),
+              () => answerFriendRequest(context, c, r, false),
+            ),
+        ],
+        onOpen: (f) => Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) =>
+                ChatPage(controller: c, conv: friendConversation(f.id)),
+          ),
+        ),
+        onShowCode: () => showFriendCode(context, c),
+        onScan: () => scanFriendCode(context, c),
+        onLongPress: (f) => removeFriendDialog(context, c, f),
       ),
     );
-    if (ok == true) await c.removeFriend(f.id);
   }
 }
 
@@ -432,4 +422,33 @@ class _QrScanPageState extends State<QrScanPage> {
       ),
     );
   }
+}
+
+/// Ask, then remove friend [f] (long-press in the People tab / Friends).
+Future<void> removeFriendDialog(
+  BuildContext context,
+  WalkieController c,
+  FriendItem f,
+) async {
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      scrollable: true,
+      title: Text('Remove ${f.name}?'),
+      content: const Text(
+        'You stop seeing each other in Friends. Add them again any time.',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(ctx, true),
+          child: const Text('Remove'),
+        ),
+      ],
+    ),
+  );
+  if (ok == true) await c.removeFriend(f.id);
 }

@@ -9,7 +9,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:walkie_talkie/core/transport.dart';
 import 'package:walkie_talkie/gateway/stream_wire.dart';
 import 'package:walkie_talkie/lora/meshtastic_ble.dart';
 import 'package:walkie_talkie/lora/protobuf.dart';
@@ -18,7 +17,6 @@ import 'package:walkie_talkie/platform/platform_caps.dart';
 import 'package:walkie_talkie/ui/adaptive_layout.dart';
 import 'package:walkie_talkie/ui/home_view.dart';
 import 'package:walkie_talkie/ui/trip_widgets.dart';
-import 'package:walkie_talkie/ui/whos_where_page.dart';
 import 'package:walkie_talkie/update/updater.dart';
 
 import 'home_layout_test.dart' show loadFonts, people;
@@ -26,14 +24,6 @@ import 'lora_proto_test.dart'
     show configComplete, loraConfig, myInfo, nodeInfo, packetFrom;
 
 Widget _talk() => HomeBody(
-  links: const [
-    (TransportKind.lan, TransportStatus.running),
-    (TransportKind.internet, TransportStatus.running),
-  ],
-  internet: (status: TransportStatus.running, text: 'Internet: connected'),
-  showDetails: false,
-  onToggleDetails: (_) {},
-  details: const [],
   channelLabel: 'CH 1',
   me: const PersonView(id: 0x1234, name: 'Lord of the Pings', me: true),
   people: people,
@@ -42,12 +32,10 @@ Widget _talk() => HomeBody(
   onMessage: (_) {},
   onVolume: (_) {},
   onEditMe: () {},
-  headerAction: WhosWhereButton(count: 2, onPressed: () {}),
   actions: ChannelActions(
     onRingAll: () {},
     onBeepAll: () {},
-    record: OutlinedButton(onPressed: () {}, child: const Text('Message')),
-    history: HistoryButton(unheard: 1, onOpen: () {}),
+    record: const ActionTile(icon: Icons.keyboard_voice, label: 'Message'),
   ),
   ptt: MainTalkArea(
     button: PttButton(

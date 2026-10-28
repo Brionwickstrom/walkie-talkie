@@ -1525,6 +1525,34 @@ Tests: `test/v195_gateway_test.dart`, `test/v195_quiet_test.dart`.
 Tests: `test/v197_meshtastic_import_test.dart` (vectors from the official
 apps and the Python library), `test/v195_quiet_test.dart`.
 
+## v2.3.1: A Talk screen with room to breathe, and an easier Add people
+
+The Talk screen had too many rows. Nothing was removed; things moved.
+
+- **Top bar:** a lock (tap it for the group sheet), the group or channel name
+  with its dropdown (tap it for the list of groups and channels), and Settings.
+  The name is cut with "..." when long and can never run under a button (the
+  lock is a 48 dp target on its own; a 30 character name on a 360 dp phone at
+  1.3x text is tested).
+- **Bottom bar:** Talk, Chat, People, Trip with the unread badges. Chat holds
+  this chat, Voice messages and History. People holds the count, Refresh (tap,
+  pull down, or hold for radio), Who's where and your friends.
+- **One status line** replaces "Who can hear this?" and the connection line:
+  "Private group - 3 people - Wi-Fi - backup ready". The quiet-hours moon, the
+  low-volume speaker and "Allow mobile data" show only when they apply and open
+  their own sheets. Tapping the line opens one sheet: "Who can hear this?" (with
+  Add people in a private group), the connection icons, the full connection
+  text and the technical-details switch.
+- **Add people** is easy to find: a big button in an empty private group, the
+  top of the group sheet (lock), the top of the groups list (name), a person-add
+  icon on each group in that list, and the "Who can hear this?" sheet.
+- **One row of four equal buttons:** Ring all, Beep, Message (hold to record),
+  Mute (still 2.5 s hold plus confirm).
+
+Battery: no new timers, polling or wake locks; the status line and the tabs are
+plain UI over state the app already has. Tests: `test/v231_home_page_test.dart`
+(the real Talk screen), `test/v231_talk_layout_test.dart`.
+
 ## v2.3.0: Private groups, and a tidier Talk screen
 
 **Private groups are their own thing now.** CH 1 to 16 are open channels only

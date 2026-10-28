@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../app/quiet.dart';
 import '../app/walkie_controller.dart';
+import 'home_view.dart' show ActionTile;
 import 'sheets.dart';
 
 /// Mute button on the talk screen: a plain on/off switch, no time limit.
@@ -19,6 +20,7 @@ class MuteButton extends StatefulWidget {
     required this.onUnmute,
     this.hold = QuietHours.holdToMute,
     this.compact = false,
+    this.tile = false,
     this.buttonKey = const Key('muteButton'),
   });
 
@@ -31,6 +33,9 @@ class MuteButton extends StatefulWidget {
 
   /// Short label ("Unmute") for the banner.
   final bool compact;
+
+  /// The Talk screen's equal-size action button (icon over "Mute").
+  final bool tile;
   final Key buttonKey;
 
   @override
@@ -107,6 +112,36 @@ class _MuteButtonState extends State<MuteButton>
         ],
       ),
     );
+    if (widget.tile) {
+      return Semantics(
+        label: muted ? 'Muted. Hold to unmute' : 'Mute. Hold to mute',
+        child: Listener(
+          onPointerDown: (_) {
+            _fired = false;
+            _ring.forward(from: 0);
+          },
+          onPointerUp: (_) {
+            if (!_fired) {
+              _ring.stop();
+              _ring.value = 0;
+              _hint();
+            }
+          },
+          onPointerCancel: (_) {
+            _ring.stop();
+            _ring.value = 0;
+          },
+          child: ActionTile(
+            key: widget.buttonKey,
+            icon: muted ? Icons.volume_off : Icons.volume_up,
+            iconWidget: ring,
+            label: muted ? 'Unmute' : 'Mute',
+            color: muted ? cs.errorContainer : null,
+            foreground: muted ? cs.onErrorContainer : null,
+          ),
+        ),
+      );
+    }
     final label = Text(
       muted ? (widget.compact ? 'Unmute' : 'Muted · hold to unmute') : 'Mute',
     );

@@ -9,12 +9,15 @@ import 'package:image/image.dart' as img;
 import 'package:walkie_talkie/chat/chat_body.dart';
 import 'package:walkie_talkie/chat/chat_store.dart';
 import 'package:walkie_talkie/core/transport.dart';
+import 'package:walkie_talkie/core/transport_manager.dart'
+    show ConnectionSummary;
+import 'package:walkie_talkie/ui/status_line.dart';
+import 'package:walkie_talkie/ui/who_can_hear.dart';
 import 'package:walkie_talkie/ui/chat_page.dart';
 import 'package:walkie_talkie/ui/chat_view.dart';
 import 'package:walkie_talkie/ui/friends_page.dart';
 import 'package:walkie_talkie/ui/history_page.dart';
 import 'package:walkie_talkie/ui/home_view.dart';
-import 'package:walkie_talkie/ui/whos_where_page.dart';
 
 const people = [
   PersonView(
@@ -135,49 +138,38 @@ Widget app({
   home: Scaffold(
     appBar: AppBar(
       titleSpacing: 8,
-      // Same shape as the real app bar (channel picker + lock, then
-      // chat, friends, voice messages, settings).
+      // Same shape as the real app bar (lock + channel picker, then
+      // Settings; Chat and People are in the bottom bar).
       title: Row(
-        mainAxisSize: MainAxisSize.min,
         children: [
-          DropdownButton<int>(
-            value: 16,
-            underline: const SizedBox.shrink(),
-            items: const [DropdownMenuItem(value: 16, child: Text('CH 16'))],
-            onChanged: (_) {},
-          ),
           IconButton(onPressed: () {}, icon: const Icon(Icons.lock_open)),
+          Flexible(
+            child: DropdownButton<int>(
+              value: 16,
+              underline: const SizedBox.shrink(),
+              items: const [DropdownMenuItem(value: 16, child: Text('CH 16'))],
+              onChanged: (_) {},
+            ),
+          ),
         ],
       ),
-      actions: [
-        IconButton(
-          onPressed: () {},
-          icon: const Badge(
-            label: Text('3'),
-            child: Icon(Icons.chat_bubble_outline),
-          ),
-        ),
-        IconButton(
-          onPressed: () {},
-          icon: const Badge(label: Text('1'), child: Icon(Icons.people)),
-        ),
-        IconButton(onPressed: () {}, icon: const Icon(Icons.voicemail)),
-        IconButton(onPressed: () {}, icon: const Icon(Icons.settings)),
-      ],
+      actions: [IconButton(onPressed: () {}, icon: const Icon(Icons.settings))],
     ),
     body: HomeBody(
-      links: const [
-        (TransportKind.lan, TransportStatus.running),
-        (TransportKind.ble, TransportStatus.unavailable),
-        (TransportKind.internet, TransportStatus.running),
-      ],
-      internet: (
-        status: TransportStatus.running,
-        text: 'Internet: connected via Wi-Fi',
+      status: TalkStatusLine(
+        audience: const AudienceInfo(Audience.open, channel: 1),
+        here: 4,
+        netStatus: TransportStatus.running,
+        netText: 'Internet: connected via Wi-Fi',
+        summary: const ConnectionSummary(
+          best: 'Home relay',
+          bestRtt: Duration(milliseconds: 42),
+          backups: 1,
+          checkEvery: Duration(seconds: 5),
+        ),
+        onOpen: () {},
       ),
-      showDetails: details,
-      onToggleDetails: (_) {},
-      details: const ['WiFi: running · IP 192.168.68.54/22'],
+      showDebug: details,
       channelLabel: 'CH 1',
       me: const PersonView(id: 0x1234, name: 'Lord of the Pings', me: true),
       people: peers,
@@ -186,17 +178,19 @@ Widget app({
       onMessage: (_) {},
       onVolume: (_) {},
       onEditMe: () {},
-      headerAction: WhosWhereButton(count: 5, onPressed: () {}),
       actions: ChannelActions(
         onRingAll: () {},
         onBeepAll: () {},
-        record: OutlinedButton.icon(
-          style: OutlinedButton.styleFrom(visualDensity: VisualDensity.compact),
-          onPressed: () {},
-          icon: const Icon(Icons.keyboard_voice),
-          label: const Text('Hold: message'),
+        record: const ActionTile(
+          key: Key('record'),
+          icon: Icons.keyboard_voice,
+          label: 'Message',
         ),
-        history: HistoryButton(unheard: 2, onOpen: () {}),
+        mute: const ActionTile(
+          key: Key('muteButton'),
+          icon: Icons.volume_up,
+          label: 'Mute',
+        ),
       ),
       ptt: MainTalkArea(
         replyName: replyFrom,
@@ -420,18 +414,14 @@ void main() {
   ) async {
     await pumpAt(tester, app());
     expect(tester.takeException(), isNull);
-    // You + 3 on our channel (Iceman elsewhere, Bandit left).
-    expect(find.text('4 on CH 1'), findsOneWidget);
-    // Who's where entry point with its "elsewhere" badge.
-    expect(find.byKey(const Key('whosWhereButton')), findsOneWidget);
-    expect(find.byTooltip("Who's where"), findsOneWidget);
+    // The one status line (the "N on CH 1" row is gone; the count is in
+    // the line and in the People tab).
+    expect(find.byKey(const Key('people-count')), findsNothing);
+    expect(find.textContaining('Open channel CH 1 · 4 people'), findsOneWidget);
     expect(find.text('You'), findsOneWidget);
     expect(find.text('Lord of the Pings'), findsOneWidget);
     expect(find.text('Rubber Duck'), findsOneWidget);
     // Scroll to the end: every card lays out without overflow.
-    // The recent clips are one History button (with a dot while unheard).
-    expect(find.byKey(const Key('open-history')), findsOneWidget);
-    expect(find.text('Missed'), findsNothing);
     await tester.drag(find.byType(ListView).last, const Offset(0, -2000));
     await tester.pump(const Duration(milliseconds: 300));
     expect(tester.takeException(), isNull);
@@ -447,8 +437,9 @@ void main() {
   testWidgets('empty state', (tester) async {
     await pumpAt(tester, app(peers: const []));
     expect(tester.takeException(), isNull);
-    expect(find.text('1 on CH 1'), findsOneWidget);
+    // An open channel keeps a simple note (no Add people: nothing to add).
     expect(find.textContaining('Nobody on CH 1 yet'), findsOneWidget);
+    expect(find.byKey(const Key('empty-add-people')), findsNothing);
   });
 
   testWidgets('history at 360x780 with 1.3x text', (tester) async {

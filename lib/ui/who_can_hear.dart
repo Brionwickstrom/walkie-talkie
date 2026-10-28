@@ -84,11 +84,11 @@ class AudienceInfo {
 /// the height follows the text size so large text never overflows. Tap
 /// for [showWhoCanHearSheet].
 class WhoCanHearLine extends StatelessWidget implements PreferredSizeWidget {
-  const WhoCanHearLine({super.key, required this.info, this.trailing});
+  const WhoCanHearLine({super.key, required this.info, this.onAddPeople});
   final AudienceInfo info;
 
-  /// A small chip at the end of the line (the quiet-hours moon, v2.3.0).
-  final Widget? trailing;
+  /// In a private group the sheet also offers "Add people" (v2.3.1).
+  final VoidCallback? onAddPeople;
 
   static double heightFor(BuildContext context) =>
       MediaQuery.textScalerOf(context).scale(13) + 16;
@@ -105,7 +105,8 @@ class WhoCanHearLine extends StatelessWidget implements PreferredSizeWidget {
       excludeSemantics: true,
       child: InkWell(
         key: const Key('who-can-hear'),
-        onTap: () => showWhoCanHearSheet(context, info),
+        onTap: () =>
+            showWhoCanHearSheet(context, info, onAddPeople: onAddPeople),
         child: SizedBox(
           height: heightFor(context),
           child: Padding(
@@ -125,20 +126,14 @@ class WhoCanHearLine extends StatelessWidget implements PreferredSizeWidget {
                 ),
                 const SizedBox(width: 4),
                 Icon(Icons.info_outline, size: 14, color: cs.onSurfaceVariant),
-                SizedBox(width: trailing == null ? 12 : 8),
+                const SizedBox(width: 12),
               ],
             ),
           ),
         ),
       ),
     );
-    if (trailing == null) return line;
-    return Row(
-      children: [
-        Expanded(child: line),
-        Padding(padding: const EdgeInsets.only(right: 12), child: trailing),
-      ],
-    );
+    return line;
   }
 }
 
@@ -146,10 +141,10 @@ class WhoCanHearLine extends StatelessWidget implements PreferredSizeWidget {
 PreferredSizeWidget whoCanHearBottom(
   BuildContext context,
   AudienceInfo info, {
-  Widget? trailing,
+  VoidCallback? onAddPeople,
 }) => PreferredSize(
   preferredSize: Size.fromHeight(WhoCanHearLine.heightFor(context)),
-  child: WhoCanHearLine(info: info, trailing: trailing),
+  child: WhoCanHearLine(info: info, onAddPeople: onAddPeople),
 );
 
 const _explain = {
@@ -167,15 +162,21 @@ const _explain = {
 
 /// "Who can hear this?": the three kinds side by side, the current one
 /// highlighted.
-Future<void> showWhoCanHearSheet(BuildContext context, AudienceInfo info) =>
-    showAppSheet<void>(
-      context: context,
-      builder: (ctx) => WhoCanHearSheetBody(info: info),
-    );
+Future<void> showWhoCanHearSheet(
+  BuildContext context,
+  AudienceInfo info, {
+  VoidCallback? onAddPeople,
+}) => showAppSheet<void>(
+  context: context,
+  builder: (ctx) => WhoCanHearSheetBody(info: info, onAddPeople: onAddPeople),
+);
 
 class WhoCanHearSheetBody extends StatelessWidget {
-  const WhoCanHearSheetBody({super.key, required this.info});
+  const WhoCanHearSheetBody({super.key, required this.info, this.onAddPeople});
   final AudienceInfo info;
+
+  /// Shown in a private group: closes the sheet, then runs.
+  final VoidCallback? onAddPeople;
 
   @override
   Widget build(BuildContext context) {
@@ -196,6 +197,18 @@ class WhoCanHearSheetBody extends StatelessWidget {
               key: const Key('who-can-hear-now'),
               style: theme.textTheme.bodyMedium,
             ),
+            if (info.kind == Audience.privateGroup && onAddPeople != null) ...[
+              const SizedBox(height: 12),
+              FilledButton.icon(
+                key: const Key('who-add-people'),
+                icon: const Icon(Icons.person_add_alt_1),
+                label: const Text('Add people'),
+                onPressed: () {
+                  Navigator.pop(context);
+                  onAddPeople!();
+                },
+              ),
+            ],
             const SizedBox(height: 12),
             for (final k in Audience.values)
               Padding(

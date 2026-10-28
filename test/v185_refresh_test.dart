@@ -13,7 +13,7 @@ import 'package:walkie_talkie/core/lobby.dart';
 import 'package:walkie_talkie/core/mesh.dart';
 import 'package:walkie_talkie/core/transport.dart';
 import 'package:walkie_talkie/core/transport_manager.dart';
-import 'package:walkie_talkie/ui/home_view.dart';
+import 'package:walkie_talkie/ui/people_tab.dart';
 import 'package:walkie_talkie/ui/whos_where_page.dart';
 
 import 'fake_transport.dart';
@@ -623,26 +623,22 @@ void main() {
       bool radio = false,
     }) => MaterialApp(
       home: Scaffold(
-        body: HomeBody(
-          links: const [(TransportKind.lan, TransportStatus.running)],
-          internet: (status: TransportStatus.running, text: 'Internet'),
-          showDetails: false,
-          onToggleDetails: (_) {},
+        body: PeopleTabView(
+          here: 1,
           channelLabel: 'CH 1',
-          me: const PersonView(id: 1, name: 'Me', me: true),
-          people: const [],
-          onRing: (_) {},
-          onBeep: (_) {},
-          onMessage: (_) {},
+          whosWhereCount: 0,
+          onWhosWhere: () {},
+          friends: const [],
+          onOpenFriend: (_) {},
+          onShowCode: () {},
+          onScan: () {},
           onRefresh: onRefresh,
           radioAvailable: () => radio,
-          actions: const SizedBox(),
-          ptt: const SizedBox(height: 40),
         ),
       ),
     );
 
-    testWidgets('Talk screen: button, pull and long-press refresh', (t) async {
+    testWidgets('People tab: button, pull and long-press refresh', (t) async {
       final calls = <bool>[];
       await t.pumpWidget(
         home(

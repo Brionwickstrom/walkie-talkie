@@ -58,13 +58,6 @@ void main() {
       MaterialApp(
         home: Scaffold(
           body: HomeBody(
-            links: const [(TransportKind.internet, TransportStatus.error)],
-            internet: (
-              status: TransportStatus.error,
-              text: 'Internet: offline',
-            ),
-            showDetails: false,
-            onToggleDetails: (_) {},
             channelLabel: 'CH 1',
             me: const PersonView(id: 1, name: 'Me', me: true),
             people: const [],

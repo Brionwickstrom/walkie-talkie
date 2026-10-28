@@ -14,12 +14,15 @@ import '../platform/platform_caps.dart';
 import '../update/update_ui.dart';
 import '../chat/chat_store.dart';
 import '../trip/geo.dart';
+import 'chat_hub.dart';
 import 'chat_page.dart';
 import 'friends_page.dart';
 import 'history_page.dart';
 import 'home_view.dart';
 import 'link_sheet.dart';
+import 'people_tab.dart';
 import 'person_sheet.dart';
+import 'status_line.dart';
 import 'inbox_page.dart';
 import 'quiet_widgets.dart';
 import 'radio_settings.dart';
@@ -67,13 +70,14 @@ class _HomePageState extends State<HomePage> {
   AppLifecycleListener? _lifecycle;
   DateTime _lastUpdateCheck = DateTime.now();
 
-  /// 0 = Talk, 1 = Trip.
+  /// 0 = Talk, 1 = Chat, 2 = People, 3 = Trip (v2.3.1).
   int _tab = 0;
+  static const int _tripTab = 3;
 
   /// Trip map is full screen: no app bar or tab bar (status / navigation
   /// bar insets are kept by the SafeArea).
   bool _tripFull = false;
-  bool _hideBarsFor(bool wide) => _tripFull && (wide || _tab == 1);
+  bool _hideBarsFor(bool wide) => _tripFull && (wide || _tab == _tripTab);
 
   final GlobalKey<TripPageState> _tripKey = GlobalKey();
   final Set<String> _sosShown = {};
@@ -177,7 +181,7 @@ class _HomePageState extends State<HomePage> {
         if (r.startsWith('import:')) {
           // A trail / map file opened with the app: Trip tab, import it.
           final j = jsonDecode(r.substring(7)) as Map;
-          setState(() => _tab = 1);
+          setState(() => _tab = _tripTab);
           WidgetsBinding.instance.addPostFrameCallback(
             (_) => _tripKey.currentState?.importShared(
               '${j['path']}',
@@ -241,7 +245,7 @@ class _HomePageState extends State<HomePage> {
           controller: c,
           alert: a,
           onShowMap: () {
-            setState(() => _tab = 1);
+            setState(() => _tab = _tripTab);
             final p = a.pos;
             if (p != null) {
               WidgetsBinding.instance.addPostFrameCallback(
@@ -325,6 +329,34 @@ class _HomePageState extends State<HomePage> {
           controller: c,
           onFullScreen: (v) => setState(() => _tripFull = v),
         );
+        final people = _people();
+        final here = people.where((p) => p.here).length + 1;
+        final audience = AudienceInfo.ofChannel(c);
+        final status = TalkStatusLine(
+          audience: audience,
+          here: here,
+          netStatus: c.internetStatus.status,
+          netText: c.internetStatus.text,
+          summary: c.connectionSummary,
+          quiet: c.quietStatus == null
+              ? null
+              : QuietChip(
+                  text: c.quietStatus!,
+                  muted: c.quiet.muted,
+                  onTap: () => showQuietSheet(
+                    context,
+                    text: c.quietStatus!,
+                    muted: c.quiet.muted,
+                    onUnmute: c.unmute,
+                    onSettings: () => _openSettings(context),
+                  ),
+                ),
+          volumeLow: c.volumeLow,
+          onVolumeLow: () => _raiseVolume(context),
+          mobileDataHint: c.mobileDataHint,
+          onMobileData: () => _openLinkSheet(context, TransportKind.internet),
+          onOpen: () => _openStatus(context, audience, here),
+        );
         final talk = HomeBody(
           banners: [
             if (c.playingSomething)
@@ -360,22 +392,18 @@ class _HomePageState extends State<HomePage> {
                 onDismiss: () => c.dismissRing(r),
               ),
           ],
-          links: [
-            for (final t in c.transports)
-              if (t.kind != TransportKind.lora || c.radioPaired)
-                (t.kind, t.status),
-          ],
-          internet: c.internetStatus,
-          bestPath: c.connectionSummary.text,
-          showDetails: c.settings.showDiagnostics,
-          onToggleDetails: c.setShowDiagnostics,
-          details: _detailLines(),
+          status: status,
+          showDebug: c.settings.showDiagnostics,
           channelLabel: c.isPrivate
               ? c.channelTitle
               : c.channelName == null
               ? 'CH ${c.channel}'
               : '${c.channelTitle} (CH ${c.channel})',
           isPrivate: c.isPrivate,
+          onAddPeople: c.isPrivate
+              ? () => showAddPeopleSheet(context, c)
+              : null,
+          onShareInvite: () => showInviteSheet(context, c),
           listenerWarning: c.hiddenListeners > 0
               ? UnknownListenerCard(
                   count: c.hiddenListeners,
@@ -394,18 +422,13 @@ class _HomePageState extends State<HomePage> {
             me: true,
             talking: c.transmitting,
           ),
-          people: _people(),
+          people: people,
           onRing: (p) => c.ring(toPeer: p.id),
           onBeep: (p) => c.ring(toPeer: p.id, beep: true),
           onMessage: (p) => _openRecordSheet(context, p.id, p.name),
           onVolume: (p) => _openPersonSheet(context, p),
           onRefresh: ({required bool radio}) => c.refreshPeople(radio: radio),
           radioAvailable: () => c.radioConnected,
-          onLinkTap: (k) => _openLinkSheet(context, k),
-          mobileDataHint: c.mobileDataHint,
-          cell: c.cellStatus,
-          cellLevel: c.cellInfo?.level,
-          onCellTap: () => _openCellSheet(context),
           alone: c.aloneReason,
           onAloneFix: c.openPhoneSettings,
           onConnectionTest: () => openConnectionTest(context, c),
@@ -423,8 +446,6 @@ class _HomePageState extends State<HomePage> {
                   ),
                 )
               : null,
-          volumeLow: c.volumeLow,
-          onVolumeLow: () => _raiseVolume(context),
           onEditMe: () => _openSettings(context),
           error: c.error,
           queued: c.outgoing.isNotEmpty || c.waitingForAnyone.isNotEmpty
@@ -438,25 +459,16 @@ class _HomePageState extends State<HomePage> {
                   onPressed: () => _openInbox(context),
                 )
               : null,
-          headerAction: WhosWhereButton(
-            count: c.whosWhereElsewhereCount,
-            onPressed: () => _openWhosWhere(context),
-          ),
           actions: ChannelActions(
             onRingAll: () => c.ring(),
             onBeepAll: () => c.ring(beep: true),
-            record: _RecordButton(controller: c),
+            record: _RecordButton(controller: c, tile: true),
             mute: MuteButton(
+              tile: true,
               muted: c.quiet.muted,
               onMute: c.mute,
               onUnmute: c.unmute,
             ),
-            history: c.takes.isEmpty
-                ? null
-                : HistoryButton(
-                    unheard: c.unheardTakes,
-                    onOpen: () => _openHistory(context),
-                  ),
           ),
           ptt: _mainTalk(context, pttSize),
         );
@@ -466,40 +478,23 @@ class _HomePageState extends State<HomePage> {
             appBar: hideBars
                 ? null
                 : AppBar(
-                    titleSpacing: 8,
-                    bottom: whoCanHearBottom(
-                      context,
-                      AudienceInfo.ofChannel(c),
-                      trailing: c.quietStatus == null
-                          ? null
-                          : QuietChip(
-                              text: c.quietStatus!,
-                              muted: c.quiet.muted,
-                              onTap: () => showQuietSheet(
-                                context,
-                                text: c.quietStatus!,
-                                muted: c.quiet.muted,
-                                onUnmute: c.unmute,
-                                onSettings: () => _openSettings(context),
-                              ),
-                            ),
-                    ),
+                    titleSpacing: 4,
+                    // One group-settings entry: the lock (or open-lock) opens
+                    // the group sheet with Add people at the top; the name
+                    // opens the list of groups and channels. Both live in the
+                    // title, which is flexible, so the title can never run
+                    // under the buttons on the right.
                     title: Row(
-                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        _ChannelPicker(
-                          channel: c.channel,
-                          isPrivate: c.isPrivate,
-                          emoji: c.channelName?.emoji ?? '',
-                          groupName: c.currentGroup?.name,
-                          groupEmoji: c.currentGroup?.emoji,
-                          groupColor: c.currentGroup?.color,
-                          onTap: () => showChannelsSheet(context, c),
-                        ),
                         IconButton(
+                          key: const Key('group-settings-button'),
                           tooltip: c.isPrivate
-                              ? 'Private group (tap for settings)'
+                              ? 'Group settings and Add people'
                               : 'Private groups',
+                          constraints: const BoxConstraints(
+                            minWidth: 48,
+                            minHeight: 48,
+                          ),
                           icon: c.switchingChannel
                               ? const SizedBox(
                                   width: 20,
@@ -513,43 +508,49 @@ class _HomePageState extends State<HomePage> {
                                 ),
                           onPressed: () => showPrivacySheet(context, c),
                         ),
+                        Flexible(
+                          child: _ChannelPicker(
+                            channel: c.channel,
+                            isPrivate: c.isPrivate,
+                            emoji: c.channelName?.emoji ?? '',
+                            groupName: c.currentGroup?.name,
+                            groupEmoji: c.currentGroup?.emoji,
+                            groupColor: c.currentGroup?.color,
+                            onTap: () => showChannelsSheet(
+                              context,
+                              c,
+                              onGroupSettings: () =>
+                                  showPrivacySheet(context, c),
+                            ),
+                          ),
+                        ),
                       ],
                     ),
                     actions: [
-                      IconButton(
-                        tooltip: 'Chat on this channel',
-                        icon: Badge(
-                          isLabelVisible: c.unreadChannelChat > 0,
-                          label: Text('${c.unreadChannelChat}'),
-                          child: const Icon(Icons.chat_bubble_outline),
-                        ),
-                        onPressed: () => _openChat(context, c.channelChat),
-                      ),
-                      IconButton(
-                        tooltip: 'Friends',
-                        icon: Badge(
-                          isLabelVisible:
-                              c.unreadFriendChats + c.friendRequests.length > 0,
-                          label: Text(
-                            '${c.unreadFriendChats + c.friendRequests.length}',
+                      // Phones have Chat and People in the bottom bar; the
+                      // wide layout has no bottom bar.
+                      if (wide) ...[
+                        IconButton(
+                          tooltip: 'Chat',
+                          icon: Badge(
+                            isLabelVisible: _chatBadge > 0,
+                            label: Text('$_chatBadge'),
+                            child: const Icon(Icons.chat_bubble_outline),
                           ),
-                          child: Icon(
-                            c.onlineFriends > 0
-                                ? Icons.people
-                                : Icons.people_outline,
+                          onPressed: () =>
+                              _openHub(context, 'Chat', _chatHub()),
+                        ),
+                        IconButton(
+                          tooltip: 'People',
+                          icon: Badge(
+                            isLabelVisible: _peopleBadge > 0,
+                            label: Text('$_peopleBadge'),
+                            child: const Icon(Icons.people_outline),
                           ),
+                          onPressed: () =>
+                              _openHub(context, 'People', _peopleHub()),
                         ),
-                        onPressed: () => _openFriends(context),
-                      ),
-                      IconButton(
-                        tooltip: 'Voice messages',
-                        icon: Badge(
-                          isLabelVisible: c.unplayedMessages > 0,
-                          label: Text('${c.unplayedMessages}'),
-                          child: const Icon(Icons.voicemail),
-                        ),
-                        onPressed: () => _openInbox(context),
-                      ),
+                      ],
                       IconButton(
                         tooltip: 'Settings',
                         icon: const Icon(Icons.settings),
@@ -580,6 +581,28 @@ class _HomePageState extends State<HomePage> {
                       ),
                       NavigationDestination(
                         icon: Badge(
+                          isLabelVisible: _chatBadge > 0,
+                          label: Text('$_chatBadge'),
+                          child: const Icon(Icons.chat_bubble_outline),
+                        ),
+                        selectedIcon: const Icon(Icons.chat_bubble),
+                        label: 'Chat',
+                      ),
+                      NavigationDestination(
+                        icon: Badge(
+                          isLabelVisible: _peopleBadge > 0,
+                          label: Text('$_peopleBadge'),
+                          child: Icon(
+                            c.onlineFriends > 0
+                                ? Icons.people
+                                : Icons.people_outline,
+                          ),
+                        ),
+                        selectedIcon: const Icon(Icons.people),
+                        label: 'People',
+                      ),
+                      NavigationDestination(
+                        icon: Badge(
                           isLabelVisible: _tripAlerts > 0,
                           label: Text('$_tripAlerts'),
                           child: Icon(
@@ -604,8 +627,12 @@ class _HomePageState extends State<HomePage> {
                           talk: talk,
                           trip: trip,
                         )
-                : _tab == 1
+                : _tab == _tripTab
                 ? SafeArea(child: trip)
+                : _tab == 1
+                ? SafeArea(child: _chatHub())
+                : _tab == 2
+                ? SafeArea(child: _peopleHub())
                 : SafeArea(child: talk),
           ),
         );
@@ -807,6 +834,128 @@ class _HomePageState extends State<HomePage> {
     return 'Voice messages: ${parts.join(', ')}';
   }
 
+  /// Chat tab badge: unread channel chat + voice messages not played.
+  int get _chatBadge => c.unreadChannelChat + c.unplayedMessages;
+
+  /// People tab badge: friend chats and requests waiting, and people on
+  /// other channels (the old "scan" badge).
+  int get _peopleBadge =>
+      c.unreadFriendChats + c.friendRequests.length + c.whosWhereElsewhereCount;
+
+  /// The Chat tab: this channel's chat, Voice messages, History.
+  Widget _chatHub() => ListenableBuilder(
+    listenable: c,
+    builder: (context, _) {
+      final conv = c.channelChat;
+      final last = c.chats?.lastOf(conv);
+      return ChatHubView(
+        chatTitle: 'Chat · ${c.chatTitle(conv)}',
+        chatPreview: last == null ? null : chatPreview(last),
+        chatUnread: c.unreadChannelChat,
+        onOpenChat: () => _openChat(context, conv),
+        voiceNew: c.unplayedMessages,
+        voiceWaiting: c.outgoing.length + c.waitingForAnyone.length,
+        onOpenVoice: () => _openInbox(context),
+        historyUnheard: c.unheardTakes,
+        onOpenHistory: () => _openHistory(context),
+      );
+    },
+  );
+
+  /// The People tab: who is here (Refresh, Who's where) and friends.
+  Widget _peopleHub() => ListenableBuilder(
+    listenable: c,
+    builder: (context, _) {
+      final here = _people().where((p) => p.here).length + 1;
+      return PeopleTabView(
+        here: here,
+        channelLabel: c.isPrivate
+            ? c.channelTitle
+            : c.channelName == null
+            ? 'CH ${c.channel}'
+            : '${c.channelTitle} (CH ${c.channel})',
+        whosWhereCount: c.whosWhereElsewhereCount,
+        onWhosWhere: () => _openWhosWhere(context),
+        friends: [
+          for (final f in c.friends)
+            FriendItem(
+              id: f.id,
+              name: f.name,
+              online: c.friendOnline(f.id),
+              via: c.friendVia(f.id),
+              unread: c.unreadFriendChat(f.id),
+              talking: c.friendsTalking.contains(f.id),
+              last: switch (c.chats?.lastOf(friendConversation(f.id))) {
+                final m? => chatPreview(m),
+                null => null,
+              },
+            ),
+        ],
+        requests: [
+          for (final r in List.of(c.friendRequests))
+            (
+              r.name,
+              () => answerFriendRequest(context, c, r, true),
+              () => answerFriendRequest(context, c, r, false),
+            ),
+        ],
+        onOpenFriend: (f) => _openChat(context, friendConversation(f.id)),
+        onShowCode: () => showFriendCode(context, c),
+        onScan: () => scanFriendCode(context, c),
+        onLongPressFriend: (f) => removeFriendDialog(context, c, f),
+        onRefresh: ({required bool radio}) => c.refreshPeople(radio: radio),
+        radioAvailable: () => c.radioConnected,
+      );
+    },
+  );
+
+  void _openHub(BuildContext context, String title, Widget body) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => Scaffold(
+          appBar: AppBar(title: Text(title)),
+          body: body,
+        ),
+      ),
+    );
+  }
+
+  /// The status line: one sheet with "Who can hear this?" and the full
+  /// connection details (v2.3.1).
+  Future<void> _openStatus(
+    BuildContext context,
+    AudienceInfo audience,
+    int here,
+  ) => showStatusSheet(
+    context,
+    builder: (ctx) => ListenableBuilder(
+      listenable: c,
+      builder: (ctx, _) => StatusSheetBody(
+        audience: audience,
+        onAddPeople: c.isPrivate ? () => showAddPeopleSheet(context, c) : null,
+        connection: StatusRow(
+          links: [
+            for (final t in c.transports)
+              if (t.kind != TransportKind.lora || c.radioPaired)
+                (t.kind, t.status),
+          ],
+          internet: c.internetStatus,
+          onLinkTap: (k) => _openLinkSheet(context, k),
+          mobileDataHint: c.mobileDataHint,
+          cell: c.cellStatus,
+          cellLevel: c.cellInfo?.level,
+          onCellTap: () => _openCellSheet(context),
+        ),
+        lines: [
+          c.connectionSummary.text,
+          if (c.settings.showDiagnostics) ..._detailLines(),
+        ],
+        technical: c.settings.showDiagnostics,
+        onTechnical: c.setShowDiagnostics,
+      ),
+    ),
+  );
+
   /// The amber speaker chip: raise the media volume and say why.
   Future<void> _raiseVolume(BuildContext context) async {
     final before = ((c.mediaVolume ?? 0) * 100).round();
@@ -871,12 +1020,6 @@ class _HomePageState extends State<HomePage> {
         builder: (_) => ChatPage(controller: c, conv: conv),
       ),
     );
-  }
-
-  void _openFriends(BuildContext context) {
-    Navigator.of(
-      context,
-    ).push(MaterialPageRoute<void>(builder: (_) => FriendsPage(controller: c)));
   }
 
   void _openInbox(BuildContext context) {
@@ -1797,10 +1940,14 @@ class _RecordButton extends StatelessWidget {
     required this.controller,
     this.toPeer,
     this.big = false,
+    this.tile = false,
   });
   final WalkieController controller;
   final int? toPeer;
   final bool big;
+
+  /// The equal-size "Message" button in the Talk screen's action row.
+  final bool tile;
 
   @override
   Widget build(BuildContext context) {
@@ -1811,6 +1958,42 @@ class _RecordButton extends StatelessWidget {
         ? DateTime.now().difference(rec.startedAt).inSeconds.clamp(0, 30)
         : 0;
     final cs = Theme.of(context).colorScheme;
+    if (tile) {
+      return Semantics(
+        label: 'Message. Hold to record a voice message',
+        child: Listener(
+          onPointerDown: (_) => c.startRecording(toPeer: toPeer),
+          onPointerUp: (_) {
+            final r = c.recording;
+            final quick =
+                r == null ||
+                DateTime.now().difference(r.startedAt) <
+                    const Duration(milliseconds: 600);
+            c.stopRecording(cancel: quick);
+            if (quick) {
+              ScaffoldMessenger.maybeOf(context)
+                ?..hideCurrentSnackBar()
+                ..showSnackBar(
+                  const SnackBar(
+                    duration: Duration(milliseconds: 1800),
+                    content: Text(
+                      'Hold Message and talk (up to 30 s). Let go to send.',
+                    ),
+                  ),
+                );
+            }
+          },
+          onPointerCancel: (_) => c.stopRecording(cancel: true),
+          child: ActionTile(
+            key: const Key('record'),
+            icon: mine ? Icons.fiber_manual_record : Icons.keyboard_voice,
+            label: mine ? '0:${secs.toString().padLeft(2, '0')}' : 'Message',
+            color: mine ? Colors.red : null,
+            foreground: mine ? Colors.white : null,
+          ),
+        ),
+      );
+    }
     final label = mine
         ? 'Recording 0:${secs.toString().padLeft(2, '0')} / 0:30'
         : big
@@ -1895,8 +2078,7 @@ class _ChannelPicker extends StatelessWidget {
                     backgroundColor: Color(groupColor!),
                   ),
                 ),
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 130),
+              Flexible(
                 child: Text(
                   '${(groupEmoji ?? '').isEmpty ? '' : '$groupEmoji '}$groupName',
                   key: const Key('group-picker-label'),
@@ -1905,7 +2087,13 @@ class _ChannelPicker extends StatelessWidget {
                 ),
               ),
             ] else
-              Text('${emoji.isEmpty ? '' : '$emoji '}CH $channel'),
+              Flexible(
+                child: Text(
+                  '${emoji.isEmpty ? '' : '$emoji '}CH $channel',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
             const Icon(Icons.arrow_drop_down),
           ],
         ),
@@ -2024,6 +2212,23 @@ Future<void> showPrivacySheet(BuildContext context, WalkieController c) async {
                     ),
                   ],
                 ),
+                if (g != null) ...[
+                  // v2.3.1: first thing in the sheet, never below the fold.
+                  const SizedBox(height: 12),
+                  FilledButton.icon(
+                    key: const Key('privacy-add-people'),
+                    icon: const Icon(Icons.person_add_alt_1),
+                    label: const Text('Add people'),
+                    onPressed: () => pick('people'),
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    key: const Key('privacy-invite'),
+                    icon: const Icon(Icons.qr_code),
+                    label: const Text('Invite with QR / link'),
+                    onPressed: () => pick('invite'),
+                  ),
+                ],
                 const SizedBox(height: 8),
                 Row(
                   children: [
@@ -2221,20 +2426,6 @@ Future<void> showPrivacySheet(BuildContext context, WalkieController c) async {
                     const Text(
                       'Announcement mode is on: only the admin talks.',
                     ),
-                  const SizedBox(height: 8),
-                  FilledButton.icon(
-                    key: const Key('privacy-add-people'),
-                    icon: const Icon(Icons.person_add_alt_1),
-                    label: const Text('Add people'),
-                    onPressed: () => pick('people'),
-                  ),
-                  const SizedBox(height: 8),
-                  OutlinedButton.icon(
-                    key: const Key('privacy-invite'),
-                    icon: const Icon(Icons.qr_code),
-                    label: const Text('Invite with QR / link'),
-                    onPressed: () => pick('invite'),
-                  ),
                   const SizedBox(height: 8),
                   OutlinedButton.icon(
                     key: const Key('privacy-leave'),

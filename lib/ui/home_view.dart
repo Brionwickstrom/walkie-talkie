@@ -202,46 +202,17 @@ String clockText(DateTime t, {DateTime? now}) {
   return '${days[t.weekday - 1]} $hm';
 }
 
-/// v2.3.0: the recent-clips strip became this one button: History with a
-/// dot while something is unheard (the list there has Play, Play all missed
-/// and the rest).
-class HistoryButton extends StatelessWidget {
-  const HistoryButton({super.key, required this.unheard, required this.onOpen});
-  final int unheard;
-  final VoidCallback onOpen;
-
-  @override
-  Widget build(BuildContext context) {
-    return IconButton(
-      key: const Key('open-history'),
-      tooltip: unheard > 0
-          ? 'History: $unheard not heard yet'
-          : 'History: replay what was said',
-      visualDensity: VisualDensity.compact,
-      icon: Badge(
-        // A dot, not a number: it only says "something is new".
-        isLabelVisible: unheard > 0,
-        smallSize: 9,
-        child: const Icon(Icons.history),
-      ),
-      onPressed: onOpen,
-    );
-  }
-}
-
 /// The whole home screen below the app bar.
 class HomeBody extends StatelessWidget {
   const HomeBody({
     super.key,
     this.banners = const [],
-    required this.links,
-    required this.internet,
-    this.bestPath,
-    required this.showDetails,
-    required this.onToggleDetails,
-    this.details = const [],
+    this.status,
     required this.channelLabel,
     this.isPrivate = false,
+    this.onAddPeople,
+    this.onShareInvite,
+    this.showDebug = false,
     this.listenerWarning,
     required this.me,
     required this.people,
@@ -250,19 +221,11 @@ class HomeBody extends StatelessWidget {
     required this.onMessage,
     this.onVolume,
     this.notice,
-    this.volumeLow = false,
-    this.onVolumeLow,
     this.onEditMe,
     this.error,
     this.queued,
-    this.headerAction,
     this.onRefresh,
     this.radioAvailable,
-    this.onLinkTap,
-    this.mobileDataHint = false,
-    this.cell,
-    this.cellLevel,
-    this.onCellTap,
     this.alone,
     this.onConnectionTest,
     this.onAloneFix,
@@ -270,20 +233,12 @@ class HomeBody extends StatelessWidget {
     required this.ptt,
   });
 
-  /// Pull-to-refresh / the refresh button on the people list (v1.8.5).
+  /// Pull-to-refresh on the people list (v1.8.5). The refresh button moved
+  /// to the People tab (v2.3.1).
   final Future<RefreshResult> Function({required bool radio})? onRefresh;
 
   /// Offer "Also ask over radio (slow)" after a refresh.
   final bool Function()? radioAvailable;
-
-  /// Connection icon tapped (v1.8.5).
-  final ValueChanged<TransportKind>? onLinkTap;
-  final bool mobileDataHint;
-
-  /// The Cell icon (v1.8.6).
-  final CellState? cell;
-  final int? cellLevel;
-  final VoidCallback? onCellTap;
 
   /// Why nobody shows up over the internet (empty list only, v1.8.7).
   final AloneReason? alone;
@@ -292,21 +247,20 @@ class HomeBody extends StatelessWidget {
   final VoidCallback? onConnectionTest;
   final ValueChanged<PhoneSetting>? onAloneFix;
 
-  /// Trailing button on the "N on CH 3" header (Who's where).
-  final Widget? headerAction;
-
   final List<Widget> banners;
-  final List<(TransportKind, TransportStatus)> links;
-  final ({TransportStatus status, String text}) internet;
 
-  /// v1.9.8: "Direct 42 ms · 3 backups ready" (best path right now and
-  /// how many others are ready to take over), null = not shown.
-  final String? bestPath;
-  final bool showDetails;
-  final ValueChanged<bool> onToggleDetails;
-  final List<String> details;
+  /// The one status line (a [TalkStatusLine]).
+  final Widget? status;
   final String channelLabel;
+
+  /// In a private group: the empty list offers a big "Add people" button
+  /// (and a small "or share a QR / link").
   final bool isPrivate;
+  final VoidCallback? onAddPeople;
+  final VoidCallback? onShareInvite;
+
+  /// Technical lines on the people cards.
+  final bool showDebug;
 
   /// "Unknown listener" warning under the header (v1.9.4), or null.
   final Widget? listenerWarning;
@@ -321,11 +275,6 @@ class HomeBody extends StatelessWidget {
 
   /// e.g. the announcement-mode card.
   final Widget? notice;
-
-  /// Media volume is low: a small amber speaker chip on the status line
-  /// (v2.3.0), tap = raise it.
-  final bool volumeLow;
-  final VoidCallback? onVolumeLow;
   final VoidCallback? onEditMe;
   final String? error;
   final Widget? queued;
@@ -334,7 +283,6 @@ class HomeBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final here = people.where((p) => p.here).length + 1;
     final theme = Theme.of(context);
     // Edge to edge (Android 15+): keep the talk button above the
     // navigation bar and nothing under the status bar.
@@ -342,38 +290,7 @@ class HomeBody extends StatelessWidget {
       child: Column(
         children: [
           ...banners,
-          // One compact line: icons, "Internet via Wi-Fi · Direct 42 ms ·
-          // 1 backup ready" and Details (v2.3.0). Details has the full text.
-          StatusRow(
-            links: links,
-            internet: internet,
-            extra: bestPath,
-            volumeLow: volumeLow,
-            onVolumeLow: onVolumeLow,
-            showDetails: showDetails,
-            onToggleDetails: onToggleDetails,
-            onLinkTap: onLinkTap,
-            mobileDataHint: mobileDataHint,
-            cell: cell,
-            cellLevel: cellLevel,
-            onCellTap: onCellTap,
-          ),
-          if (showDetails)
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 120),
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: SelectableText(
-                  [internet.text, ?bestPath, ...details].join('\n'),
-                  key: const Key('best-path'),
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    fontFamily: 'monospace',
-                    fontSize: 11,
-                    color: Colors.grey,
-                  ),
-                ),
-              ),
-            ),
+          ?status,
           ?notice,
           if (error != null)
             Padding(
@@ -387,43 +304,23 @@ class HomeBody extends StatelessWidget {
             child: PeopleRefreshScope(
               refresh: onRefresh,
               radioAvailable: radioAvailable,
-              builder: (context, refreshButton) => ListView(
+              builder: (context, _) => ListView(
                 physics: const AlwaysScrollableScrollPhysics(),
                 padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
                 children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(8, 4, 8, 6),
-                    child: Row(
-                      children: [
-                        Icon(
-                          Icons.groups,
-                          size: 22,
-                          color: theme.colorScheme.primary,
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            '$here on $channelLabel',
-                            key: const Key('people-count'),
-                            style: theme.textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                        if (isPrivate)
-                          Icon(
-                            Icons.lock,
-                            size: 18,
-                            color: theme.colorScheme.primary,
-                          ),
-                        ?refreshButton,
-                        ?headerAction,
-                      ],
-                    ),
-                  ),
                   ?listenerWarning,
+                  // An empty private group leads with its big Add people
+                  // button: it must be on screen before you scroll.
+                  if (people.isEmpty && isPrivate && onAddPeople != null)
+                    _EmptyGroup(
+                      onAddPeople: onAddPeople!,
+                      onShareInvite: onShareInvite,
+                      alone: alone,
+                      onAloneFix: onAloneFix,
+                      onConnectionTest: onConnectionTest,
+                    ),
                   PersonCard(person: me, onEdit: onEditMe),
-                  if (people.isEmpty)
+                  if (people.isEmpty && !(isPrivate && onAddPeople != null))
                     Padding(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 24,
@@ -492,11 +389,21 @@ class HomeBody extends StatelessWidget {
                   for (final p in people)
                     PersonCard(
                       person: p,
-                      showDebug: showDetails,
+                      showDebug: showDebug,
                       onRing: () => onRing(p),
                       onBeep: () => onBeep(p),
                       onMessage: () => onMessage(p),
                       onLongPress: onVolume == null ? null : () => onVolume!(p),
+                    ),
+                  if (people.isNotEmpty && isPrivate && onAddPeople != null)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        key: const Key('list-add-people'),
+                        icon: const Icon(Icons.person_add_alt_1),
+                        label: const Text('Add people'),
+                        onPressed: onAddPeople,
+                      ),
                     ),
                 ],
               ),
@@ -507,6 +414,88 @@ class HomeBody extends StatelessWidget {
           const SizedBox(height: 6),
           ptt,
           const SizedBox(height: 12),
+        ],
+      ),
+    );
+  }
+}
+
+/// An empty private group (v2.3.1): the way forward is a big "Add people"
+/// button, not a note.
+class _EmptyGroup extends StatelessWidget {
+  const _EmptyGroup({
+    required this.onAddPeople,
+    this.onShareInvite,
+    this.alone,
+    this.onAloneFix,
+    this.onConnectionTest,
+  });
+  final VoidCallback onAddPeople;
+  final VoidCallback? onShareInvite;
+  final AloneReason? alone;
+  final ValueChanged<PhoneSetting>? onAloneFix;
+  final VoidCallback? onConnectionTest;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+      child: Column(
+        children: [
+          Text(
+            'Just you here so far',
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodyLarge,
+          ),
+          const SizedBox(height: 6),
+          FilledButton.icon(
+            key: const Key('empty-add-people'),
+            style: FilledButton.styleFrom(
+              minimumSize: const Size.fromHeight(56),
+              textStyle: theme.textTheme.titleMedium,
+            ),
+            icon: const Icon(Icons.person_add_alt_1),
+            label: const Text('Add people'),
+            onPressed: onAddPeople,
+          ),
+          if (onShareInvite != null)
+            TextButton(
+              key: const Key('empty-share-invite'),
+              onPressed: onShareInvite,
+              child: const Text('or share a QR / link'),
+            ),
+          if (alone != null) ...[
+            const SizedBox(height: 6),
+            Card(
+              key: const Key('alone-reason'),
+              child: Padding(
+                padding: const EdgeInsets.all(10),
+                child: Column(
+                  children: [
+                    Text(
+                      alone!.text,
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodyMedium,
+                    ),
+                    if (alone!.fix != null && onAloneFix != null)
+                      TextButton(
+                        key: const Key('alone-fix'),
+                        onPressed: () => onAloneFix!(alone!.fix!),
+                        child: const Text('Open phone settings'),
+                      ),
+                    if (onConnectionTest != null)
+                      TextButton.icon(
+                        key: const Key('alone-test'),
+                        icon: const Icon(Icons.network_check),
+                        onPressed: onConnectionTest,
+                        label: const Text('Connection test'),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -528,11 +517,8 @@ class StatusRow extends StatelessWidget {
     super.key,
     required this.links,
     required this.internet,
-    this.extra,
-    this.volumeLow = false,
-    this.onVolumeLow,
-    required this.showDetails,
-    required this.onToggleDetails,
+    this.showDetails = false,
+    this.onToggleDetails,
     this.onLinkTap,
     this.mobileDataHint = false,
     this.cell,
@@ -541,22 +527,16 @@ class StatusRow extends StatelessWidget {
   });
   final List<(TransportKind, TransportStatus)> links;
 
-  /// More for the same line ("Direct 42 ms · 1 backup ready"). With it the
-  /// internet text is shortened to "Internet via Wi-Fi"; null keeps the
-  /// full text.
-  final String? extra;
-
-  /// Media volume is low: a small amber speaker-low icon (not a banner).
-  final bool volumeLow;
-  final VoidCallback? onVolumeLow;
-
   /// The Cell / mobile data icon (v1.8.6), null = not shown.
   final CellState? cell;
   final int? cellLevel;
   final VoidCallback? onCellTap;
   final ({TransportStatus status, String text}) internet;
+
+  /// The Details toggle is shown only with [onToggleDetails] (the status
+  /// sheet has its own switch).
   final bool showDetails;
-  final ValueChanged<bool> onToggleDetails;
+  final ValueChanged<bool>? onToggleDetails;
 
   /// Tap on a connection icon (or the internet line): the connection
   /// sheet with its status and a settings button (v1.8.5).
@@ -622,51 +602,16 @@ class StatusRow extends StatelessWidget {
               onTap: onLinkTap == null
                   ? null
                   : () => onLinkTap!(TransportKind.internet),
-              child: Text.rich(
-                TextSpan(
-                  children: [
-                    TextSpan(
-                      text: extra == null
-                          ? internet.text
-                          : compactInternetText(internet.text),
-                      style: TextStyle(
-                        color: netColor,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    if (extra != null)
-                      TextSpan(
-                        text: ' · $extra',
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.outline,
-                        ),
-                      ),
-                  ],
+              child: Text(
+                internet.text,
+                style: TextStyle(
+                  color: netColor,
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
                 ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 12.5),
               ),
             ),
           ),
-          if (volumeLow)
-            Tooltip(
-              message: 'Volume is low: tap to raise it',
-              child: InkWell(
-                key: const Key('volume-low-chip'),
-                customBorder: const CircleBorder(),
-                onTap: onVolumeLow,
-                child: const Padding(
-                  padding: EdgeInsets.all(6),
-                  child: Icon(
-                    Icons.volume_down,
-                    size: 20,
-                    color: Colors.amber,
-                    semanticLabel: 'Volume is low. Tap to raise it',
-                  ),
-                ),
-              ),
-            ),
           if (mobileDataHint && onLinkTap != null)
             TextButton.icon(
               key: const Key('allow-mobile-data'),
@@ -678,25 +623,26 @@ class StatusRow extends StatelessWidget {
               label: const Text('Allow mobile data'),
               onPressed: () => onLinkTap!(TransportKind.internet),
             ),
-          TextButton(
-            key: const Key('toggle-details'),
-            style: TextButton.styleFrom(
-              visualDensity: VisualDensity.compact,
-              padding: const EdgeInsets.only(left: 6, right: 2),
-              minimumSize: const Size(0, 36),
+          if (onToggleDetails != null)
+            TextButton(
+              key: const Key('toggle-details'),
+              style: TextButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.only(left: 6, right: 2),
+                minimumSize: const Size(0, 36),
+              ),
+              onPressed: () => onToggleDetails!(!showDetails),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('Details', style: TextStyle(fontSize: 13)),
+                  Icon(
+                    showDetails ? Icons.expand_less : Icons.expand_more,
+                    size: 20,
+                  ),
+                ],
+              ),
             ),
-            onPressed: () => onToggleDetails(!showDetails),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text('Details', style: TextStyle(fontSize: 13)),
-                Icon(
-                  showDetails ? Icons.expand_less : Icons.expand_more,
-                  size: 20,
-                ),
-              ],
-            ),
-          ),
         ],
       ),
     );
@@ -1411,48 +1357,119 @@ class ChannelActions extends StatelessWidget {
     required this.onBeepAll,
     required this.record,
     this.mute,
-    this.history,
   });
   final VoidCallback onRingAll;
   final VoidCallback onBeepAll;
+
+  /// Hold-to-record "Message" button (an [ActionTile] look).
   final Widget record;
 
   /// Hold-to-mute button (v1.9.5).
   final Widget? mute;
 
-  /// The History button with its unread dot (v2.3.0).
-  final Widget? history;
-
+  /// v2.3.1: Ring all, Beep, Message and Mute are four equal buttons in one
+  /// row (icon over a short label). They never wrap onto a second line;
+  /// History moved to the Chat tab.
   @override
   Widget build(BuildContext context) {
-    final style = OutlinedButton.styleFrom(
-      visualDensity: VisualDensity.compact,
-      padding: const EdgeInsets.symmetric(horizontal: 10),
+    Widget cell(Widget child) => Expanded(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 3),
+        child: child,
+      ),
     );
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 6),
-      child: Wrap(
-        alignment: WrapAlignment.center,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        spacing: 6,
-        runSpacing: 2,
-        children: [
-          OutlinedButton.icon(
-            style: style,
-            icon: const Icon(Icons.ring_volume, size: 18),
-            label: const Text('Ring all'),
-            onPressed: onRingAll,
+      child: IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            cell(
+              ActionTile(
+                key: const Key('ring-all'),
+                icon: Icons.ring_volume,
+                label: 'Ring all',
+                onPressed: onRingAll,
+              ),
+            ),
+            cell(
+              ActionTile(
+                key: const Key('beep-all'),
+                icon: Icons.notifications_active,
+                label: 'Beep',
+                onPressed: onBeepAll,
+              ),
+            ),
+            cell(record),
+            if (mute != null) cell(mute!),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// One of the four equal buttons under the people list: an icon over a
+/// short one-line label (scales down instead of wrapping).
+class ActionTile extends StatelessWidget {
+  const ActionTile({
+    super.key,
+    required this.icon,
+    required this.label,
+    this.onPressed,
+    this.color,
+    this.foreground,
+    this.iconWidget,
+  });
+  final IconData icon;
+  final String label;
+  final VoidCallback? onPressed;
+  final Color? color;
+  final Color? foreground;
+
+  /// Replaces the icon (the Mute ring).
+  final Widget? iconWidget;
+
+  static const double minHeight = 56;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final fg = foreground ?? cs.onSecondaryContainer;
+    return Material(
+      color: color ?? cs.secondaryContainer,
+      borderRadius: BorderRadius.circular(14),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onPressed ?? () {},
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: minHeight),
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  iconWidget ?? Icon(icon, size: 22, color: fg),
+                  const SizedBox(height: 2),
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      style: TextStyle(
+                        color: fg,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
-          OutlinedButton.icon(
-            style: style,
-            icon: const Icon(Icons.notifications_active, size: 18),
-            label: const Text('Beep'),
-            onPressed: onBeepAll,
-          ),
-          record,
-          ?mute,
-          ?history,
-        ],
+        ),
       ),
     );
   }
