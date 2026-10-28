@@ -1561,7 +1561,12 @@ Wi-Fi · Home relay 42 ms · 1 backup ready", Details has the full text); the
 recent-clips row is a History button with a dot while something is unheard;
 Ring all, Beep, Hold: message, Mute (still a 2.5 s hold plus a confirm) and
 History share one row that wraps; the Talk button shrinks on short screens and
-with large text (never below 96 dp); the people list gets the rest. On a 360 x
+with large text (never below 96 dp); the people list gets the rest. The red
+"Media volume is low" banner is now a small amber speaker-low icon on the same
+status line (no extra row): tap it to raise the media volume to about half (the
+system volume panel opens) and see why. A calm, non-red snackbar reminds you
+only when incoming talk starts while the volume is low, at most every 10
+minutes (not while muted). On a 360 x
 640 phone at 1.3x text the list went from about 44 dp to about 197 dp.
 
 Battery: nothing new runs in the background. A group key is derived once

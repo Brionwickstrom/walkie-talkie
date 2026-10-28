@@ -249,6 +249,10 @@ class BackgroundBridge {
   /// Media-stream volume 0..1 (what walkie voices play on); null off Android.
   Future<double?> mediaVolume() => _call<double>('mediaVolume');
 
+  /// Raise the media volume to about half and show the system volume panel
+  /// (v2.3.0). The new level 0..1, or null off Android.
+  Future<double?> raiseMediaVolume() => _call<double>('raiseMediaVolume');
+
   /// Phone battery 0..100 (null when unknown / not Android), v1.8.3.
   Future<({int pct, bool charging})?> batteryLevel() async {
     final m = await _call<Map<Object?, Object?>>('batteryLevel');

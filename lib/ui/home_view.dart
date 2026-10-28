@@ -250,6 +250,8 @@ class HomeBody extends StatelessWidget {
     required this.onMessage,
     this.onVolume,
     this.notice,
+    this.volumeLow = false,
+    this.onVolumeLow,
     this.onEditMe,
     this.error,
     this.queued,
@@ -317,8 +319,13 @@ class HomeBody extends StatelessWidget {
   /// Long-press on a person: volume slider etc.
   final ValueChanged<PersonView>? onVolume;
 
-  /// e.g. the "media volume is low" hint.
+  /// e.g. the announcement-mode card.
   final Widget? notice;
+
+  /// Media volume is low: a small amber speaker chip on the status line
+  /// (v2.3.0), tap = raise it.
+  final bool volumeLow;
+  final VoidCallback? onVolumeLow;
   final VoidCallback? onEditMe;
   final String? error;
   final Widget? queued;
@@ -341,6 +348,8 @@ class HomeBody extends StatelessWidget {
             links: links,
             internet: internet,
             extra: bestPath,
+            volumeLow: volumeLow,
+            onVolumeLow: onVolumeLow,
             showDetails: showDetails,
             onToggleDetails: onToggleDetails,
             onLinkTap: onLinkTap,
@@ -520,6 +529,8 @@ class StatusRow extends StatelessWidget {
     required this.links,
     required this.internet,
     this.extra,
+    this.volumeLow = false,
+    this.onVolumeLow,
     required this.showDetails,
     required this.onToggleDetails,
     this.onLinkTap,
@@ -534,6 +545,10 @@ class StatusRow extends StatelessWidget {
   /// internet text is shortened to "Internet via Wi-Fi"; null keeps the
   /// full text.
   final String? extra;
+
+  /// Media volume is low: a small amber speaker-low icon (not a banner).
+  final bool volumeLow;
+  final VoidCallback? onVolumeLow;
 
   /// The Cell / mobile data icon (v1.8.6), null = not shown.
   final CellState? cell;
@@ -634,6 +649,24 @@ class StatusRow extends StatelessWidget {
               ),
             ),
           ),
+          if (volumeLow)
+            Tooltip(
+              message: 'Volume is low: tap to raise it',
+              child: InkWell(
+                key: const Key('volume-low-chip'),
+                customBorder: const CircleBorder(),
+                onTap: onVolumeLow,
+                child: const Padding(
+                  padding: EdgeInsets.all(6),
+                  child: Icon(
+                    Icons.volume_down,
+                    size: 20,
+                    color: Colors.amber,
+                    semanticLabel: 'Volume is low. Tap to raise it',
+                  ),
+                ),
+              ),
+            ),
           if (mobileDataHint && onLinkTap != null)
             TextButton.icon(
               key: const Key('allow-mobile-data'),

@@ -34,7 +34,7 @@ Future<void> settle(WidgetTester t) async {
 
 class Calls {
   int ringAll = 0, beepAll = 0, record = 0, history = 0, settings = 0;
-  int muted = 0, unmuted = 0, details = 0, talk = 0;
+  int muted = 0, unmuted = 0, details = 0, talk = 0, volume = 0;
 }
 
 /// The Talk screen as home_page.dart assembles it.
@@ -46,6 +46,7 @@ Widget talkScreen(
   bool details = false,
   int unheard = 2,
   bool hasTakes = true,
+  bool volumeLow = true,
   String internetText = 'Internet: connected via Wi-Fi (Home relay)',
 }) => MaterialApp(
   theme: ThemeData(
@@ -96,6 +97,8 @@ Widget talkScreen(
           ],
           internet: (status: TransportStatus.running, text: internetText),
           bestPath: 'Home relay 42 ms · 1 backup ready',
+          volumeLow: volumeLow,
+          onVolumeLow: () => k.volume++,
           showDetails: details,
           onToggleDetails: (_) => k.details++,
           details: const ['WiFi: running · IP 192.168.68.54/22'],
@@ -160,6 +163,7 @@ void main() {
     'Who can hear': find.byKey(const Key('who-can-hear')),
     'connections': find.byKey(const Key('link-internet')),
     'Details': find.byKey(const Key('toggle-details')),
+    'volume chip': find.byKey(const Key('volume-low-chip')),
   };
 
   for (final (label, w, h, ts) in [
@@ -241,6 +245,38 @@ void main() {
       (k.ringAll, k.beepAll, k.record, k.history, k.details),
       (1, 1, 1, 1, 1),
     );
+  });
+
+  testWidgets('low volume: a small amber speaker icon on the status line, no '
+      'banner, no extra row', (t) async {
+    phone(t);
+    final k = Calls();
+    await t.pumpWidget(talkScreen(k));
+    await t.pump(const Duration(milliseconds: 300));
+    expect(find.textContaining('Media volume is low'), findsNothing);
+    final icon = t.widget<Icon>(
+      find.descendant(
+        of: controls['volume chip']!,
+        matching: find.byType(Icon),
+      ),
+    );
+    expect(icon.icon, Icons.volume_down);
+    expect(icon.color, Colors.amber, reason: 'amber, not red');
+    // Same row as the connection icons and the status text.
+    final chip = t.getRect(controls['volume chip']!);
+    final line = t.getRect(find.byKey(const Key('internet-status')));
+    expect(chip.top, greaterThanOrEqualTo(line.top - 12));
+    expect(chip.bottom, lessThanOrEqualTo(line.bottom + 12));
+    expect(chip.size.shortestSide, lessThan(48));
+    // The list is as tall as without the icon (it took no row).
+    final withIt = t.getSize(peopleList.first).height;
+    await t.pumpWidget(talkScreen(k, volumeLow: false));
+    await t.pump(const Duration(milliseconds: 300));
+    expect(controls['volume chip']!, findsNothing);
+    expect(t.getSize(peopleList.first).height, withIt);
+    await t.pumpWidget(talkScreen(k));
+    await t.tap(controls['volume chip']!);
+    expect(k.volume, 1);
   });
 
   testWidgets('History: a dot only while something is unheard, none lost', (

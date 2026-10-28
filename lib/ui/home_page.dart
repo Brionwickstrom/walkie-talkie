@@ -422,28 +422,9 @@ class _HomePageState extends State<HomePage> {
                     ),
                   ),
                 )
-              : (c.mediaVolume ?? 1) < 0.3
-              ? Card(
-                  margin: const EdgeInsets.fromLTRB(8, 4, 8, 0),
-                  color: Theme.of(context).colorScheme.errorContainer,
-                  child: Padding(
-                    padding: const EdgeInsets.all(10),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.volume_down),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'Media volume is low '
-                            '(${((c.mediaVolume ?? 0) * 100).round()}%). '
-                            'Press volume up to hear others clearly.',
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                )
               : null,
+          volumeLow: c.volumeLow,
+          onVolumeLow: () => _raiseVolume(context),
           onEditMe: () => _openSettings(context),
           error: c.error,
           queued: c.outgoing.isNotEmpty || c.waitingForAnyone.isNotEmpty
@@ -824,6 +805,24 @@ class _HomePageState extends State<HomePage> {
       if (waiting > 0) '$waiting waiting for someone to come in range',
     ];
     return 'Voice messages: ${parts.join(', ')}';
+  }
+
+  /// The amber speaker chip: raise the media volume and say why.
+  Future<void> _raiseVolume(BuildContext context) async {
+    final before = ((c.mediaVolume ?? 0) * 100).round();
+    await c.raiseMediaVolume();
+    if (!context.mounted) return;
+    final now = ((c.mediaVolume ?? 0) * 100).round();
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            'Voices play on the media volume, which was at $before%. '
+            '${now > before ? 'Raised to $now%.' : 'Use the volume keys to raise it.'}',
+          ),
+        ),
+      );
   }
 
   void _openHistory(BuildContext context) {

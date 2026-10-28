@@ -324,4 +324,41 @@ void main() {
       expect(c.settings.groups, isEmpty);
     });
   });
+
+  group('low media volume', () {
+    test('a calm reminder when talk starts: not when the volume is fine, '
+        'at most once per gap, not when muted', () async {
+      final c = await make();
+      final seen = <String>[];
+      c.notices.listen(seen.add);
+      expect(c.volumeLow, isFalse, reason: 'unknown counts as fine');
+      expect(c.remindLowVolume(), isFalse);
+      c.mediaVolume = 0.2;
+      expect(c.volumeLow, isTrue);
+      final t0 = DateTime(2026, 10, 28, 8);
+      expect(c.remindLowVolume(now: t0), isTrue);
+      expect(
+        c.remindLowVolume(now: t0.add(const Duration(minutes: 3))),
+        isFalse,
+        reason: 'once per gap',
+      );
+      expect(
+        c.remindLowVolume(now: t0.add(const Duration(minutes: 11))),
+        isTrue,
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(seen.length, 2);
+      expect(seen.first, contains('20%'));
+      expect(seen.first, contains('Tap the speaker icon'));
+      c.mediaVolume = 0.5;
+      expect(c.remindLowVolume(now: t0.add(const Duration(hours: 1))), isFalse);
+      c.mediaVolume = 0.2;
+      await c.mute();
+      expect(
+        c.remindLowVolume(now: t0.add(const Duration(hours: 2))),
+        isFalse,
+        reason: 'muted: nothing plays anyway',
+      );
+    });
+  });
 }

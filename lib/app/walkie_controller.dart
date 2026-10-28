@@ -2248,6 +2248,40 @@ class WalkieController extends ChangeNotifier {
     }
   }
 
+  /// Media volume is low enough that voices are hard to hear (v2.3.0: a
+  /// small amber chip on the status line, not a banner).
+  bool get volumeLow => (mediaVolume ?? 1) < 0.3;
+
+  /// The chip was tapped: raise the volume to about half (the system volume
+  /// panel opens too).
+  Future<void> raiseMediaVolume() async {
+    await bridge.raiseMediaVolume();
+    await refreshMediaVolume();
+  }
+
+  DateTime? _volumeReminderAt;
+
+  /// How long to wait before reminding about low volume again.
+  Duration volumeReminderGap = const Duration(minutes: 10);
+
+  /// Incoming talk started while the volume is low: one calm line (a
+  /// snackbar, not red), at most once per [volumeReminderGap]. Not when
+  /// muted or in quiet hours (nothing plays then anyway). True if shown.
+  @visibleForTesting
+  bool remindLowVolume({DateTime? now}) {
+    if (!volumeLow || quietStatus != null) return false;
+    final t = now ?? DateTime.now();
+    final last = _volumeReminderAt;
+    if (last != null && t.difference(last) < volumeReminderGap) return false;
+    _volumeReminderAt = t;
+    _notice(
+      'Someone is talking and your media volume is low '
+      '(${((mediaVolume ?? 0) * 100).round()}%). Tap the speaker icon to '
+      'raise it.',
+    );
+    return true;
+  }
+
   Future<void> setShowDiagnostics(bool on) async {
     settings.showDiagnostics = on;
     notifyListeners();
@@ -2295,6 +2329,7 @@ class WalkieController extends ChangeNotifier {
         if (p.talking && p.channel == scope) p.id,
     };
     for (final id in talking.difference(_talkingPrev)) {
+      if (foreground) remindLowVolume();
       if (!foreground) {
         bridge.showTalking(
           peer: id,

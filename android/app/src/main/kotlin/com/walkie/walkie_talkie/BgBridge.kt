@@ -187,6 +187,29 @@ object BgBridge {
                 val cur = am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC)
                 result.success(if (max > 0) cur.toDouble() / max else 1.0)
             }
+            // v2.3.0: tap on the small "volume low" chip: raise the media
+            // volume to about half and show the system volume panel (the
+            // person sees what changed and can go higher). Returns the new
+            // fraction 0..1.
+            "raiseMediaVolume" -> {
+                val am = ctx.getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
+                val max = am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+                val want = (max * 0.5).toInt().coerceAtLeast(1)
+                try {
+                    if (am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC) < want) {
+                        am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, want, android.media.AudioManager.FLAG_SHOW_UI)
+                    } else {
+                        am.adjustStreamVolume(android.media.AudioManager.STREAM_MUSIC, android.media.AudioManager.ADJUST_SAME, android.media.AudioManager.FLAG_SHOW_UI)
+                    }
+                } catch (_: Exception) {
+                    // Some phones refuse (do-not-disturb rules): the panel still opens.
+                    try {
+                        am.adjustStreamVolume(android.media.AudioManager.STREAM_MUSIC, android.media.AudioManager.ADJUST_RAISE, android.media.AudioManager.FLAG_SHOW_UI)
+                    } catch (_: Exception) {}
+                }
+                val cur = am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC)
+                result.success(if (max > 0) cur.toDouble() / max else 1.0)
+            }
             "batteryLevel" -> {
                 // 0..100 and whether it is charging (v1.8.3); -1 if unknown.
                 val bm = ctx.getSystemService(Context.BATTERY_SERVICE) as android.os.BatteryManager
