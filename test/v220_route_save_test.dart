@@ -715,12 +715,16 @@ void main() {
       await tester.pump();
       await tester.runAsync(() async {
         await tester.tap(find.byKey(const Key('saveRouteGo')));
-        for (var i = 0; i < 100; i++) {
+        // Up to 12 s: the PC runs the whole suite in parallel and 3 s was
+        // not always enough there (v2.3.0 release build).
+        for (var i = 0; i < 400; i++) {
           await Future<void>.delayed(const Duration(milliseconds: 30));
           if (t.routes.all.isNotEmpty && t.routes.all.first.isReady) break;
         }
+        await Future<void>.delayed(const Duration(milliseconds: 100));
       });
       await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
       expect(find.byKey(const Key('saveRouteResult')), findsOneWidget);
       expect(
         tester.widget<Text>(find.byKey(const Key('saveRouteResult'))).data,
