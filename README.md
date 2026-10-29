@@ -1525,6 +1525,45 @@ Tests: `test/v195_gateway_test.dart`, `test/v195_quiet_test.dart`.
 Tests: `test/v197_meshtastic_import_test.dart` (vectors from the official
 apps and the Python library), `test/v195_quiet_test.dart`.
 
+## v2.4.0: One Messages page on Talk, a text-only Chat tab
+
+Voice messages and missed live talk belong where they come from, so they are
+back with the Talk screen, in one place, and Chat is for text again. Audio,
+routing and the rest are unchanged.
+
+- **One Messages icon on the Talk status line** (replacing the two voicemail
+  and History icons of v2.3.3). One dot means audio nobody has listened to yet,
+  in any place (voice messages and missed live talk, every channel and group,
+  and friends). It opens **Messages**: a page on phones, a dialog on wide
+  screens. Filters **Here** (this channel or group, the default) / **Direct**
+  (friends) / **All**; each chip shows how much is still unheard. It merges
+  *Waiting to send*, *Live talk* (1x / 1.5x / 2x, **Play all missed**, swipe to
+  delete), *Voice messages* (play, delete) and a small *Sent* list (Delivered /
+  Listened, last day, no audio kept). The menu has **Mark all as heard** and
+  **Clear live talk history**. Direct and All say that live talk in a direct
+  chat is not recorded (only voice messages are kept).
+- **Chat is text only.** One banner names the place once; the first row is the
+  channel or group chat ("CH 1 chat"), then **Friends**. No audio rows, no
+  section header, no per-row tags. The Chat badge counts unread text only
+  (channel or group chat plus friend chats); the Talk dot counts audio, so
+  nothing lights up for something that is not visible where it points.
+- **Same page from every route:** the status-line icon, the "Messages: waiting"
+  button, a voice message notification (opens the right filter, scrolled to and
+  highlighting that message; the notification's Play button still plays it) and
+  the voicemail icon in a friend's chat all open Messages with the right filter.
+- **Friend voice clips are bubbles in that friend's thread** (tap to play, with
+  a dot while new), plus your own as Delivered / Listened / Waiting, and are also
+  in Messages > Direct. The "Voice messages from friends" row is gone.
+- **Wording and details:** "Hold: message" is "Message" (and "Voice message" in a
+  friend's chat); the History title no longer truncates; the lock stays on the
+  selected Here chip; empty lists are one line, with no empty headers.
+
+Battery: none. It is layout and navigation over data the app already had. The
+Sent list is written only when a message is delivered or listened to (a tiny
+file, no timers, no polling, no audio, no network).
+
+Same signing key, so it installs over 2.3.3.
+
 ## v2.3.3: Smoother live audio, steadier routing, History and Voice messages back on Talk
 
 Fixes for choppy live talk (found by reading the audio path, not guessing) and

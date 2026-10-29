@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -5,7 +7,9 @@ import 'package:permission_handler/permission_handler.dart';
 import '../app/walkie_controller.dart';
 import 'channels_sheet.dart';
 import 'chat_view.dart';
+import '../messaging/messenger.dart';
 import 'home_view.dart';
+import 'messages_page.dart';
 import 'sheets.dart';
 import 'who_can_hear.dart';
 import '../platform/platform_caps.dart';
@@ -36,6 +40,57 @@ class _ChatPageState extends State<ChatPage> {
     if (c.openChat == widget.conv) c.openChat = null;
     c.markChatRead(widget.conv);
     super.dispose();
+  }
+
+  /// The friend's newest voice message (an unplayed one first), for
+  /// Messages to scroll to.
+  String? _newestVoiceKey(int friend) {
+    final mine = [
+      for (final e in c.inbox)
+        if (e.channel == WalkieController.friendScope && e.sender == friend) e,
+    ];
+    if (mine.isEmpty) return null;
+    return (mine.where((e) => !e.played).firstOrNull ?? mine.first).key;
+  }
+
+  /// Voice messages with [friend] as bubbles in their thread (v2.4.0):
+  /// theirs to play, ours as delivered / listened / waiting.
+  List<VoiceBubble> _voiceBubbles(int friend) {
+    return [
+      for (final e in c.inbox)
+        if (e.channel == WalkieController.friendScope && e.sender == friend)
+          VoiceBubble(
+            id: 'in-${e.key}',
+            at: e.receivedAt,
+            durationMs: e.durationMs,
+            mine: false,
+            played: e.played,
+            playing: c.playingKey == e.key,
+            status: e.viaRadio ? 'via radio' : null,
+            onPlay: () =>
+                c.playingKey == e.key ? c.stopPlayback() : c.playMessage(e),
+          ),
+      for (final (r, isFriend) in c.sentMessages)
+        if (isFriend && r.toPeer == friend)
+          VoiceBubble(
+            id: 'out-${r.msgId}',
+            at: r.createdAt,
+            durationMs: r.durationMs,
+            mine: true,
+            status: r.heard ? 'Listened' : 'Delivered',
+          ),
+      for (final o in c.friendMessenger?.outgoing ?? const <OutgoingStatus>[])
+        if (o.peer == friend)
+          VoiceBubble(
+            id: 'wait-${o.entry.msgId}',
+            at: o.entry.createdAt,
+            durationMs: o.entry.durationMs,
+            mine: true,
+            status: o.sending
+                ? 'Sending ${(o.progress * 100).round()}%'
+                : 'Waiting',
+          ),
+    ];
   }
 
   Future<void> _attach() async {
@@ -170,9 +225,26 @@ class _ChatPageState extends State<ChatPage> {
                   : c.chatTitle(conv),
               overflow: TextOverflow.ellipsis,
             ),
+            actions: [
+              if (friend != null)
+                IconButton(
+                  key: const Key('friend-messages'),
+                  tooltip: 'Voice messages',
+                  icon: const Icon(Icons.voicemail),
+                  onPressed: () => unawaited(
+                    openMessages(
+                      context,
+                      c,
+                      filter: MessagesFilter.direct,
+                      focusKey: _newestVoiceKey(friend),
+                    ),
+                  ),
+                ),
+            ],
           ),
           body: ChatView(
             messages: c.chatMessages(conv),
+            voice: friend == null ? const [] : _voiceBubbles(friend),
             loadPhoto: c.chatPhoto,
             onSend: (t) => c.sendChatText(conv, t),
             onAttach: _attach,
@@ -363,7 +435,7 @@ class FriendTalkBar extends StatelessWidget {
                   enabled: (canTalk ?? online) && !needsUpdate,
                 ),
                 holdButton(
-                  label: recording ? 'Recording...' : 'Hold: voice msg',
+                  label: recording ? 'Recording...' : 'Voice message',
                   icon: Icons.keyboard_voice,
                   active: recording,
                   activeColor: Colors.red,

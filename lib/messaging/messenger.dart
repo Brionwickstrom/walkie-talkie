@@ -8,6 +8,7 @@ import '../core/transport_manager.dart';
 import '../lora/radio_clip.dart';
 import 'inbox.dart';
 import 'outbox.dart';
+import 'sent_log.dart';
 import 'storage.dart';
 import 'voice_clip.dart';
 import 'voice_transfer.dart';
@@ -128,12 +129,16 @@ class Messenger {
     Duration ttl = const Duration(hours: 24),
   }) : outbox = Outbox(storage, ttl: ttl),
        inbox = Inbox(storage),
+       sent = SentLog(storage),
        _clock = clock ?? DateTime.now,
        _random = random ?? Random();
 
   final MessengerLink link;
   final Outbox outbox;
   final Inbox inbox;
+
+  /// Voice messages of ours that were delivered (v2.4.0, "Sent" in Messages).
+  final SentLog sent;
   final Clock _clock;
   final Random _random;
 
@@ -292,6 +297,7 @@ class Messenger {
   Future<void> start() async {
     await outbox.load();
     await inbox.load();
+    await sent.load(_clock());
     final seen = await outbox.storage.readJson(seenName);
     if (seen is List) {
       for (final k in seen) {
@@ -578,6 +584,7 @@ class Messenger {
     final now = _clock();
     if (pkt is ReadPacket) {
       for (final id in pkt.ids) {
+        if (await sent.heard(id, d.peerId)) _changed();
         if (!_read.isClosed) _read.add((id, d.peerId));
       }
       return;
@@ -806,6 +813,17 @@ class Messenger {
         _bodies.removeWhere((k, _) => k.$1 == msgId);
         _radioBodies.removeWhere((k, _) => k.$1 == msgId);
       }
+      if (!e.isChat) {
+        await sent.delivered(
+          msgId: e.msgId,
+          toPeer: e.toPeer,
+          channel: e.channel,
+          createdAt: e.createdAt,
+          durationMs: e.durationMs,
+          peer: peer,
+          now: _clock(),
+        );
+      }
       if (!_delivered.isClosed) _delivered.add((e, peer));
       _changed();
     }
@@ -820,6 +838,26 @@ class Messenger {
 
   Future<void> markPlayed(InboxEntry e) async {
     await inbox.markPlayed(e);
+    _changed();
+  }
+
+  /// Mark several messages played with one save (Messages > mark all heard).
+  Future<void> markAllPlayed(Iterable<InboxEntry> list) async {
+    var any = false;
+    for (final e in list) {
+      if (!e.played) {
+        e.played = true;
+        any = true;
+      }
+    }
+    if (!any) return;
+    await inbox.save();
+    _changed();
+  }
+
+  /// Forget one delivered message in the "Sent" list.
+  Future<void> forgetSent(int msgId) async {
+    await sent.remove(msgId);
     _changed();
   }
 

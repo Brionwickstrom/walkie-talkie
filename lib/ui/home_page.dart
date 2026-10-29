@@ -17,14 +17,13 @@ import '../trip/geo.dart';
 import 'chat_hub.dart';
 import 'chat_page.dart';
 import 'friends_page.dart';
-import 'history_page.dart';
 import 'home_view.dart';
 import 'link_sheet.dart';
 import 'people_tab.dart';
 import 'reach_of.dart';
 import 'person_sheet.dart';
 import 'status_line.dart';
-import 'inbox_page.dart';
+import 'messages_page.dart';
 import 'quiet_widgets.dart';
 import 'radio_settings.dart';
 import 'sheets.dart';
@@ -167,7 +166,22 @@ class _HomePageState extends State<HomePage> {
     _subs.add(
       c.uiRequests.listen((r) {
         if (!mounted) return;
-        if (r == 'inbox') _openInbox(context);
+        if (r == 'inbox') _openMessages(context, MessagesFilter.all);
+        if (r.startsWith('messages:')) {
+          // 'messages:<here|direct|all>:<voice message key>' (notification).
+          final parts = r.split(':');
+          final f = MessagesFilter.values.firstWhere(
+            (x) => x.name == (parts.length > 1 ? parts[1] : ''),
+            orElse: () => MessagesFilter.all,
+          );
+          _openMessages(
+            context,
+            f,
+            focusKey: parts.length > 2 && parts[2].isNotEmpty
+                ? parts.sublist(2).join(':')
+                : null,
+          );
+        }
         if (r.startsWith('join:')) {
           // Invite link opened (v1.8.7): confirm before anything changes.
           final inv = Invite.parse(r.substring(5));
@@ -357,10 +371,8 @@ class _HomePageState extends State<HomePage> {
           mobileDataHint: c.mobileDataHint,
           onMobileData: () => _openLinkSheet(context, TransportKind.internet),
           onOpen: () => _openStatus(context, audience, here),
-          onOpenVoice: () => _openInbox(context),
-          onOpenHistory: () => _openHistory(context),
-          voiceNew: c.unplayedMessages > 0,
-          historyUnheard: c.unheardTakes > 0,
+          onOpenMessages: () => _openMessages(context, MessagesFilter.here),
+          messagesNew: c.unheardAudio > 0,
         );
         final talk = HomeBody(
           banners: [
@@ -461,7 +473,7 @@ class _HomePageState extends State<HomePage> {
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                   ),
-                  onPressed: () => _openInbox(context),
+                  onPressed: () => _openMessages(context, queuedFilter(c)),
                 )
               : null,
           actions: ChannelActions(
@@ -836,16 +848,12 @@ class _HomePageState extends State<HomePage> {
         'sending $sending${radio > 0 ? ' ($radio over the radio)' : ''}',
       if (waiting > 0) '$waiting waiting for someone to come in range',
     ];
-    return 'Voice messages: ${parts.join(', ')}';
+    return 'Messages: ${parts.join(', ')}';
   }
 
-  /// Chat tab badge: unread channel chat and direct chats + voice messages
-  /// not played + talk here that was missed (v2.3.3).
-  int get _chatBadge =>
-      c.unreadChannelChat +
-      c.unreadFriendChats +
-      c.unplayedMessages +
-      c.unheardTakes;
+  /// Chat tab badge: unread text only (channel / group chat and friend
+  /// chats). Audio is counted on the Talk screen's Messages icon (v2.4.0).
+  int get _chatBadge => c.unreadText;
 
   /// People tab badge: friend requests waiting, and people on
   /// other channels (the old "scan" badge).
@@ -865,22 +873,13 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  /// The Chat tab, in two sections: "Here (CH 1)" (this place's chat, its
-  /// voice messages and History) and "Direct chats" (one row per friend).
+  /// The Chat tab (v2.4.0): text only. This place's chat first, then one row
+  /// per friend. Voice messages and missed talk are in Messages (Talk).
   Widget _chatHub() => ListenableBuilder(
     listenable: c,
     builder: (context, _) {
       final conv = c.channelChat;
       final last = c.chats?.lastOf(conv);
-      final here = c.inbox.where((e) => e.channel == c.scope && !e.played);
-      final fromFriends = c.inbox.where(
-        (e) => e.channel == WalkieController.friendScope && !e.played,
-      );
-      final waiting =
-          c.outgoing
-              .where((o) => o.entry.isChannel && o.entry.channel == c.scope)
-              .length +
-          c.waitingForAnyone.where((e) => e.channel == c.scope).length;
       final direct = <DirectChatItem>[
         for (final f in c.friends)
           DirectChatItem(
@@ -908,16 +907,9 @@ class _HomePageState extends State<HomePage> {
         chatPreview: last == null ? null : chatPreview(last),
         chatUnread: c.unreadChannelChat,
         onOpenChat: () => _openChat(context, conv),
-        voiceNew: here.length,
-        voiceWaiting: waiting,
-        onOpenVoice: () => _openInbox(context, InboxFilter.here),
-        historyUnheard: c.unheardTakes,
-        onOpenHistory: () => _openHistory(context),
         direct: direct,
         onOpenDirect: (d) => _openChat(context, friendConversation(d.id)),
         onAddFriends: () => _goPeople(context),
-        directVoiceNew: fromFriends.length,
-        onOpenDirectVoice: () => _openInbox(context, InboxFilter.direct),
       );
     },
   );
@@ -1037,12 +1029,6 @@ class _HomePageState extends State<HomePage> {
       );
   }
 
-  void _openHistory(BuildContext context) {
-    Navigator.of(
-      context,
-    ).push(MaterialPageRoute<void>(builder: (_) => HistoryPage(controller: c)));
-  }
-
   /// Big talk button + private reply banner (v1.5.4).
   Widget _mainTalk(BuildContext context, double pttSize) {
     final reply = c.replyTarget;
@@ -1085,16 +1071,13 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  void _openInbox(
-    BuildContext context, [
-    InboxFilter filter = InboxFilter.all,
-  ]) {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => InboxPage(controller: c, initial: filter),
-      ),
-    );
-  }
+  void _openMessages(
+    BuildContext context,
+    MessagesFilter filter, {
+    String? focusKey,
+  }) => unawaited(
+    openMessages(context, c, filter: filter, focusKey: focusKey),
+  );
 
   Future<void> _openRecordSheet(
     BuildContext context,
@@ -1549,9 +1532,8 @@ class _HomePageState extends State<HomePage> {
                   contentPadding: EdgeInsets.zero,
                   title: const Text('Auto-play incoming talk'),
                   subtitle: const Text(
-                    'Off: nothing plays by itself. Talk is saved in Missed '
-                    'and voice messages wait in Voice messages until you '
-                    'tap Play.',
+                    'Off: nothing plays by itself. Talk is saved in Messages '
+                    'and voice messages wait there until you tap Play.',
                   ),
                   value: c.settings.autoPlay,
                   onChanged: c.setAutoPlay,
@@ -2066,7 +2048,7 @@ class _RecordButton extends StatelessWidget {
         ? 'Recording 0:${secs.toString().padLeft(2, '0')} / 0:30'
         : big
         ? 'Hold to record'
-        : 'Hold: message';
+        : 'Message';
     return Listener(
       onPointerDown: (_) => c.startRecording(toPeer: toPeer),
       onPointerUp: (_) => c.stopRecording(),

@@ -182,8 +182,8 @@ void main() {
     await finish(t);
   });
 
-  testWidgets('bottom bar: Talk, Chat, People, Trip; Chat shows Chat, '
-      'Voicemail and History; People shows Refresh and Who\'s where', (
+  testWidgets('bottom bar: Talk, Chat, People, Trip; Chat is text only '
+      '(chat and friends); People shows Refresh and Who\'s where', (
     t,
   ) async {
     phone(t);
@@ -208,8 +208,8 @@ void main() {
     await t.tap(find.descendant(of: bar, matching: find.text('Chat')));
     await settle(t);
     expect(find.byKey(const Key('chat-hub-chat')), findsOneWidget);
-    expect(find.byKey(const Key('chat-hub-voice')), findsOneWidget);
-    expect(find.byKey(const Key('chat-hub-history')), findsOneWidget);
+    expect(find.byKey(const Key('chat-hub-voice')), findsNothing);
+    expect(find.byKey(const Key('chat-hub-history')), findsNothing);
     await t.tap(find.descendant(of: bar, matching: find.text('People')));
     await settle(t);
     expect(find.byKey(const Key('people-count')), findsOneWidget);

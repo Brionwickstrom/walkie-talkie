@@ -57,6 +57,7 @@ import '../messaging/inbox.dart';
 import '../messaging/messenger.dart';
 import '../messaging/outbox.dart';
 import '../messaging/ringer.dart';
+import '../messaging/sent_log.dart';
 import '../messaging/storage.dart';
 import '../messaging/voice_clip.dart';
 import '../platform/background_bridge.dart';
@@ -1208,7 +1209,9 @@ class WalkieController extends ChangeNotifier {
   /// Short messages for a snackbar ("Delivered to Bandit").
   Stream<String> get notices => _notices.stream;
 
-  /// Navigation requests from notifications: 'inbox'.
+  /// Navigation requests from notifications: 'inbox', 'friend:ID', and
+  /// (v2.4.0) 'messages:FILTER:KEY' (FILTER is here, direct or all, KEY the
+  /// voice message to scroll to).
   Stream<String> get uiRequests => _uiRequests.stream;
 
   int get channel => manager.channel;
@@ -1816,6 +1819,10 @@ class WalkieController extends ChangeNotifier {
     exit(0);
   }
 
+  /// Run a notification action as if it came from the phone (tests).
+  @visibleForTesting
+  Future<void> debugAction(Map<String, Object?> a) => _onAction(a);
+
   Future<void> _onAction(Map<String, Object?> a) async {
     int n(String k) => (a[k] as num?)?.toInt() ?? 0;
     switch (a['type']) {
@@ -1849,9 +1856,15 @@ class WalkieController extends ChangeNotifier {
             messenger?.inbox.byKey(key) ?? friendMessenger?.inbox.byKey(key);
         if (e != null) await playMessage(e, trigger: 'notification');
       case 'openInbox':
+        // v2.4.0: every voice message notification opens Messages on the
+        // right list, scrolled to that message.
         final k = a['key'] as String? ?? '';
         final fe = friendMessenger?.inbox.byKey(k);
-        _uiRequests.add(fe != null ? 'friend:${fe.sender}' : 'inbox');
+        final me = messenger?.inbox.byKey(k);
+        final f = fe != null
+            ? 'direct'
+            : (me != null && me.channel == scope ? 'here' : 'all');
+        _uiRequests.add('messages:$f:$k');
       case 'openFriend':
         final id = n('friend');
         if (friendLinks.isFriend(id)) _uiRequests.add('friend:$id');
@@ -2422,6 +2435,18 @@ class WalkieController extends ChangeNotifier {
   List<TalkTake> get takes => history?.takesFor(scope) ?? const [];
   int get unheardTakes => history?.unheardIn(scope) ?? 0;
 
+  /// Missed live talk on every channel and group (Messages > All, v2.4.0).
+  List<TalkTake> get takesAll => history?.takesAll() ?? const [];
+  int get unheardTakesAll => history?.unheardAll ?? 0;
+
+  /// Audio nobody has listened to yet, in every place (voice messages and
+  /// missed live talk): the dot on the Talk screen's Messages icon.
+  int get unheardAudio => unplayedMessages + unheardTakesAll;
+
+  /// Text nobody has read yet (channel / group chat and friend chats): the
+  /// Chat tab's badge. Audio is counted on the Talk screen instead.
+  int get unreadText => unreadChannelChat + unreadFriendChats;
+
   /// Play [t] (from where it was paused), or pause it if it is playing.
   Future<void> playTake(TalkTake t) async {
     if (playingTake?.id == t.id) {
@@ -2442,12 +2467,19 @@ class WalkieController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Plays every unheard transmission on this channel, oldest first.
-  Future<void> playAllMissed() async {
+  /// Plays every unheard transmission on this channel (or, with
+  /// [allPlaces], on every channel and group), oldest first.
+  Future<void> playAllMissed({bool allPlaces = false}) async {
     if (playingAll) return;
-    final queue = takes.where((t) => !t.heard).toList().reversed.toList();
+    final queue = (allPlaces ? takesAll : takes)
+        .where((t) => !t.heard)
+        .toList()
+        .reversed
+        .toList();
     if (queue.isEmpty) {
-      _notice('Nothing missed on $channelLabel.');
+      _notice(
+        allPlaces ? 'Nothing missed.' : 'Nothing missed on $channelLabel.',
+      );
       return;
     }
     playingAll = true;
@@ -2532,12 +2564,45 @@ class WalkieController extends ChangeNotifier {
     await history?.delete(t);
   }
 
-  Future<void> clearHistory() async {
+  Future<void> clearHistory({bool allPlaces = false}) async {
     if (playingTake != null) pauseTake();
-    await history?.clear(scope);
+    if (allPlaces) {
+      await history?.clearAll();
+    } else {
+      await history?.clear(scope);
+    }
   }
 
-  void markAllHeard() => history?.markAllHeard(scope);
+  void markAllHeard({bool allPlaces = false}) => allPlaces
+      ? history?.markEverythingHeard()
+      : history?.markAllHeard(scope);
+
+  /// Mark the voice messages [which] picks as played (Messages > Mark all
+  /// as heard). One save per messenger.
+  Future<void> markVoicePlayed(bool Function(InboxEntry e) which) async {
+    for (final m in [messenger, friendMessenger]) {
+      if (m == null) continue;
+      await m.markAllPlayed(m.inbox.entries.where(which).toList());
+    }
+    notifyListeners();
+  }
+
+  /// Delivered voice messages of ours, newest first (Messages > Sent): the
+  /// record and whether it went to a friend (their own messenger).
+  List<(SentRecord, bool)> get sentMessages {
+    final all = <(SentRecord, bool)>[
+      for (final r in messenger?.sent.entries ?? const <SentRecord>[])
+        (r, false),
+      for (final r in friendMessenger?.sent.entries ?? const <SentRecord>[])
+        (r, true),
+    ]..sort((a, b) => b.$1.deliveredAt.compareTo(a.$1.deliveredAt));
+    return all;
+  }
+
+  Future<void> forgetSent(SentRecord r, {required bool friend}) async {
+    await (friend ? friendMessenger : messenger)?.forgetSent(r.msgId);
+    notifyListeners();
+  }
 
   // ---------------------------------------------------------------- rings
 

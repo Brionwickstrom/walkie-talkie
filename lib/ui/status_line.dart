@@ -47,10 +47,8 @@ class TalkStatusLine extends StatelessWidget {
     this.mobileDataHint = false,
     this.onMobileData,
     required this.onOpen,
-    this.onOpenVoice,
-    this.onOpenHistory,
-    this.voiceNew = false,
-    this.historyUnheard = false,
+    this.onOpenMessages,
+    this.messagesNew = false,
   });
 
   final AudienceInfo audience;
@@ -69,12 +67,11 @@ class TalkStatusLine extends StatelessWidget {
   final VoidCallback? onMobileData;
   final VoidCallback onOpen;
 
-  /// v2.3.3: small shortcuts at the end of the line to Voice messages and
-  /// History (null = hidden). A dot means something new / not heard yet.
-  final VoidCallback? onOpenVoice;
-  final VoidCallback? onOpenHistory;
-  final bool voiceNew;
-  final bool historyUnheard;
+  /// v2.4.0: one small Messages icon at the end of the line (null = hidden):
+  /// voice messages and missed live talk. The dot means audio nobody has
+  /// listened to yet, in any place.
+  final VoidCallback? onOpenMessages;
+  final bool messagesNew;
 
   String get _audienceText {
     final people = '$here ${here == 1 ? 'person' : 'people'}';
@@ -186,25 +183,15 @@ class TalkStatusLine extends StatelessWidget {
               ),
             ),
           ),
-        if (onOpenVoice != null)
+        if (onOpenMessages != null)
           _Shortcut(
-            key: const Key('talk-voice-shortcut'),
+            key: const Key('talk-messages-shortcut'),
             icon: Icons.voicemail,
-            tooltip: voiceNew
-                ? 'Voice messages (new ones waiting)'
-                : 'Voice messages',
-            dot: voiceNew,
-            onTap: onOpenVoice!,
-          ),
-        if (onOpenHistory != null)
-          _Shortcut(
-            key: const Key('talk-history-shortcut'),
-            icon: Icons.history,
-            tooltip: historyUnheard
-                ? 'History (talk you did not hear)'
-                : 'History',
-            dot: historyUnheard,
-            onTap: onOpenHistory!,
+            tooltip: messagesNew
+                ? 'Messages (voice messages and talk you did not hear)'
+                : 'Messages',
+            dot: messagesNew,
+            onTap: onOpenMessages!,
           ),
         if (quiet != null)
           Padding(

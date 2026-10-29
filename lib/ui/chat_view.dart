@@ -6,6 +6,35 @@ import '../chat/chat_body.dart';
 import '../chat/chat_store.dart';
 import 'home_view.dart';
 
+/// A voice message in a friend's thread (v2.4.0): theirs (playable) or ours
+/// (delivered / listened; the audio is not kept after delivery).
+class VoiceBubble {
+  const VoiceBubble({
+    required this.id,
+    required this.at,
+    required this.durationMs,
+    required this.mine,
+    this.played = true,
+    this.playing = false,
+    this.status,
+    this.onPlay,
+  });
+  final String id;
+  final DateTime at;
+  final int durationMs;
+  final bool mine;
+
+  /// Theirs: listened to already (bold + dot when not).
+  final bool played;
+  final bool playing;
+
+  /// Ours: "Delivered", "Listened", "Waiting".
+  final String? status;
+
+  /// Null = not playable (ours).
+  final VoidCallback? onPlay;
+}
+
 /// The chat screen without the controller (also used by layout tests).
 class ChatView extends StatefulWidget {
   const ChatView({
@@ -22,9 +51,13 @@ class ChatView extends StatefulWidget {
     this.onStopLive,
     this.now,
     this.enabled = true,
+    this.voice = const [],
   });
 
   final List<ChatMessage> messages;
+
+  /// Voice messages to show between the text, by time (friend threads).
+  final List<VoiceBubble> voice;
   final Future<Uint8List?> Function(ChatMessage m) loadPhoto;
   final ValueChanged<String> onSend;
   final VoidCallback onAttach;
@@ -64,7 +97,14 @@ class _ChatViewState extends State<ChatView> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final msgs = widget.messages.reversed.toList();
+    final timeline = <({DateTime at, ChatMessage? m, VoiceBubble? v})>[
+      for (final m in widget.messages) (at: m.at, m: m, v: null),
+      for (final v in widget.voice) (at: v.at, m: null, v: v),
+    ];
+    if (widget.voice.isNotEmpty) {
+      timeline.sort((a, b) => a.at.compareTo(b.at));
+    }
+    final msgs = timeline.reversed.toList();
     final now = widget.now ?? DateTime.now();
     return Column(
       children: [
@@ -113,17 +153,24 @@ class _ChatViewState extends State<ChatView> {
                     vertical: 8,
                   ),
                   itemCount: msgs.length,
-                  itemBuilder: (_, i) => _Bubble(
-                    m: msgs[i],
-                    showName:
-                        widget.showNames &&
-                        !msgs[i].mine &&
-                        (i == msgs.length - 1 ||
-                            msgs[i + 1].sender != msgs[i].sender),
-                    loadPhoto: widget.loadPhoto,
-                    onOpenMap: widget.onOpenMap,
-                    now: now,
-                  ),
+                  itemBuilder: (_, i) {
+                    final v = msgs[i].v;
+                    if (v != null) return _VoiceTile(v: v);
+                    final m = msgs[i].m!;
+                    final older = i == msgs.length - 1 ? null : msgs[i + 1].m;
+                    return _Bubble(
+                      m: m,
+                      showName:
+                          widget.showNames &&
+                          !m.mine &&
+                          (i == msgs.length - 1 ||
+                              older == null ||
+                              older.sender != m.sender),
+                      loadPhoto: widget.loadPhoto,
+                      onOpenMap: widget.onOpenMap,
+                      now: now,
+                    );
+                  },
                 ),
         ),
         SafeArea(
@@ -176,6 +223,86 @@ class _ChatViewState extends State<ChatView> {
 
 String hhmm(DateTime t) =>
     '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+
+class _VoiceTile extends StatelessWidget {
+  const _VoiceTile({required this.v});
+  final VoiceBubble v;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final bg = v.mine ? cs.primaryContainer : cs.surfaceContainerHighest;
+    final fg = v.mine ? cs.onPrimaryContainer : cs.onSurface;
+    return Align(
+      alignment: v.mine ? Alignment.centerRight : Alignment.centerLeft,
+      child: Padding(
+        padding: const EdgeInsets.only(top: 3),
+        child: InkWell(
+          key: Key('voice-bubble-${v.id}'),
+          borderRadius: BorderRadius.circular(14),
+          onTap: v.onPlay,
+          child: Container(
+            constraints: BoxConstraints(
+              maxWidth: MediaQuery.of(context).size.width * 0.78,
+              minWidth: 160,
+            ),
+            padding: const EdgeInsets.fromLTRB(8, 6, 12, 4),
+            decoration: BoxDecoration(
+              color: bg,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (v.onPlay != null)
+                      Badge(
+                        isLabelVisible: !v.played,
+                        smallSize: 10,
+                        child: Icon(
+                          v.playing ? Icons.stop_circle : Icons.play_circle,
+                          color: fg,
+                          size: 34,
+                        ),
+                      )
+                    else
+                      Icon(Icons.keyboard_voice, color: fg, size: 28),
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Text(
+                        'Voice message · ${clipLength(v.durationMs)}',
+                        style: TextStyle(
+                          color: fg,
+                          fontSize: 15,
+                          fontWeight: v.played
+                              ? FontWeight.w500
+                              : FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '${hhmm(v.at)}'
+                  '${v.status != null ? ' · ${v.status}' : ''}'
+                  '${!v.mine && !v.played ? ' · new' : ''}',
+                  style: TextStyle(
+                    color: fg.withValues(alpha: 0.6),
+                    fontSize: 11,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 class _Bubble extends StatelessWidget {
   const _Bubble({

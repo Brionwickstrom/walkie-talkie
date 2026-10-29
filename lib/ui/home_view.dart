@@ -1349,7 +1349,7 @@ class MainTalkArea extends StatelessWidget {
   }
 }
 
-/// Ring all / Beep / Hold: message, wrapping on narrow screens.
+/// Ring all / Beep / Message, wrapping on narrow screens.
 class ChannelActions extends StatelessWidget {
   const ChannelActions({
     super.key,

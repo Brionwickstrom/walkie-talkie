@@ -149,6 +149,13 @@ class TalkHistory {
   int unheardIn(int scope) =>
       _takes.where((t) => t.scope == scope && !t.heard).length;
 
+  /// Every channel and group, newest first (Messages > All, v2.4.0).
+  List<TalkTake> takesAll() => _takes.toList()
+    ..sort((a, b) => b.start.compareTo(a.start));
+
+  /// Not heard on any channel or group.
+  int get unheardAll => _takes.where((t) => !t.heard).length;
+
   /// Someone (or we, with [mine]) is talking on [scope]. [heard]: it is
   /// being played live with the app open.
   void addPacket({

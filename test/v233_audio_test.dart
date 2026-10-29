@@ -8,7 +8,6 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:walkie_talkie/audio/codec.dart';
 import 'package:walkie_talkie/audio/live_gate.dart';
@@ -19,17 +18,11 @@ import 'package:walkie_talkie/core/frame.dart';
 import 'package:walkie_talkie/core/link_policy.dart';
 import 'package:walkie_talkie/core/transport.dart';
 import 'package:walkie_talkie/core/transport_manager.dart';
-import 'package:walkie_talkie/history/talk_history.dart';
-import 'package:walkie_talkie/messaging/storage.dart';
-import 'package:walkie_talkie/ui/status_line.dart';
-import 'package:walkie_talkie/ui/who_can_hear.dart';
 
-import 'home_layout_test.dart' show loadFonts;
 import 'messaging_fakes.dart';
 import 'v198_failover_test.dart' show LatencyLink, bob, hello, me;
 import 'v220_battery_test.dart'
     show FakeSpeaker, silentSamples, voice, voiceSamples;
-import 'v231_helpers.dart';
 
 /// A decoder that can rebuild a lost frame from the next packet (like Opus).
 class FecDecoder implements VoiceDecoder, FecVoiceDecoder {
@@ -547,122 +540,6 @@ void main() {
         expect(counts(), [1, 0]);
         expect(m.routeSwitches, 1);
         await m.setTalking(false);
-      });
-    });
-  });
-
-  group('4. Talk screen shortcuts', () {
-    testWidgets('status line shortcuts: small, with a dot only when new', (
-      t,
-    ) async {
-      var voice = 0, history = 0;
-      Widget line({required bool vNew, required bool hNew}) => MaterialApp(
-        home: Scaffold(
-          body: TalkStatusLine(
-            audience: const AudienceInfo(Audience.open, channel: 1),
-            here: 3,
-            netStatus: TransportStatus.running,
-            netText: 'Internet via Wi-Fi',
-            onOpen: () {},
-            onOpenVoice: () => voice++,
-            onOpenHistory: () => history++,
-            voiceNew: vNew,
-            historyUnheard: hNew,
-          ),
-        ),
-      );
-      await t.pumpWidget(line(vNew: false, hNew: false));
-      expect(find.byKey(const Key('talk-voice-shortcut')), findsOneWidget);
-      expect(find.byKey(const Key('talk-history-shortcut')), findsOneWidget);
-      expect(find.byKey(const Key('shortcut-dot')), findsNothing);
-      expect(find.byTooltip('Voice messages'), findsOneWidget);
-      expect(find.byTooltip('History'), findsOneWidget);
-      await t.pumpWidget(line(vNew: true, hNew: false));
-      expect(find.byKey(const Key('shortcut-dot')), findsOneWidget);
-      await t.pumpWidget(line(vNew: true, hNew: true));
-      expect(find.byKey(const Key('shortcut-dot')), findsNWidgets(2));
-      await t.tap(find.byKey(const Key('talk-voice-shortcut')));
-      await t.tap(find.byKey(const Key('talk-history-shortcut')));
-      expect([voice, history], [1, 1]);
-      // Small: icons of 20 dp in a 32 dp target; the text keeps the room.
-      expect(
-        t.getSize(find.byKey(const Key('talk-voice-shortcut'))).width,
-        lessThanOrEqualTo(40),
-      );
-    });
-
-    group('on the real Talk screen', () {
-      setUpAll(loadFonts);
-
-      testWidgets('shortcuts open Voice messages and History; 360 dp, 1.3x '
-          'text, nothing overlaps', (t) async {
-        phone(t);
-        final c = await makeController(t, group: 'Ski patrol');
-        await t.pumpWidget(homeApp(c));
-        await settle(t);
-        expect(t.takeException(), isNull);
-        final voiceBtn = find.byKey(const Key('talk-voice-shortcut'));
-        final histBtn = find.byKey(const Key('talk-history-shortcut'));
-        expect(voiceBtn, findsOneWidget);
-        expect(histBtn, findsOneWidget);
-        // Still one status line, no banner, the people list and the four
-        // action buttons are where they were.
-        expect(find.byKey(const Key('status-line-text')), findsOneWidget);
-        expect(find.byKey(const Key('ring-all')), findsOneWidget);
-        expect(find.byKey(const Key('beep-all')), findsOneWidget);
-        final text = t.getRect(find.byKey(const Key('status-line-text')));
-        expect(text.right, lessThanOrEqualTo(t.getRect(voiceBtn).left + 0.5));
-        expect(
-          t.getRect(voiceBtn).right,
-          lessThanOrEqualTo(t.getRect(histBtn).left + 0.5),
-        );
-        expect(
-          t.getRect(histBtn).right,
-          lessThanOrEqualTo(t.getSize(find.byType(MaterialApp)).width),
-        );
-        await t.tap(voiceBtn);
-        await settle(t);
-        expect(find.text('Voice messages'), findsWidgets);
-        expect(t.takeException(), isNull);
-        await t.pageBack();
-        await settle(t);
-        await t.tap(histBtn);
-        await settle(t);
-        expect(find.textContaining('History ·'), findsOneWidget);
-        await t.pageBack();
-        await settle(t);
-        await finish(t);
-      });
-
-      testWidgets('the Chat badge counts missed live talk too', (t) async {
-        phone(t);
-        final c = await makeController(t);
-        final h = TalkHistory(storage: MemoryMessageStorage());
-        await t.runAsync(h.load);
-        c.history = h;
-        await t.pumpWidget(homeApp(c));
-        await settle(t);
-        final tabs = find.byKey(const Key('mainTabs'));
-        expect(
-          find.descendant(of: tabs, matching: find.byType(Badge)),
-          findsWidgets,
-        );
-        bool chatBadge1() => find
-            .descendant(of: tabs, matching: find.text('1'))
-            .evaluate()
-            .isNotEmpty;
-        expect(chatBadge1(), isFalse);
-        // 30 packets (600 ms) from someone else, not heard (app closed).
-        for (var i = 0; i < 30; i++) {
-          h.addPacket(scope: c.scope, sender: 7, name: 'Pat', opus: pkt(i));
-        }
-        h.endTake(7);
-        expect(c.unheardTakes, 1);
-        await finish(t);
-        await t.pumpWidget(homeApp(c));
-        await settle(t);
-        expect(chatBadge1(), isTrue, reason: 'missed talk on the Chat tab');
-        await finish(t);
       });
     });
   });

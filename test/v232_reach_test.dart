@@ -6,7 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:walkie_talkie/ui/chat_hub.dart';
 import 'package:walkie_talkie/ui/friends_page.dart';
 import 'package:walkie_talkie/ui/home_view.dart' show PersonView;
-import 'package:walkie_talkie/ui/inbox_page.dart';
+import 'package:walkie_talkie/ui/messages_page.dart';
 import 'package:walkie_talkie/ui/people_tab.dart';
 import 'package:walkie_talkie/ui/reach.dart';
 
@@ -84,8 +84,8 @@ void main() {
       ('360x640 at 1.3x', 360.0, 640.0, 1.3),
       ('320x568 at 1.3x', 320.0, 568.0, 1.3),
     ]) {
-      testWidgets('$label, open channel: header, "Here (CH 1)", reach line, '
-          'tags, Direct chats with friends', (t) async {
+      testWidgets('$label, open channel: banner once, "CH 1 chat" first, '
+          'Friends below, text only', (t) async {
         phone(t, w: w, h: h, ts: ts);
         final c = await makeController(
           t,
@@ -99,67 +99,30 @@ void main() {
           t.widget<Text>(find.byKey(const Key('place-header-text'))).data,
           'CH 1 · open',
         );
-        expect(find.text('Here (CH 1)'), findsOneWidget);
-        expect(find.text('Anyone on CH 1 can read this'), findsOneWidget);
-        // The "here" rows carry the open-channel tag.
-        expect(
-          tags(t).where((x) => x == 'Open channel · CH 1').length,
-          greaterThanOrEqualTo(2),
-        );
+        expect(find.text('Here (CH 1)'), findsNothing);
+        expect(find.text('Anyone on CH 1 can read this'), findsNothing);
+        expect(tags(t), isEmpty, reason: 'no per-row tags on the Chat tab');
+        // The channel chat is the first row, Friends come after it.
+        final chat = t.getRect(find.byKey(const Key('chat-hub-chat')));
+        expect(find.text('CH 1 chat'), findsOneWidget);
+        await reveal(t, find.byKey(const Key('direct-chat-${0x3333}')));
+        expect(find.text('Friends'), findsOneWidget);
+        expect(find.text('Direct chats'), findsNothing);
+        expect(find.text('Direct · Ann · only you two'), findsNothing);
+        expect(find.text('No messages yet'), findsNWidgets(3));
+        expect(chat.top, lessThan(t.getRect(find.text('Friends')).top));
+        // Audio is not on this tab any more.
         for (final k in [
-          'chat-hub-chat',
           'chat-hub-voice',
           'chat-hub-history',
+          'chat-hub-direct-voice',
         ]) {
-          await reveal(t, find.byKey(Key(k)));
-          expect(find.byKey(Key(k)), findsOneWidget);
+          expect(find.byKey(Key(k)), findsNothing, reason: k);
         }
-        expect(find.textContaining('· CH 1'), findsWidgets);
-        // Direct rows: one per friend, tagged "only you two".
-        await reveal(t, find.byKey(const Key('direct-chat-${0x3333}')));
-        expect(find.text('Direct chats'), findsOneWidget);
-        expect(find.text('Direct · Ann · only you two'), findsOneWidget);
-        expect(find.text('Direct · Bob · only you two'), findsOneWidget);
-        expect(find.text('No messages yet'), findsNWidgets(2));
-        // Open channel rows and direct rows use different icons.
-        expect(find.byIcon(Icons.lock_open), findsWidgets);
-        expect(find.byIcon(Icons.person), findsWidgets);
+        expect(find.text('Voice messages from friends'), findsNothing);
         await finish(t);
       });
     }
-
-    testWidgets('private group: lock in the group colour, "Only people in '
-        'privates club"', (t) async {
-      phone(t);
-      final c = await makeController(t, group: 'privates club');
-      await t.pumpWidget(homeApp(c));
-      await settle(t);
-      await goTab(t, 'Chat');
-      expect(
-        t.widget<Text>(find.byKey(const Key('place-header-text'))).data,
-        'privates club · private',
-      );
-      expect(find.text('Here (privates club)'), findsOneWidget);
-      expect(find.text('Only people in privates club'), findsOneWidget);
-      expect(
-        tags(t).where((x) => x == 'Private group · privates club').length,
-        3,
-      );
-      final lock = t.widget<Icon>(
-        find
-            .descendant(
-              of: find.byKey(const Key('place-header')),
-              matching: find.byIcon(Icons.lock),
-            )
-            .first,
-      );
-      expect(
-        lock.color,
-        c.currentGroup == null ? null : Color(c.currentGroup!.color),
-      );
-      expect(find.textContaining('Anyone on'), findsNothing);
-      await finish(t);
-    });
 
     testWidgets('no friends: an empty state that leads to People', (t) async {
       phone(t);
@@ -273,8 +236,8 @@ void main() {
     expect(find.byKey(const Key('mainTabs')), findsNothing);
     await t.tap(find.byTooltip('Chat'));
     await settle(t);
-    expect(find.text('Here (CH 1)'), findsOneWidget);
-    expect(find.text('Direct chats'), findsOneWidget);
+    expect(find.text('CH 1 chat'), findsOneWidget);
+    expect(find.text('Friends'), findsOneWidget);
     await t.pageBack();
     await settle(t);
     await t.tap(find.byTooltip('People'));
@@ -286,25 +249,31 @@ void main() {
     await finish(t);
   });
 
-  testWidgets('Voice messages: filter chips say Here / Direct / All', (
-    t,
-  ) async {
+  testWidgets('Messages: filter chips say Here / Direct / All, the lock '
+      'stays when Here is selected', (t) async {
     phone(t);
     final c = await makeController(t, group: 'privates club');
     await t.pumpWidget(
       MaterialApp(
-        home: InboxPage(controller: c, initial: InboxFilter.here),
+        home: MessagesPage(controller: c, initial: MessagesFilter.here),
       ),
     );
     await settle(t);
     expect(find.text('Here · privates club'), findsOneWidget);
     expect(find.text('Direct'), findsOneWidget);
     expect(find.text('All'), findsOneWidget);
-    await t.tap(find.byKey(const Key('inbox-filter-direct')));
+    final here = find.byKey(const Key('messages-filter-here'));
+    expect(t.widget<ChoiceChip>(here).selected, isTrue);
+    expect(t.widget<ChoiceChip>(here).showCheckmark, isFalse);
+    expect(
+      find.descendant(of: here, matching: find.byIcon(Icons.lock)),
+      findsOneWidget,
+    );
+    await t.tap(find.byKey(const Key('messages-filter-direct')));
     await t.pump();
     expect(
       t
-          .widget<ChoiceChip>(find.byKey(const Key('inbox-filter-direct')))
+          .widget<ChoiceChip>(find.byKey(const Key('messages-filter-direct')))
           .selected,
       isTrue,
     );
@@ -316,7 +285,7 @@ void main() {
       t,
     ) async {
       phone(t, w: 320, h: 568);
-      var chat = 0, voice = 0, hist = 0, dvoice = 0;
+      var chat = 0;
       DirectChatItem? opened;
       await t.pumpWidget(
         MaterialApp(
@@ -326,11 +295,6 @@ void main() {
               chatPreview: 'Yo yo yo',
               chatUnread: 3,
               onOpenChat: () => chat++,
-              voiceNew: 2,
-              voiceWaiting: 1,
-              onOpenVoice: () => voice++,
-              historyUnheard: 1,
-              onOpenHistory: () => hist++,
               direct: const [
                 DirectChatItem(
                   id: 1,
@@ -343,19 +307,15 @@ void main() {
               ],
               onOpenDirect: (d) => opened = d,
               onAddFriends: () {},
-              directVoiceNew: 1,
-              onOpenDirectVoice: () => dvoice++,
             ),
           ),
         ),
       );
       expect(find.text('General Room · CH 1 · open'), findsOneWidget);
       expect(find.text('Yo yo yo'), findsOneWidget);
-      expect(find.text('2 new · 1 waiting to be delivered'), findsOneWidget);
+      expect(find.text('CH 1 chat'), findsOneWidget);
       await t.tap(find.byKey(const Key('chat-hub-chat')));
-      await t.tap(find.byKey(const Key('chat-hub-voice')));
-      await t.tap(find.byKey(const Key('chat-hub-history')));
-      expect((chat, voice, hist), (1, 1, 1));
+      expect(chat, 1);
       await reveal(t, find.text('see you at 5'), first: true);
       expect(find.text('see you at 5'), findsOneWidget);
       expect(find.byKey(const Key('direct-empty')), findsNothing);
@@ -371,13 +331,6 @@ void main() {
         ),
         findsOneWidget,
       );
-      await reveal(
-        t,
-        find.byKey(const Key('chat-hub-direct-voice')),
-        first: true,
-      );
-      await t.tap(find.byKey(const Key('chat-hub-direct-voice')));
-      expect(dvoice, 1);
     });
 
     testWidgets('People tab data: present people vs friends', (t) async {

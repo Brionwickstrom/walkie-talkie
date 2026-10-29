@@ -16,8 +16,9 @@ import 'package:walkie_talkie/ui/who_can_hear.dart';
 import 'package:walkie_talkie/ui/chat_page.dart';
 import 'package:walkie_talkie/ui/chat_view.dart';
 import 'package:walkie_talkie/ui/friends_page.dart';
-import 'package:walkie_talkie/ui/history_page.dart';
+import 'package:walkie_talkie/ui/messages_page.dart';
 import 'package:walkie_talkie/ui/home_view.dart';
+import 'package:walkie_talkie/ui/reach.dart';
 
 const people = [
   PersonView(
@@ -104,18 +105,34 @@ Widget historyApp() => MaterialApp(
     useMaterial3: true,
     fontFamily: 'Roboto',
   ),
-  home: HistoryView(
-    channelLabel: 'CH 1',
-    takes: takes,
-    unheard: 2,
+  home: MessagesView(
+    filter: MessagesFilter.here,
+    onFilter: (_) {},
+    place: Reach.open(1),
+    chips: const [
+      (MessagesFilter.here, 'Here · CH 1', Icons.lock_open),
+      (MessagesFilter.direct, 'Direct', Icons.person),
+      (MessagesFilter.all, 'All', Icons.all_inbox),
+    ],
+    unheard: const {
+      MessagesFilter.here: 2,
+      MessagesFilter.direct: 0,
+      MessagesFilter.all: 2,
+    },
+    waiting: const [],
+    sent: const [],
+    takes: [
+      for (final t in takes)
+        TakeRow(take: t, onPlay: () {}, onDelete: () {}),
+    ],
+    voice: const [],
     speed: 1.5,
     playingAll: false,
-    onPlay: (_) {},
-    onPlayMissed: () {},
+    unheardTakes: 2,
     onSpeed: (_) {},
-    onDelete: (_) {},
+    onPlayMissed: () {},
     onMarkAllHeard: () {},
-    onClear: () {},
+    onClearTalk: () {},
   ),
 );
 
