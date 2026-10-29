@@ -46,6 +46,7 @@ class GentleInput {
     required this.elev,
     required this.trails,
     required this.maxSlopePct,
+    this.maxGradePct,
   });
 
   /// Where the start is (the grid is projected around it).
@@ -70,6 +71,10 @@ class GentleInput {
 
   /// Steepest slope allowed (percent), null = no limit.
   final double? maxSlopePct;
+
+  /// Hard cutoff (percent): steps steeper than this are not used unless
+  /// there is no other way. Null = the mode's own ([gentleCutoffFor]).
+  final double? maxGradePct;
 
   double get _kx => 111319.49 * cos(lat0 * pi / 180);
   static const double _ky = 111132.954;
@@ -96,10 +101,12 @@ class GentleOutput {
     required this.onTrailFraction,
     required this.lengthM,
     required this.exceedsLimit,
+    this.relaxedCutoff = false,
   });
   final List<double> u, v, elev;
 
-  /// Steepest stretch of the suggested line (percent, over ~30 m).
+  /// Steepest stretch of the suggested line (percent): the climb or drop
+  /// along the line over about one grid cell of walking.
   final double maxSlopePct;
 
   /// Share of the line that follows a trail or track (0..1).
@@ -108,6 +115,10 @@ class GentleOutput {
 
   /// The line had to cross ground steeper than the chosen limit.
   final bool exceedsLimit;
+
+  /// There was no way round the very steep ground (over the hard grade
+  /// cutoff), so the line crosses it anyway.
+  final bool relaxedCutoff;
 }
 
 /// Chosen grid cell size (m) for a route of [lengthM].
@@ -121,8 +132,28 @@ const double gentleMaxM = 25000;
 double gentleHalfWidthFor(double lengthM) =>
     (lengthM * 0.25).clamp(350.0, 1500.0);
 
-/// Least-cost path over [g]: step cost = distance x slope penalty x trail
-/// bonus. Pure and synchronous (run it in an isolate for big grids).
+/// Walking time per metre against flat ground (Tobler's hiking function),
+/// [s] = rise / run (+ uphill). Best going down about 5%: 0.84.
+double toblerFactor(double s) => exp(3.5 * ((s + 0.05).abs() - 0.05));
+
+/// The cheapest any step can be per metre: Tobler's best times the trail
+/// discount. The search heuristic is this times the straight distance, so
+/// it can never overestimate (admissible and consistent).
+const double gentleToblerBest = 0.8394; // toblerFactor(-0.05)
+
+/// A step along a trail costs this much of the same step off the trail.
+const double gentleTrailFactor = 0.5;
+
+/// Hard grade cutoff (percent) for [limit]: about twice the mode's limit,
+/// 45% for "Any". Steps over it are not allowed unless there is no other
+/// way (then the search is repeated without it and the result flagged).
+double gentleCutoffFor(double? limitPct) =>
+    limitPct == null ? 45 : min(45, limitPct * 2);
+
+/// Least-cost path over [g]: step cost = walking time (Tobler) x a mode
+/// penalty for steep ground, over a one-cell baseline, with trail-to-trail
+/// steps discounted. Pure and synchronous (run it in an isolate for big
+/// grids).
 GentleOutput? computeGentle(GentleInput g) {
   final nu = g.nu, nv = g.nv, n = nu * nv;
   if (nu < 3 || nv < 3 || g.elev.length != n) return null;
@@ -160,39 +191,100 @@ GentleOutput? computeGentle(GentleInput g) {
     if (unknown > 0) return null;
   }
 
-  // Trail cells: cheaper when the trail runs the way we are going.
-  final trail = Float32List(n)..fillRange(0, n, 1.0);
-  const along = 60 * pi / 180; // within 60 degrees of the line
+  double zAt(double u, double v) {
+    final fx = (u - g.u0) / g.cell - 0.5, fy = (v - g.v0) / g.cell - 0.5;
+    final x0 = fx.floor().clamp(0, nu - 2), y0 = fy.floor().clamp(0, nv - 2);
+    final ax = (fx - x0).clamp(0.0, 1.0), ay = (fy - y0).clamp(0.0, 1.0);
+    double e(int x, int y) => z[y * nu + x];
+    return (e(x0, y0) * (1 - ax) + e(x0 + 1, y0) * ax) * (1 - ay) +
+        (e(x0, y0 + 1) * (1 - ax) + e(x0 + 1, y0 + 1) * ax) * ay;
+  }
+
+  // Trail cells and the trail-to-trail steps between them: a step is
+  // cheaper only when it goes from one cell of a trail to the next cell of
+  // the same trail (any direction: switchbacks and contour trails count),
+  // so the line follows the trail instead of running beside it.
+  final trailCell = Uint8List(n);
+  // Where the trail really runs inside each trail cell (mean of its points),
+  // so the line sits on the trail, not on the cell centres.
+  final trailSumU = Float64List(n), trailSumV = Float64List(n);
+  final trailCount = Int32List(n);
+  // Grade (rise / run) of each trail-to-trail step, read from the ground
+  // under the trail itself (not from the cell centres, which would turn a
+  // gentle diagonal trail into steep little stairs).
+  final trailEdge = <int, double>{};
   for (final t in g.trails) {
+    var prev = -1;
+    var pu = 0.0, pv = 0.0, pz = 0.0;
     for (var k = 0; k + 3 < t.length; k += 2) {
       final ax = t[k], ay = t[k + 1], bx = t[k + 2], by = t[k + 3];
       final len = sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay));
       if (len < 1e-6) continue;
-      // Angle against the +u axis, either way along the line.
-      final ang = atan2((by - ay).abs(), (bx - ax).abs());
-      final good = ang <= along && (bx - ax).abs() > 0;
-      final f = good ? 0.35 : 0.95;
       final steps = max(1, (len / (g.cell * 0.5)).ceil());
       for (var s = 0; s <= steps; s++) {
         final u = ax + (bx - ax) * s / steps, v = ay + (by - ay) * s / steps;
         final cx = ((u - g.u0) / g.cell).floor();
         final cy = ((v - g.v0) / g.cell).floor();
-        if (cx < 0 || cy < 0 || cx >= nu || cy >= nv) continue;
+        if (cx < 0 || cy < 0 || cx >= nu || cy >= nv) {
+          prev = -1;
+          continue;
+        }
         final i = cy * nu + cx;
-        if (f < trail[i]) trail[i] = f;
+        trailCell[i] = 1;
+        trailSumU[i] += u;
+        trailSumV[i] += v;
+        trailCount[i]++;
+        final zz = zAt(u, v);
+        if (prev >= 0 && prev != i) {
+          final d = sqrt((u - pu) * (u - pu) + (v - pv) * (v - pv));
+          if (d > 1) {
+            final gr = (zz - pz) / d;
+            trailEdge[prev * n + i] = gr;
+            trailEdge[i * n + prev] = -gr;
+          }
+        }
+        if (prev != i) {
+          prev = i;
+          pu = u;
+          pv = v;
+          pz = zz;
+        }
       }
     }
   }
 
-  // Steepest slope at each cell (percent): side slopes count too, so the
-  // line does not run along the face of a steep hillside.
+  /// Trail-to-trail step grade, or null when the step is not along a trail.
+  double? trailGrade(int a, int b) => trailEdge[a * n + b];
+  bool nearTrail(int a, int b) {
+    if (trailCell[a] == 0 || trailCell[b] == 0) return false;
+    final dx = (a % nu - b % nu).abs(), dy = (a ~/ nu - b ~/ nu).abs();
+    return dx <= 1 && dy <= 1;
+  }
+
+  // Steepest slope at each cell (percent), over a one-cell baseline (the
+  // steeper of the two neighbours on each axis), so a short steep face is
+  // not averaged away. Side slopes count too, so the line does not run
+  // along the face of a steep hillside.
   final grad = Float32List(n);
   for (var y = 0; y < nv; y++) {
     for (var x = 0; x < nu; x++) {
-      final x0 = max(0, x - 1), x1 = min(nu - 1, x + 1);
-      final y0 = max(0, y - 1), y1 = min(nv - 1, y + 1);
-      final gx = (z[y * nu + x1] - z[y * nu + x0]) / ((x1 - x0) * g.cell);
-      final gy = (z[y1 * nu + x] - z[y0 * nu + x]) / ((y1 - y0) * g.cell);
+      double axis(double c, double? lo, double? hi) {
+        final a = lo == null ? 0.0 : (c - lo).abs();
+        final b = hi == null ? 0.0 : (hi - c).abs();
+        return max(a, b) / g.cell;
+      }
+
+      final c = z[y * nu + x];
+      final gx = axis(
+        c,
+        x > 0 ? z[y * nu + x - 1] : null,
+        x < nu - 1 ? z[y * nu + x + 1] : null,
+      );
+      final gy = axis(
+        c,
+        y > 0 ? z[(y - 1) * nu + x] : null,
+        y < nv - 1 ? z[(y + 1) * nu + x] : null,
+      );
       grad[y * nu + x] = sqrt(gx * gx + gy * gy) * 100;
     }
   }
@@ -206,122 +298,156 @@ GentleOutput? computeGentle(GentleInput g) {
 
   final start = cellOf(0, 0), goal = cellOf(g.length, 0);
   final limit = g.maxSlopePct;
+  final cutoffPct = g.maxGradePct ?? gentleCutoffFor(limit);
 
-  double stepCost(int a, int b, double d) {
-    final dz = z[b] - z[a];
-    final slope = max(
-      (dz.abs() / d) * 100,
-      sideWeight * max(grad[a], grad[b]),
-    ); // percent
-    double pen;
+  /// Penalty for steep ground in this mode (1 = none).
+  double modePenalty(double pct) {
     if (limit != null) {
-      final r = slope / limit;
-      // Cheap under the limit, very dear over it (still possible).
-      pen = r <= 1
-          ? 1 + 0.6 * r * r
-          : 1 + 0.6 + 14 * (r - 1) + 4 * (r - 1) * (r - 1);
-    } else {
-      final r = slope / 35;
-      pen = 1 + 3 * r * r;
+      final r = pct / limit;
+      return r <= 1
+          ? 1 + 0.3 * r * r
+          : 1.3 + 8 * (r - 1) + 3 * (r - 1) * (r - 1);
     }
-    // Going up costs a little more than coming down.
-    if (dz > 0) pen *= 1 + min(0.5, slope / 100);
-    final tf = min(trail[a], trail[b]);
-    return d * pen * tf;
+    final r = pct / 35;
+    return 1 + r * r;
   }
 
-  final cost = Float64List(n)..fillRange(0, n, double.infinity);
-  final from = Int32List(n)..fillRange(0, n, -1);
-  final done = Uint8List(n);
-  final gx = goal % nu, gy = goal ~/ nu;
-  double h(int i) {
-    final dx = (i % nu - gx) * g.cell, dy = (i ~/ nu - gy) * g.cell;
-    return sqrt(dx * dx + dy * dy) * 0.35;
+  /// Cost of walking [len] m at signed grade [s] (rise/run) with side slope
+  /// [sidePct]; infinity when over the hard cutoff and [cut] is on.
+  double legCost(double s, double sidePct, double len, bool onTrail, bool cut) {
+    final alongPct = s.abs() * 100;
+    final side = onTrail ? 0.0 : sideWeight * sidePct;
+    final eff = max(alongPct, side);
+    if (cut && !onTrail && eff > cutoffPct) return double.infinity;
+    final sg = side > alongPct ? side / 100 : s;
+    return len *
+        toblerFactor(sg) *
+        modePenalty(eff) *
+        (onTrail ? gentleTrailFactor : 1);
   }
 
-  final heap = _Heap();
-  cost[start] = 0;
-  heap.add(h(start), start);
+  double stepCost(int a, int b, int dx, int dy, bool cut) {
+    final d = sqrt((dx * dx + dy * dy).toDouble()) * g.cell;
+    final side = max(grad[a], grad[b]);
+    final tg = trailGrade(a, b);
+    final onTrail = tg != null;
+    final exempt = a == start || b == goal;
+    final cutNow = cut && !exempt;
+    if (dx.abs() == 2 || dy.abs() == 2) {
+      // A long (knight) step is two half steps over the height halfway
+      // between the cells it passes, so the baseline stays about a cell.
+      final ax = a % nu, ay = a ~/ nu;
+      // The two cells either side of the half-way point.
+      final c1 = dx.abs() == 2
+          ? ay * nu + ax + dx ~/ 2
+          : (ay + dy ~/ 2) * nu + ax;
+      final c2 = dx.abs() == 2
+          ? (ay + dy) * nu + ax + dx ~/ 2
+          : (ay + dy ~/ 2) * nu + ax + dx;
+      final zm = (z[c1] + z[c2]) / 2;
+      final h = d / 2;
+      final c =
+          legCost((zm - z[a]) / h, side, h, onTrail, cutNow) +
+          legCost((z[b] - zm) / h, side, h, onTrail, cutNow);
+      return c;
+    }
+    return legCost(tg ?? (z[b] - z[a]) / d, side, d, onTrail, cutNow);
+  }
+
   const dirs = [
     (1, 0), (-1, 0), (0, 1), (0, -1), //
     (1, 1), (1, -1), (-1, 1), (-1, -1),
     (2, 1), (2, -1), (-2, 1), (-2, -1), (1, 2), (1, -2), (-1, 2), (-1, -2),
   ];
-  while (heap.isNotEmpty) {
-    final cur = heap.removeFirst();
-    if (done[cur] == 1) continue;
-    done[cur] = 1;
-    if (cur == goal) break;
-    final cx = cur % nu, cy = cur ~/ nu;
-    for (final (dx, dy) in dirs) {
-      final x = cx + dx, y = cy + dy;
-      if (x < 0 || y < 0 || x >= nu || y >= nv) continue;
-      final nb = y * nu + x;
-      if (done[nb] == 1) continue;
-      final d = sqrt((dx * dx + dy * dy).toDouble()) * g.cell;
-      final c = cost[cur] + stepCost(cur, nb, d);
-      if (c < cost[nb]) {
-        cost[nb] = c;
-        from[nb] = cur;
-        heap.add(c + h(nb), nb);
+  final gx = goal % nu, gy = goal ~/ nu;
+  const hFactor = gentleToblerBest * gentleTrailFactor;
+  double h(int i) {
+    final dx = (i % nu - gx) * g.cell, dy = (i ~/ nu - gy) * g.cell;
+    return sqrt(dx * dx + dy * dy) * hFactor;
+  }
+
+  /// A* over the grid; null when the goal cannot be reached.
+  List<int>? search(bool cut) {
+    final cost = Float64List(n)..fillRange(0, n, double.infinity);
+    final from = Int32List(n)..fillRange(0, n, -1);
+    final done = Uint8List(n);
+    final heap = _Heap();
+    cost[start] = 0;
+    heap.add(h(start), start);
+    while (heap.isNotEmpty) {
+      final cur = heap.removeFirst();
+      if (done[cur] == 1) continue;
+      done[cur] = 1;
+      if (cur == goal) break;
+      final cx = cur % nu, cy = cur ~/ nu;
+      for (final (dx, dy) in dirs) {
+        final x = cx + dx, y = cy + dy;
+        if (x < 0 || y < 0 || x >= nu || y >= nv) continue;
+        final nb = y * nu + x;
+        if (done[nb] == 1) continue;
+        final sc = stepCost(cur, nb, dx, dy, cut);
+        if (sc.isInfinite) continue;
+        final c = cost[cur] + sc;
+        if (c < cost[nb]) {
+          cost[nb] = c;
+          from[nb] = cur;
+          heap.add(c + h(nb), nb);
+        }
       }
     }
+    if (from[goal] < 0 && start != goal) return null;
+    final path = <int>[];
+    for (var c = goal; c >= 0; c = from[c]) {
+      path.add(c);
+      if (c == start) break;
+    }
+    return path.reversed.toList();
   }
-  if (from[goal] < 0 && start != goal) return null;
-  final path = <int>[];
-  for (var c = goal; c >= 0; c = from[c]) {
-    path.add(c);
-    if (c == start) break;
+
+  var relaxed = false;
+  var cells = search(true);
+  if (cells == null) {
+    // No way round the steepest ground: allow it (still dear), and say so.
+    relaxed = true;
+    cells = search(false);
+    if (cells == null) return null;
   }
-  final cells = path.reversed.toList();
+  final cut = !relaxed;
 
   // Cell centres in the u/v frame; the true start and target at the ends.
   var pu = <double>[0];
   var pv = <double>[0];
   for (var k = 1; k + 1 < cells.length; k++) {
-    pu.add(g.u0 + (cells[k] % nu + 0.5) * g.cell);
-    pv.add(g.v0 + (cells[k] ~/ nu + 0.5) * g.cell);
+    final c = cells[k];
+    if (trailCount[c] > 0) {
+      pu.add(trailSumU[c] / trailCount[c]);
+      pv.add(trailSumV[c] / trailCount[c]);
+    } else {
+      pu.add(g.u0 + (c % nu + 0.5) * g.cell);
+      pv.add(g.v0 + (c ~/ nu + 0.5) * g.cell);
+    }
   }
   pu.add(g.length);
   pv.add(0);
 
-  // Straight-line cost between two path points, sampled every half cell.
-  double zAt(double u, double v) {
-    final fx = (u - g.u0) / g.cell - 0.5, fy = (v - g.v0) / g.cell - 0.5;
-    final x0 = fx.floor().clamp(0, nu - 2), y0 = fy.floor().clamp(0, nv - 2);
-    final ax = (fx - x0).clamp(0.0, 1.0), ay = (fy - y0).clamp(0.0, 1.0);
-    double e(int x, int y) => z[y * nu + x];
-    return (e(x0, y0) * (1 - ax) + e(x0 + 1, y0) * ax) * (1 - ay) +
-        (e(x0, y0 + 1) * (1 - ax) + e(x0 + 1, y0 + 1) * ax) * ay;
-  }
-
-  double segCost(double u1, double v1, double u2, double v2) {
+  // Straight-line cost between two path points, sampled every ~3/4 cell
+  // (the same baseline as the search). [strict]: infinity over the hard
+  // cutoff, so a shortcut can never cut across a wall.
+  double segCost(double u1, double v1, double u2, double v2, bool strict) {
     final d = sqrt((u2 - u1) * (u2 - u1) + (v2 - v1) * (v2 - v1));
-    final steps = max(1, (d / (g.cell * 0.5)).ceil());
+    final steps = max(1, (d / (g.cell * 0.75)).ceil());
     var total = 0.0;
     var pz = zAt(u1, v1);
+    var prev = cellOf(u1, v1);
     for (var s = 1; s <= steps; s++) {
       final u = u1 + (u2 - u1) * s / steps, v = v1 + (v2 - v1) * s / steps;
       final cz = zAt(u, v);
       final sd = d / steps;
-      final slope = max(
-        ((cz - pz).abs() / sd) * 100,
-        sideWeight * grad[cellOf(u, v)],
-      );
-      double pen;
-      if (limit != null) {
-        final r = slope / limit;
-        pen = r <= 1
-            ? 1 + 0.6 * r * r
-            : 1 + 0.6 + 14 * (r - 1) + 4 * (r - 1) * (r - 1);
-      } else {
-        final r = slope / 35;
-        pen = 1 + 3 * r * r;
-      }
-      if (cz > pz) pen *= 1 + min(0.5, slope / 100);
       final i = cellOf(u, v);
-      total += sd * pen * trail[i];
+      final onTrail = i == prev ? trailCell[i] == 1 : nearTrail(prev, i);
+      total += legCost((cz - pz) / sd, grad[i], sd, onTrail, strict && cut);
       pz = cz;
+      prev = i;
     }
     return total;
   }
@@ -331,14 +457,19 @@ GentleOutput? computeGentle(GentleInput g) {
   if (pu.length > 3) {
     final cum = <double>[0];
     for (var k = 1; k < pu.length; k++) {
-      cum.add(cum.last + segCost(pu[k - 1], pv[k - 1], pu[k], pv[k]));
+      // The search's own price for this step (trail steps at their real
+      // grade), so a shortcut is judged against what the search paid.
+      final a = cells[k - 1], b = cells[k];
+      cum.add(
+        cum.last + stepCost(a, b, b % nu - a % nu, b ~/ nu - a ~/ nu, false),
+      );
     }
     final su = <double>[pu.first], sv = <double>[pv.first];
     var i = 0;
     while (i < pu.length - 1) {
       var next = i + 1;
       for (var j = pu.length - 1; j > i + 1; j--) {
-        final direct = segCost(pu[i], pv[i], pu[j], pv[j]);
+        final direct = segCost(pu[i], pv[i], pu[j], pv[j], true);
         if (direct <= (cum[j] - cum[i]) * 1.06) {
           next = j;
           break;
@@ -353,8 +484,9 @@ GentleOutput? computeGentle(GentleInput g) {
   }
 
   // Round the corners a little (a bend of at most ~80 m each side of the
-  // corner), so the line does not turn on a sixpence. Kept only when it
-  // does not cost more: rounding never cuts a detour short.
+  // corner), so the line does not turn on a sixpence. Each corner is judged
+  // on its own and kept only when it does not cost more (and never over the
+  // hard cutoff): rounding never cuts a detour or a switchback short.
   if (pu.length > 2) {
     const r = 80.0;
     final ru = <double>[pu.first], rv = <double>[pv.first];
@@ -362,7 +494,12 @@ GentleOutput? computeGentle(GentleInput g) {
       final d1 = sqrt(pow(pu[k] - pu[k - 1], 2) + pow(pv[k] - pv[k - 1], 2));
       final d2 = sqrt(pow(pu[k + 1] - pu[k], 2) + pow(pv[k + 1] - pv[k], 2));
       final t = min(r, min(d1, d2) * 0.4);
-      if (t < 8) {
+      // A hairpin (turning back on itself, like a switchback) stays sharp.
+      final cosTurn =
+          ((pu[k] - pu[k - 1]) * (pu[k + 1] - pu[k]) +
+              (pv[k] - pv[k - 1]) * (pv[k + 1] - pv[k])) /
+          (d1 * d2);
+      if (t < 8 || cosTurn < -0.5) {
         ru.add(pu[k]);
         rv.add(pv[k]);
         continue;
@@ -371,26 +508,31 @@ GentleOutput? computeGentle(GentleInput g) {
       final av = pv[k] + (pv[k - 1] - pv[k]) * t / d1;
       final bu = pu[k] + (pu[k + 1] - pu[k]) * t / d2;
       final bv = pv[k] + (pv[k + 1] - pv[k]) * t / d2;
+      final cu = <double>[], cv = <double>[];
       for (var s = 0; s <= 6; s++) {
         final q = s / 6, w = 1 - q;
-        ru.add(w * w * au + 2 * w * q * pu[k] + q * q * bu);
-        rv.add(w * w * av + 2 * w * q * pv[k] + q * q * bv);
+        cu.add(w * w * au + 2 * w * q * pu[k] + q * q * bu);
+        cv.add(w * w * av + 2 * w * q * pv[k] + q * q * bv);
+      }
+      var curve = 0.0;
+      for (var s = 1; s < cu.length; s++) {
+        curve += segCost(cu[s - 1], cv[s - 1], cu[s], cv[s], true);
+      }
+      final sharp =
+          segCost(au, av, pu[k], pv[k], false) +
+          segCost(pu[k], pv[k], bu, bv, false);
+      if (curve <= sharp * 1.03) {
+        ru.addAll(cu);
+        rv.addAll(cv);
+      } else {
+        ru.add(pu[k]);
+        rv.add(pv[k]);
       }
     }
     ru.add(pu.last);
     rv.add(pv.last);
-    double total(List<double> a, List<double> b) {
-      var c = 0.0;
-      for (var k = 1; k < a.length; k++) {
-        c += segCost(a[k - 1], b[k - 1], a[k], b[k]);
-      }
-      return c;
-    }
-
-    if (total(ru, rv) <= total(pu, pv) * 1.03) {
-      pu = ru;
-      pv = rv;
-    }
+    pu = ru;
+    pv = rv;
   }
 
   // Resample about every 25 m, with the ground height at each point.
@@ -412,31 +554,33 @@ GentleOutput? computeGentle(GentleInput g) {
   for (var k = 0; k < ou.length; k++) {
     oe.add(zAt(ou[k], ov[k]));
   }
-  // Steepest stretch over ~30 m, and share along trails.
+  // The steepest stretch you actually walk: the climb or drop along the line
+  // over about one cell of walking (the baseline the planner uses), and the
+  // share along trails.
   var maxSlope = 0.0;
-  var onTrail = 0, counted = 0;
+  var onTrail = 0;
+  final window = max(g.cell * 0.9, 25.0);
   for (var k = 0; k < ou.length; k++) {
     var j = k + 1;
     var dist = 0.0;
-    while (j < ou.length && dist < 30) {
+    while (j < ou.length && dist < window) {
       dist += sqrt(pow(ou[j] - ou[j - 1], 2) + pow(ov[j] - ov[j - 1], 2));
       j++;
     }
-    if (dist >= 15 && j - 1 < ou.length) {
+    if (dist >= window * 0.6 && j - 1 < ou.length) {
       maxSlope = max(maxSlope, (oe[j - 1] - oe[k]).abs() / dist * 100);
     }
-    maxSlope = max(maxSlope, sideWeight * grad[cellOf(ou[k], ov[k])]);
-    counted++;
-    if (trail[cellOf(ou[k], ov[k])] < 0.9) onTrail++;
+    if (trailCell[cellOf(ou[k], ov[k])] == 1) onTrail++;
   }
   return GentleOutput(
     u: ou,
     v: ov,
     elev: oe,
     maxSlopePct: maxSlope,
-    onTrailFraction: counted == 0 ? 0 : onTrail / counted,
+    onTrailFraction: ou.isEmpty ? 0 : onTrail / ou.length,
     lengthM: lengthM,
     exceedsLimit: limit != null && maxSlope > limit * 1.05,
+    relaxedCutoff: relaxed,
   );
 }
 
@@ -459,7 +603,9 @@ class GentlePlan {
     final over = output.exceedsLimit
         ? ' Warning: it has to cross ground steeper than ${limit.label} '
               '(${limit.percent?.round()}%).'
-        : '';
+        : (output.relaxedCutoff
+              ? ' Warning: no way round very steep ground ($steep).'
+              : '');
     return '$dist, steepest about $steep.$trail$over';
   }
 }

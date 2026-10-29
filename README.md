@@ -1525,6 +1525,53 @@ Tests: `test/v195_gateway_test.dart`, `test/v195_quiet_test.dart`.
 Tests: `test/v197_meshtastic_import_test.dart` (vectors from the official
 apps and the Python library), `test/v195_quiet_test.dart`.
 
+## v2.4.1: Gentle routes: trails count for real, better steepness math
+
+Two accuracy fixes to the Gentle compass route (the terrain-only line over the
+elevation grid). Nothing else changes: audio, chat, Messages, routing, the
+straight compass line and the trail/road routes are as in 2.4.0.
+
+- **Trails count for real.**
+  - Hidden trail layers are used too. Hiding a layer only stops it being drawn;
+    the trail data (saved areas, Save route, cached trails, imports) is still on
+    the phone, so the gentle planner now uses all of it along the route. No new
+    fetch or background work. (The walking-route graph still uses visible
+    layers only, as before.)
+  - The 60 degree direction gate is gone: a trail is preferred whichever way
+    it bends (switchbacks, contour trails, dog-legs).
+  - Only trail-to-trail steps are cheaper (half price), so the line follows
+    the trail itself instead of running beside it or hopping across it. The line
+    sits on the trail's own geometry, read at the trail's real grade (not the
+    grid-cell steps), and a hairpin stays a hairpin.
+  - The search heuristic uses the new minimum step factor (Tobler's best x trail
+    discount), so it stays admissible and the route is still optimal.
+- **Better steepness math.**
+  - Slopes are read over about one grid cell (30 to 70 m) instead of two, so a
+    short steep face is no longer averaged away. Long grid steps are costed as
+    two half-steps over the height half-way.
+  - Step cost is walking time by Tobler's hiking function (fastest going down
+    about 5%, about 1.4x slower at 10% up, 2x at 20%), times a penalty for being
+    over the mode's limit, so Gentle / Moderate / Any stay meaningful.
+  - A hard grade cutoff per mode: 20% for Gentle, 40% for Moderate, 45% for
+    Any. Steps over it are not used unless there is no other way. Only then is
+    the cutoff relaxed and the route flagged ("has to cross ground steeper than
+    Gentle (10%)", or "no way round very steep ground"). Shortcuts and corner
+    rounding also respect the cutoff.
+  - The "steepest about N%" figure is honest: the climb or drop along the
+    suggested line over about one cell of walking (it used to mix in a weighted
+    side slope and could understate a steep straight climb).
+
+Planning time (computing the line, test grids, same machine, median of five;
+the DEM sampling is included): 3 km 25 to 35 ms, 10 km 53 to 78 ms, 24 km 66 to
+111 ms (Gentle mode, with a trail); still in the isolate, still offline.
+
+Battery: none to speak of. It only runs when you ask for a gentle route (a few
+tens of milliseconds more per plan); no timers, no polling, no network.
+
+Tests: `test/v241_gentle_test.dart`.
+
+Same signing key, so it installs over 2.4.0.
+
 ## v2.4.0: One Messages page on Talk, a text-only Chat tab
 
 Voice messages and missed live talk belong where they come from, so they are

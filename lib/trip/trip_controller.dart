@@ -1123,7 +1123,8 @@ class TripController extends ChangeNotifier {
       to,
       dem.elevationAt,
       limit: limit,
-      trails: graphLinesOf(layers),
+      // v2.4.1: hidden trail layers count too (same data, just not drawn).
+      trails: graphLinesOf(layers, includeHidden: true),
     );
   }
 

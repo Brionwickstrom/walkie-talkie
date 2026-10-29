@@ -12,17 +12,21 @@ import 'navigator.dart';
 import 'trail_graph.dart';
 
 /// The trail lines on the phone (visible trail layers) for the graph.
-List<GraphLine> graphLinesOf(MapLayers layers) => [
-  for (final l in layers.trails)
-    if (l.visible && l.data != null)
-      for (final line in l.data!.lines)
-        if (line.points.length > 1)
-          GraphLine(
-            line.name.isNotEmpty ? line.name : l.name,
-            line.points,
-            line.ele,
-          ),
-];
+/// [includeHidden] (v2.4.1, gentle routes): hidden layers count too, since
+/// they are still trail data on the phone (saved areas, Save route, cached
+/// trails): hiding a layer only stops drawing it.
+List<GraphLine> graphLinesOf(MapLayers layers, {bool includeHidden = false}) =>
+    [
+      for (final l in layers.trails)
+        if ((includeHidden || l.visible) && l.data != null)
+          for (final line in l.data!.lines)
+            if (line.points.length > 1)
+              GraphLine(
+                line.name.isNotEmpty ? line.name : l.name,
+                line.points,
+                line.ele,
+              ),
+    ];
 
 /// "Navigate here" (v1.9.1): a route along trails to [target] (or a
 /// straight compass line when there is no trail), followed with GPS.
