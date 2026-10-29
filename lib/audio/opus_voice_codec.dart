@@ -46,7 +46,7 @@ class OpusVoiceEncoder implements VoiceEncoder {
   void dispose() => _enc.destroy();
 }
 
-class OpusVoiceDecoder implements VoiceDecoder {
+class OpusVoiceDecoder implements VoiceDecoder, FecVoiceDecoder {
   final _dec = SimpleOpusDecoder(
     sampleRate: VoiceFormat.sampleRate,
     channels: VoiceFormat.channels,
@@ -54,6 +54,21 @@ class OpusVoiceDecoder implements VoiceDecoder {
 
   @override
   Int16List decode(Uint8List? packet) => _dec.decode(input: packet);
+
+  /// v2.3.3: the lost frame before [next], from the FEC data in [next]
+  /// (libopus conceals it when [next] has none).
+  @override
+  Int16List decodeFec(Uint8List next) {
+    try {
+      return _dec.decode(
+        input: next,
+        fec: true,
+        loss: VoiceFormat.samplesPerFrame,
+      );
+    } catch (_) {
+      return _dec.decode(input: null);
+    }
+  }
 
   @override
   void dispose() => _dec.destroy();

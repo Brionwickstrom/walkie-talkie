@@ -451,8 +451,8 @@ void main() {
       },
     );
 
-    test('a faster link that appears mid-talk takes over on the next '
-        'packet', () async {
+    test('a faster link that appears mid-talk is used from the next burst '
+        '(v2.3.3: the route is held for the burst)', () async {
       await bobOn([net]);
       await m.setTalking(true);
       await m.sendAudio(Uint8List.fromList([1]));
@@ -465,6 +465,14 @@ void main() {
       net.answerPings(bob, seq: 950);
       net.sent.clear();
       await m.sendAudio(Uint8List.fromList([2]));
+      expect(net.framesOf(FrameType.audio), hasLength(1), reason: 'held');
+      expect(lan.framesOf(FrameType.audio), isEmpty);
+      await m.setTalking(false);
+      // Next burst: the fresh choice is the faster link.
+      await m.setTalking(true);
+      net.sent.clear();
+      lan.sent.clear();
+      await m.sendAudio(Uint8List.fromList([3]));
       expect(lan.framesOf(FrameType.audio), hasLength(1));
       expect(net.framesOf(FrameType.audio), isEmpty);
       await m.setTalking(false);

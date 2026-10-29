@@ -17,14 +17,28 @@ import 'pcm_speaker.dart';
 /// frames that arrive while the speaker is opening are kept and fed in
 /// order the moment it is ready, and the leading jitter-cushion silence
 /// ([feedSilence]) is shortened by the time the opening took, so the voice
-/// starts when it would have started with an already-open speaker (the
-/// cushion is 60 ms, a typical opening is faster).
+/// starts when it would have started with an already-open speaker. v2.3.3:
+/// a little of the cushion ([minCushion]) is always kept, so a slow opening
+/// can not leave the first frames with nothing in front of them, and
+/// [onOpened] tells the playout buffer when the speaker really started and
+/// how much it was given.
+///
+/// v2.3.3: the quiet time before closing is 10 s (was 1.5 s, which closed
+/// the speaker in every pause of a conversation and paid the opening cost
+/// again, clipping first syllables). It never closes while [holdOpen] says a
+/// talker is active (capped at [holdCap] after the last audio, so a lost
+/// "talk end" can not keep it open), and [warmUp] opens it on the talk-start
+/// signal, before the first audio arrives.
 class SpeakerGate {
   SpeakerGate(
     this.speaker, {
     required this.sampleRate,
     required this.channels,
-    this.idle = const Duration(milliseconds: 1500),
+    this.idle = const Duration(seconds: 10),
+    this.holdOpen,
+    this.holdCap = const Duration(seconds: 45),
+    this.minCushion = const Duration(milliseconds: 20),
+    this.onOpened,
     DateTime Function()? clock,
   }) : _clock = clock ?? DateTime.now;
 
@@ -33,6 +47,20 @@ class SpeakerGate {
 
   /// Quiet time (after the queued audio has played) before it closes.
   final Duration idle;
+
+  /// True while someone is talking: the speaker stays open.
+  final bool Function()? holdOpen;
+
+  /// The longest [holdOpen] keeps it open after the last queued audio.
+  final Duration holdCap;
+
+  /// At least this much of a leading silence cushion is kept when the
+  /// opening took longer than the cushion.
+  final Duration minCushion;
+
+  /// Called right after the speaker opened and its waiting frames were fed:
+  /// when it started and how many samples (silence included) it was given.
+  final void Function(DateTime at, int fedSamples)? onOpened;
   final DateTime Function() _clock;
 
   bool _open = false;
@@ -56,6 +84,20 @@ class SpeakerGate {
 
   /// Queue [pcm] behind what is playing; opens the speaker if needed.
   void feed(PcmArrayInt16 pcm) => _feed(pcm, false);
+
+  /// Open the speaker now, before any audio (v2.3.3: someone just signalled
+  /// "talking"), so the first syllables do not wait for the opening. It
+  /// closes again after [idle] if no audio comes.
+  void warmUp() {
+    if (_disposed) return;
+    final now = _clock();
+    if (!_playUntil.isAfter(now)) _playUntil = now;
+    if (_open) {
+      _arm();
+      return;
+    }
+    _ensureOpening();
+  }
 
   /// Queue [samples] of silence (the jitter cushion before a burst).
   void feedSilence(int samples) =>
@@ -100,22 +142,32 @@ class SpeakerGate {
       }
       _open = true;
       opens++;
+      final openedAt = _clock();
       var skip =
-          _clock().difference(_openStarted).inMicroseconds *
+          openedAt.difference(_openStarted).inMicroseconds *
           sampleRate ~/
           1000000;
+      var keep = minCushion.inMicroseconds * sampleRate ~/ 1000000;
+      var fed = 0;
       for (final f in _pending) {
         var pcm = f.pcm;
+        final have = pcm.bytes.lengthInBytes ~/ 2 ~/ channels;
         if (f.silence && skip > 0) {
-          final have = pcm.bytes.lengthInBytes ~/ 2 ~/ channels;
-          final cut = skip < have ? skip : have;
+          // Shorten the cushion by the opening time, but keep a floor.
+          final room = have > keep ? have - keep : 0;
+          final cut = skip < room ? skip : room;
           skip -= cut;
+          keep = keep > (have - cut) ? keep - (have - cut) : 0;
           if (cut == have) continue;
           pcm = PcmArrayInt16.zeros(count: (have - cut) * channels);
         }
+        fed += pcm.bytes.lengthInBytes ~/ 2 ~/ channels;
         speaker.feed(pcm);
       }
       _pending.clear();
+      try {
+        onOpened?.call(openedAt, fed);
+      } catch (_) {}
       _arm();
     }();
   }
@@ -129,8 +181,13 @@ class SpeakerGate {
   void _onTimer() {
     _timer = null;
     if (!_open) return;
-    if (_clock().isBefore(_playUntil.add(idle))) {
+    final now = _clock();
+    if (now.isBefore(_playUntil.add(idle))) {
       _arm(); // more audio was queued meanwhile
+    } else if ((holdOpen?.call() ?? false) &&
+        now.isBefore(_playUntil.add(holdCap))) {
+      // Someone is still talking (a long pause inside a burst): stay open.
+      _timer = Timer(idle, _onTimer);
     } else {
       unawaited(release());
     }

@@ -18,7 +18,9 @@ import 'dart:typed_data';
 ///    for at most [unsignalled] (30 s), then dropped;
 ///  * an Opus packet identical to one from the same sender in the last
 ///    [repeatWindow] is dropped (a delayed copy over another transport,
-///    or a re-sent burst);
+///    or a re-sent burst). v2.3.3: not a tiny "silence-like" packet (at most
+///    [silenceBytes]) inside a burst that is going on: those repeat all the
+///    time in a pause, and dropping them left gaps in the audio;
 ///  * after Stop ([silenceAll]) a sender stays silent until its next
 ///    talkStart (or, for 1:1 talk without talk signals, its next burst).
 class LiveAudioGate {
@@ -29,6 +31,7 @@ class LiveAudioGate {
     this.burstGap = const Duration(milliseconds: 1500),
     this.maxStream = const Duration(minutes: 3),
     this.repeatWindow = const Duration(seconds: 30),
+    this.silenceBytes = 16,
   }) : _clock = clock ?? DateTime.now;
 
   final DateTime Function() _clock;
@@ -37,6 +40,10 @@ class LiveAudioGate {
   final Duration burstGap;
   final Duration maxStream;
   final Duration repeatWindow;
+
+  /// A packet this small (or smaller) is silence-like: identical ones are
+  /// normal inside a running burst.
+  final int silenceBytes;
 
   final Map<int, _PeerGate> _peers = {};
 
@@ -56,6 +63,7 @@ class LiveAudioGate {
     g.lastFrame = now;
     if (newBurst) {
       g.burstStart = now;
+      g.replayed = false;
       if (talking == null) g.silenced = false;
     }
     if (talking != null) {
@@ -88,7 +96,16 @@ class LiveAudioGate {
         return reasonNotTalking;
       }
     }
-    if (repeat) return reasonRepeat;
+    if (repeat) {
+      // A tiny silence-like repeat inside a burst that started with fresh
+      // audio is normal (v2.3.3); in a burst that started with a repeat it
+      // is the same old burst again.
+      final tiny = opus.length <= silenceBytes && !newBurst && !g.replayed;
+      if (!tiny) {
+        g.replayed = true;
+        return reasonRepeat;
+      }
+    }
     return null;
   }
 
@@ -130,6 +147,9 @@ class LiveAudioGate {
 class _PeerGate {
   bool wasTalking = false;
   bool silenced = false;
+
+  /// This burst began with a repeated packet (a re-sent / delayed copy).
+  bool replayed = false;
   DateTime? talkStart;
   DateTime? lastEnd;
   DateTime? lastFrame;

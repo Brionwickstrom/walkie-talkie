@@ -69,7 +69,10 @@ void main() {
     expect(p.decode(1, 13, pkt), hasLength(3)); // 11,12 concealed + 13
     expect(decoders.single.calls.where((c) => c == null), hasLength(2));
     expect(p.decode(1, 12, pkt), isEmpty); // late
-    expect(p.decode(1, 30, pkt), hasLength(1)); // big gap: skip, no PLC
+    // v2.3.3: a big gap (17 lost) is concealed by time, at most 10 frames
+    // (200 ms), then the packet: nothing arrived in between, so none of it
+    // has already passed as silence.
+    expect(p.decode(1, 30, pkt), hasLength(11));
     expect(p.decode(2, 0, pkt), hasLength(1)); // separate decoder
     expect(decoders, hasLength(2));
   });

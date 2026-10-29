@@ -51,6 +51,33 @@ class LinkPolicy {
   /// ... and at most this fraction of the tier winner's round trip.
   static const overrideMaxRatio = 0.5;
 
+  /// v2.3.3 hysteresis: a link that already holds the front by the override
+  /// keeps it while it is still at least this many ms faster than the tier
+  /// winner ... (taking the front needs [overrideMinGainMs]).
+  static const keepMinGainMs = 10;
+
+  /// ... and at most this fraction of the tier winner's round trip (taking
+  /// the front needs [overrideMaxRatio]).
+  static const keepMaxRatio = 0.8;
+
+  /// v2.3.3: weight of the newest ping in the smoothed round trip (EWMA).
+  static const rttSmoothing = 0.3;
+
+  /// The smoothed round trip after a new [sample] (the first sample is
+  /// taken as it is).
+  static Duration smoothRtt(Duration? previous, Duration sample) {
+    if (previous == null) return sample;
+    final us =
+        previous.inMicroseconds * (1 - rttSmoothing) +
+        sample.inMicroseconds * rttSmoothing;
+    return Duration(microseconds: us.round());
+  }
+
+  /// v2.3.3: while we talk, a burst keeps its route; it only changes after
+  /// this many missed pings in a row on a link it uses (or when the link is
+  /// gone). The first miss only adds the backup next to it.
+  static const holdMissesToSwitch = 2;
+
   /// Sort [kinds] best first: by tier, then by measured round trip inside
   /// a tier (unmeasured after measured, ties by the old LAN > Wi-Fi
   /// Direct > Bluetooth > internet order), healthy links before failing
@@ -63,6 +90,7 @@ class LinkPolicy {
     Iterable<TransportKind> kinds, {
     required Duration? Function(TransportKind) rtt,
     bool Function(TransportKind)? degraded,
+    TransportKind? incumbent,
   }) {
     final bad = degraded ?? (_) => false;
     final l = kinds.toList();
@@ -94,6 +122,30 @@ class LinkPolicy {
           ms <= topRtt.inMilliseconds * overrideMaxRatio) {
         fastest = k;
         fastestMs = ms;
+      }
+    }
+    // v2.3.3 hysteresis: the link that held the front last time keeps it
+    // while it is still clearly (if less strictly) faster, unless another
+    // link is clearly faster than it by the strict rule.
+    final inc = incumbent;
+    if (inc != null &&
+        inc != l.first &&
+        l.contains(inc) &&
+        !bad(inc) &&
+        tierOf(inc) != LinkTier.radio) {
+      final r = rtt(inc);
+      if (r != null) {
+        final ms = r.inMilliseconds;
+        final top = topRtt.inMilliseconds;
+        final keeps = top - ms >= keepMinGainMs && ms <= top * keepMaxRatio;
+        if (keeps) {
+          final beaten =
+              fastest != null &&
+              fastest != inc &&
+              ms - fastestMs >= overrideMinGainMs &&
+              fastestMs <= ms * overrideMaxRatio;
+          if (!beaten) fastest = inc;
+        }
       }
     }
     if (fastest != null) {

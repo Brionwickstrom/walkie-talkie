@@ -357,6 +357,10 @@ class _HomePageState extends State<HomePage> {
           mobileDataHint: c.mobileDataHint,
           onMobileData: () => _openLinkSheet(context, TransportKind.internet),
           onOpen: () => _openStatus(context, audience, here),
+          onOpenVoice: () => _openInbox(context),
+          onOpenHistory: () => _openHistory(context),
+          voiceNew: c.unplayedMessages > 0,
+          historyUnheard: c.unheardTakes > 0,
         );
         final talk = HomeBody(
           banners: [
@@ -836,9 +840,12 @@ class _HomePageState extends State<HomePage> {
   }
 
   /// Chat tab badge: unread channel chat and direct chats + voice messages
-  /// not played.
+  /// not played + talk here that was missed (v2.3.3).
   int get _chatBadge =>
-      c.unreadChannelChat + c.unreadFriendChats + c.unplayedMessages;
+      c.unreadChannelChat +
+      c.unreadFriendChats +
+      c.unplayedMessages +
+      c.unheardTakes;
 
   /// People tab badge: friend requests waiting, and people on
   /// other channels (the old "scan" badge).

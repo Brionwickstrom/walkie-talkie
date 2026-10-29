@@ -47,6 +47,10 @@ class TalkStatusLine extends StatelessWidget {
     this.mobileDataHint = false,
     this.onMobileData,
     required this.onOpen,
+    this.onOpenVoice,
+    this.onOpenHistory,
+    this.voiceNew = false,
+    this.historyUnheard = false,
   });
 
   final AudienceInfo audience;
@@ -64,6 +68,13 @@ class TalkStatusLine extends StatelessWidget {
   final bool mobileDataHint;
   final VoidCallback? onMobileData;
   final VoidCallback onOpen;
+
+  /// v2.3.3: small shortcuts at the end of the line to Voice messages and
+  /// History (null = hidden). A dot means something new / not heard yet.
+  final VoidCallback? onOpenVoice;
+  final VoidCallback? onOpenHistory;
+  final bool voiceNew;
+  final bool historyUnheard;
 
   String get _audienceText {
     final people = '$here ${here == 1 ? 'person' : 'people'}';
@@ -175,6 +186,26 @@ class TalkStatusLine extends StatelessWidget {
               ),
             ),
           ),
+        if (onOpenVoice != null)
+          _Shortcut(
+            key: const Key('talk-voice-shortcut'),
+            icon: Icons.voicemail,
+            tooltip: voiceNew
+                ? 'Voice messages (new ones waiting)'
+                : 'Voice messages',
+            dot: voiceNew,
+            onTap: onOpenVoice!,
+          ),
+        if (onOpenHistory != null)
+          _Shortcut(
+            key: const Key('talk-history-shortcut'),
+            icon: Icons.history,
+            tooltip: historyUnheard
+                ? 'History (talk you did not hear)'
+                : 'History',
+            dot: historyUnheard,
+            onTap: onOpenHistory!,
+          ),
         if (quiet != null)
           Padding(
             padding: const EdgeInsets.only(left: 2, right: 8),
@@ -182,6 +213,47 @@ class TalkStatusLine extends StatelessWidget {
           ),
         if (quiet == null) const SizedBox(width: 4),
       ],
+    );
+  }
+}
+
+/// A small icon on the status line with an optional "something new" dot.
+class _Shortcut extends StatelessWidget {
+  const _Shortcut({
+    super.key,
+    required this.icon,
+    required this.tooltip,
+    required this.dot,
+    required this.onTap,
+  });
+  final IconData icon;
+  final String tooltip;
+  final bool dot;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: onTap,
+        child: Semantics(
+          button: true,
+          label: tooltip,
+          excludeSemantics: true,
+          child: Padding(
+            padding: const EdgeInsets.all(6),
+            child: Badge(
+              key: Key(dot ? 'shortcut-dot' : 'shortcut-nodot'),
+              isLabelVisible: dot,
+              smallSize: 8,
+              child: Icon(icon, size: 20, color: cs.onSurfaceVariant),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

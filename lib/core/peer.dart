@@ -20,6 +20,14 @@ class Peer {
   /// Last measured round trip per transport (ping/pong).
   final Map<TransportKind, Duration> rtt = {};
 
+  /// v2.3.3: the round trip per transport smoothed over the last pings
+  /// (EWMA); routing ranks on this, [rtt] stays the latest sample.
+  final Map<TransportKind, Duration> rttSmooth = {};
+
+  /// v2.3.3: the link that was first in the route last time (the incumbent
+  /// for the "clearly faster" hysteresis).
+  TransportKind? rankFront;
+
   /// v1.9.8: when the oldest unanswered ping on each link went out.
   final Map<TransportKind, DateTime> pingOut = {};
 

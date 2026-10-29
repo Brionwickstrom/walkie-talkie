@@ -1525,6 +1525,54 @@ Tests: `test/v195_gateway_test.dart`, `test/v195_quiet_test.dart`.
 Tests: `test/v197_meshtastic_import_test.dart` (vectors from the official
 apps and the Python library), `test/v195_quiet_test.dart`.
 
+## v2.3.3: Smoother live audio, steadier routing, History and Voice messages back on Talk
+
+Fixes for choppy live talk (found by reading the audio path, not guessing) and
+for the Voice messages / History entry points that moved in v2.3.x. Relay
+fan-out is unchanged: every frame still goes to all three relays and the
+receiver de-duplicates.
+
+- **Speaker (the main cause of choppy starts since v2.2.0):** the speaker now
+  stays open about **10 s** after the last audio (was 1.5 s, which closed it in
+  every pause of a conversation and paid the opening cost again, clipping the
+  first syllables). It also never closes while someone is still talking (a long
+  pause inside a burst), capped at 45 s after the last audio so a lost "talk
+  end" cannot keep it open. It **opens on the talk-start signal**, before the
+  first audio, when that audio would play (not muted, not quiet hours).
+  The playout buffer is told when the speaker really started and how much it
+  was handed, and a slow opening keeps at least 20 ms of the cushion, so the
+  cushion is real. Identical **silence-like packets** (16 bytes or less)
+  inside a running burst are no longer dropped by the repeat filter (that left
+  holes in every pause); a re-sent old burst is still blocked.
+- **Jitter buffer:** the cushion before a burst or after an underrun is
+  adaptive, **80 to 120 ms** (was a fixed 60): it follows a smoothed measure of
+  how unevenly packets arrive and settles back when the network is calm. A late
+  burst now plays slightly late instead of losing words: audio is only dropped
+  beyond **300 ms** queued (was 200 ms). One lost packet is rebuilt from the next
+  packet's **Opus in-band FEC** data (it was only concealed before); gaps longer
+  than 3 packets are concealed by **elapsed time** (only the part not already
+  played as silence, at most 200 ms) instead of being skipped.
+- **Routing:** a talk burst **keeps the route chosen at its start**. It changes
+  only when a link it uses is gone, or after **2 missed pings in a row**; the
+  first miss only adds the healthy backup next to the held link (both carry the
+  audio, the receiver drops the copy), so real failover stays as quick as
+  before. Ranking uses a **smoothed round trip (EWMA, 30% newest ping)** and the
+  "clearly faster link goes first" rule has **hysteresis**: it takes the front
+  at 30 ms and 50% faster as before, and keeps it while still 10 ms and 80%
+  faster. The next burst chooses afresh.
+- **Talk screen:** two small icons at the end of the status line: **Voice
+  messages** and **History**, each with a dot when something is new or not heard
+  yet. No banners; the people list and the four buttons did not move. The Chat
+  tab badge now also counts **missed live talk**.
+
+Battery: the speaker (audio hardware) stays awake about 8.5 s longer after each
+talk burst and while a talker is active; that gives back a small part of the
+v2.2.0 saving (still closed when idle; one timer only while open). The jitter
+buffer costs a few tens of ms of latency and a little CPU (arrival statistics,
+FEC decode); the held route avoids path changes and adds no probes or timers; the
+shortcuts and badge are layout over data the app already has. No new wake locks
+or polling. Tests: `test/v233_audio_test.dart`.
+
 ## v2.3.2: Chat and People say who each thing reaches
 
 Every conversation now carries one tag with the same icon, colour and words on

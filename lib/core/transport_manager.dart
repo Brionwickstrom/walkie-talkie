@@ -966,6 +966,7 @@ class TransportManager {
   Future<void> setTalking(bool talking) async {
     if (_talking == talking) return;
     _talking = talking;
+    _heldRoutes.clear(); // a burst starts (or ended) with a fresh choice
     if (talking) _trafficAt = _clock();
     _applyProbePlan(); // push-to-talk: full speed right now, even idle
     await _sendToChannel(
@@ -1011,8 +1012,14 @@ class TransportManager {
     if (fast.isEmpty) return const [];
     // Ranked as if nothing failed: a failing link that would be best still
     // gets a copy (it may only be lossy, and recovers without a gap) until
-    // it misses [LinkPolicy.missesForDown] checks in a row.
-    final links = LinkPolicy.rank(fast, rtt: (k) => p.rtt[k]);
+    // it misses [LinkPolicy.missesForDown] checks in a row. v2.3.3: on the
+    // smoothed round trip, with hysteresis for the "clearly faster" rule.
+    final links = LinkPolicy.rank(
+      fast,
+      rtt: (k) => _rttOf(p, k),
+      incumbent: p.rankFront,
+    );
+    p.rankFront = links.first;
     bool down(TransportKind k) =>
         (p.misses[k] ?? 0) >= LinkPolicy.missesForDown;
     bool healthy(TransportKind k) {
@@ -1033,6 +1040,53 @@ class TransportManager {
       out.insert(0, out.removeLast());
     }
     return out;
+  }
+
+  /// The round trip routing ranks on (v2.3.3): the smoothed one, else the
+  /// latest ping.
+  Duration? _rttOf(Peer p, TransportKind k) => p.rttSmooth[k] ?? p.rtt[k];
+
+  /// Routes held for the length of our own talk burst (v2.3.3), per peer.
+  final Map<int, List<TransportKind>> _heldRoutes = {};
+
+  /// How many times a held route changed its first link in a burst (debug /
+  /// tests).
+  int routeSwitches = 0;
+
+  /// [_route] for sending live audio: while we talk, the route chosen at the
+  /// start of the burst is kept, so a sentence never changes path because a
+  /// round trip wobbled. It changes only when a link it uses is gone or has
+  /// missed [LinkPolicy.holdMissesToSwitch] pings in a row (real loss: the
+  /// backup is used at once). The first miss only adds the healthy backup
+  /// next to the held link (both carry the audio, receivers drop copies).
+  List<TransportKind> _routeHeld(Peer p, DateTime now) {
+    if (!_talking) return _route(p, now);
+    final held = _heldRoutes[p.id];
+    if (held == null || held.isEmpty) {
+      return _heldRoutes[p.id] = _route(p, now);
+    }
+    final fast = fastLinks(p, now);
+    final lost = held.any(
+      (k) =>
+          !fast.contains(k) ||
+          (p.misses[k] ?? 0) >= LinkPolicy.holdMissesToSwitch,
+    );
+    if (lost) {
+      final fresh = _route(p, now);
+      if (fresh.isNotEmpty && fresh.first != held.first) routeSwitches++;
+      return _heldRoutes[p.id] = fresh;
+    }
+    if (held.any((k) => isDegraded(p, k))) {
+      // Make-before-break: add the backups, keep the held links.
+      final add = [
+        for (final k in _route(p, now))
+          if (!held.contains(k)) k,
+      ];
+      if (add.isNotEmpty) {
+        return _heldRoutes[p.id] = [...held, ...add];
+      }
+    }
+    return held;
   }
 
   /// The link to [p] on [k] missed a ping (v1.9.8, see [checkMisses]).
@@ -1811,7 +1865,7 @@ class TransportManager {
     final routes = <TransportKind, Set<int>>{};
     for (final p in _peers.values) {
       if (p.channel != scope) continue;
-      for (final k in _route(p, now)) {
+      for (final k in _routeHeld(p, now)) {
         routes.putIfAbsent(k, () => <int>{}).add(p.id);
       }
     }
@@ -2164,8 +2218,9 @@ class TransportManager {
     ts.sort((a, b) => b.priority.compareTo(a.priority));
     return LinkPolicy.rank(
       [for (final t in ts) t.kind],
-      rtt: (k) => p.rtt[k],
+      rtt: (k) => _rttOf(p, k),
       degraded: (k) => isDegraded(p, k),
+      incumbent: p.rankFront,
     );
   }
 
@@ -2510,7 +2565,12 @@ class TransportManager {
                 if (!relayed && msg.to == localNodeId && msg.time != null) {
                   final rtt = now.millisecondsSinceEpoch - msg.time!;
                   if (rtt >= 0 && rtt < 30000) {
-                    peer.rtt[inbound.transport] = Duration(milliseconds: rtt);
+                    final sample = Duration(milliseconds: rtt);
+                    peer.rtt[inbound.transport] = sample;
+                    peer.rttSmooth[inbound.transport] = LinkPolicy.smoothRtt(
+                      peer.rttSmooth[inbound.transport],
+                      sample,
+                    );
                     changed = true;
                   }
                   // v1.9.8: answered, so the link works (again).
@@ -2621,6 +2681,7 @@ class TransportManager {
         return now.difference(t) > lt;
       });
       p.rtt.removeWhere((k, _) => !p.lastSeen.containsKey(k));
+      p.rttSmooth.removeWhere((k, _) => !p.lastSeen.containsKey(k));
       p.pingOut.removeWhere((k, _) => !p.lastSeen.containsKey(k));
       p.misses.removeWhere((k, _) => !p.lastSeen.containsKey(k));
       final best = _bestLink(p, now);

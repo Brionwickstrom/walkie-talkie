@@ -2329,6 +2329,16 @@ class WalkieController extends ChangeNotifier {
         if (p.talking && p.channel == scope) p.id,
     };
     for (final id in talking.difference(_talkingPrev)) {
+      // v2.3.3: open the speaker on the talk signal, before the first
+      // audio, when that audio would play.
+      if (!transmitting &&
+          recording == null &&
+          !silenced &&
+          settings.autoPlay &&
+          !isMuted(id) &&
+          !(announcementMode && id != adminId)) {
+        _audio.prepare();
+      }
       if (foreground) remindLowVolume();
       if (!foreground) {
         bridge.showTalking(
@@ -2342,6 +2352,7 @@ class WalkieController extends ChangeNotifier {
       bridge.cancelTalking(id);
     }
     _talkingPrev = talking;
+    _audio.talkerActive = talking.isNotEmpty || _friendTalkTimers.isNotEmpty;
     if (talking.isNotEmpty) {
       _audio.setFocus(true);
     } else if (!_audio.playingClip) {
@@ -3863,6 +3874,8 @@ class WalkieController extends ChangeNotifier {
     _friendTalkTimers[id]?.cancel();
     _friendTalkTimers[id] = Timer(const Duration(milliseconds: 800), () {
       _friendTalkTimers.remove(id);
+      _audio.talkerActive =
+          _talkingPrev.isNotEmpty || _friendTalkTimers.isNotEmpty;
       _audio.peerStopped(id);
       bridge.cancelTalking(id);
       if (_talkingPrev.isEmpty && _friendTalkTimers.isEmpty) {
@@ -3871,6 +3884,7 @@ class WalkieController extends ChangeNotifier {
       notifyListeners();
     });
     if (isNew) {
+      _audio.talkerActive = true;
       _audio.setFocus(true);
       if (!foreground) {
         bridge.showTalking(

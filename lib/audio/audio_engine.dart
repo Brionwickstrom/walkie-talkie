@@ -27,7 +27,17 @@ class AudioEngine {
     PcmSpeaker.platform(),
     sampleRate: VoiceFormat.sampleRate,
     channels: VoiceFormat.channels,
+    // v2.3.3: stays open while someone is talking (see [talkerActive]),
+    // and the playout clock starts when the speaker really started.
+    holdOpen: () => talkerActive,
+    onOpened: (at, fed) {
+      if (!playingClip) _playout.reanchor(at, fed);
+    },
   );
+
+  /// Someone is talking to us right now (set by the app from the talk
+  /// signals): the speaker is not closed in a pause inside the burst.
+  bool talkerActive = false;
 
   /// Android / iOS audio focus and categories (no audio_session on desktop).
   static bool get _mobile => Platform.isAndroid || Platform.isIOS;
@@ -79,8 +89,9 @@ class AudioEngine {
       volumeOf: (id) => _volumes[id] ?? 1.0,
     );
     if (_mobile) await _configureSession();
-    // The speaker opens with the first audio and closes after 1.5 s of
-    // quiet (see [SpeakerGate]): nothing idles on the audio hardware.
+    // The speaker opens with the talk signal or the first audio and closes
+    // after 10 s of quiet (see [SpeakerGate]): nothing idles on the audio
+    // hardware for long.
     _ready = true;
   }
 
@@ -181,8 +192,24 @@ class AudioEngine {
     if (await _mic.stop()) _pipeline.endTransmission();
   }
 
+  /// Open the speaker now (someone signalled "talking"): the first syllables
+  /// then do not wait for the audio hardware. No-op while not ready.
+  void prepare() {
+    if (!_ready) return;
+    try {
+      _gate.warmUp();
+    } catch (_) {}
+  }
+
+  /// How many times the speaker was opened (debug).
+  int get speakerOpens => _gate.opens;
+
+  /// The jitter cushion the next burst gets, in ms (debug).
+  int get cushionMs => _playout.cushionMs;
+
   void play(int peerId, int seq, Uint8List opus) {
     if (!_ready) return;
+    _playout.noteArrival(peerId, seq);
     for (final pcm in _pipeline.decode(peerId, seq, opus)) {
       final pre = _playout.admit(pcm.length);
       if (pre == null) continue; // too far behind: drop to catch up
@@ -285,6 +312,7 @@ class AudioEngine {
   }
 
   void peerStopped(int peerId) {
+    _playout.endPeer(peerId);
     if (_ready) _pipeline.resetPeer(peerId);
   }
 

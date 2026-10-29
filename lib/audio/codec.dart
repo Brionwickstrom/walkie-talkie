@@ -18,6 +18,15 @@ abstract class VoiceEncoder {
   void dispose();
 }
 
+/// A decoder that can rebuild the frame *before* [next] from the in-band
+/// forward error correction data inside [next] (Opus only; v2.3.3).
+/// Decoders without it are simply concealed with `decode(null)`.
+abstract interface class FecVoiceDecoder {
+  /// The PCM of the packet that was lost just before [next]. Falls back to
+  /// concealment inside the decoder when [next] carries no FEC data.
+  Int16List decodeFec(Uint8List next);
+}
+
 abstract class VoiceDecoder {
   /// Decodes one packet. Pass null for a lost packet (packet loss
   /// concealment).

@@ -193,7 +193,7 @@ void main() {
   });
 
   group('jitter / concealment never repeats a packet', () {
-    test('a gap is concealed (no packet re-decoded), big gaps skipped', () {
+    test('a gap is concealed (no packet re-decoded), big gaps concealed by time, capped', () {
       final dec = _Dec();
       final p = VoicePipeline(
         encoderFactory: _Enc.new,
@@ -203,8 +203,11 @@ void main() {
       p.decode(1, 12, pkt(12)); // 11 lost
       expect(dec.calls.whereType<Uint8List>(), hasLength(2));
       expect(dec.calls.where((c) => c == null), hasLength(1));
-      p.decode(1, 40, pkt(40)); // 27 lost: skip, no concealment
-      expect(dec.calls.where((c) => c == null), hasLength(1));
+      p.decode(1, 40, pkt(40)); // 27 lost: timed concealment, capped (v2.3.3)
+      expect(
+        dec.calls.where((c) => c == null),
+        hasLength(1 + VoicePipeline.maxTimedConceal),
+      );
       // Late / duplicate packets are dropped.
       expect(p.decode(1, 12, pkt(12)), isEmpty);
       expect(p.decode(1, 40, pkt(40)), isEmpty);
