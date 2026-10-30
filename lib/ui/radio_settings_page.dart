@@ -312,8 +312,8 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            c.radioDevice.deviceName ??
-                                c.settings.radioName ??
+                            c.activeRadio?.title ??
+                                c.radioDevice.deviceName ??
                                 'Your radio',
                             style: theme.textTheme.titleSmall,
                           ),

@@ -97,6 +97,21 @@ class MeshtasticRadio implements RadioLink {
   List<String> Function() usbRadios = usbRadioIds;
   bool _wanted = false;
   bool _looping = false;
+
+  /// Bumped whenever the wanted radio changes or stops, so a connect that
+  /// is still running for the old one ends without touching the new link.
+  int _epoch = 0;
+
+  /// Saved serial radios (v2.5.4): the node number a saved id had when it
+  /// was last connected, and the ids of the other saved radios. With them
+  /// a USB radio that moved to another COM port is found again by its
+  /// node number, only when its old port is gone.
+  int? Function(String id)? nodeFor;
+  Iterable<String> Function()? otherRadios;
+
+  /// Called when a serial radio was found on another port: (old, new).
+  void Function(String from, String to)? onMoved;
+  final Set<String> _probed = {};
   Completer<void>? _lost;
   int _failures = 0;
 
@@ -202,7 +217,11 @@ class MeshtasticRadio implements RadioLink {
 
   /// Use [id] from now on (pairs on first connect) and keep it connected.
   Future<void> use(String id, String name) async {
-    if (deviceId != id) await _disconnect();
+    if (deviceId != id) {
+      _epoch++;
+      await _disconnect();
+    }
+    _probed.clear();
     deviceId = id;
     deviceName = name;
     onDevice?.call(id);
@@ -219,24 +238,29 @@ class MeshtasticRadio implements RadioLink {
     if (!_looping) unawaited(_loop());
   }
 
-  /// Disconnect and forget the radio (also drops the Android bond).
-  Future<void> forget() async {
-    final d = _device;
+  /// Disconnect and stop using the radio (v2.5.4). The Bluetooth pairing
+  /// stays; see [removeBond].
+  Future<void> disconnect() async {
     _wanted = false;
+    _epoch++;
     await _disconnect();
-    if (d != null && Platform.isAndroid) {
-      try {
-        await d.removeBond();
-      } catch (_) {}
-    }
     deviceId = null;
     deviceName = null;
     onDevice?.call(null);
     _set(RadioState.none);
   }
 
+  /// Drop the Android pairing of Bluetooth radio [id] (best effort).
+  Future<void> removeBond(String id) async {
+    if (!Platform.isAndroid || StreamRadioId.isStream(id)) return;
+    try {
+      await fbp.BluetoothDevice.fromId(id).removeBond();
+    } catch (_) {}
+  }
+
   Future<void> stop() async {
     _wanted = false;
+    _epoch++;
     await _disconnect();
     _set(deviceId == null ? RadioState.none : RadioState.reconnecting, null);
   }
@@ -258,19 +282,26 @@ class MeshtasticRadio implements RadioLink {
               );
           continue;
         }
+        final ep = _epoch;
         try {
-          await _connectOnce(deviceId!);
+          await _connectOnce(deviceId!, ep);
           _failures = 0;
           // Stay here until the link drops.
           _lost = Completer<void>();
           await _lost!.future;
         } catch (e) {
+          if (e is _Superseded || ep != _epoch) {
+            // Another radio was chosen meanwhile: go straight to it.
+            if (!_wanted) break;
+            continue;
+          }
           _failures++;
           await _disconnect();
           if (!_wanted) break;
           _set(RadioState.reconnecting, _explain(e));
         }
         if (!_wanted) break;
+        if (ep != _epoch) continue;
         final wait = Duration(
           seconds: switch (_failures) {
             0 => 2,
@@ -307,8 +338,12 @@ class MeshtasticRadio implements RadioLink {
     return 'Not in range or turned off';
   }
 
-  Future<void> _connectOnce(String id) async {
-    if (StreamRadioId.isStream(id)) return _connectStream(id);
+  void _still(int ep) {
+    if (ep != _epoch) throw _Superseded();
+  }
+
+  Future<void> _connectOnce(String id, int ep) async {
+    if (StreamRadioId.isStream(id)) return _connectStream(id, ep);
     _set(RadioState.connecting);
     final dev = fbp.BluetoothDevice.fromId(id);
     _device = dev;
@@ -317,6 +352,12 @@ class MeshtasticRadio implements RadioLink {
       timeout: const Duration(seconds: 15),
       mtu: Platform.isAndroid ? 512 : null,
     );
+    if (ep != _epoch) {
+      try {
+        await dev.disconnect();
+      } catch (_) {}
+      throw _Superseded();
+    }
     _linkSubs.add(
       dev.connectionState.listen((s) {
         if (s == fbp.BluetoothConnectionState.disconnected) {
@@ -341,6 +382,7 @@ class MeshtasticRadio implements RadioLink {
       }
     }
     final services = await dev.discoverServices();
+    _still(ep);
     final svc = services.firstWhere(
       (s) => s.uuid == fbp.Guid(MeshtasticUuids.service),
       orElse: () => throw StateError('service missing'),
@@ -361,6 +403,7 @@ class MeshtasticRadio implements RadioLink {
       throw StateError('service missing');
     }
     await fromNum.setNotifyValue(true);
+    _still(ep);
     _set(RadioState.configuring);
     final s = MeshtasticSession(_BleWire(toRadio, fromRadio, fromNum));
     session = s;
@@ -375,6 +418,7 @@ class MeshtasticRadio implements RadioLink {
       }),
     );
     await s.start();
+    _still(ep);
     final me = s.nodes[s.myNodeNum];
     final n = me?.longName ?? '';
     if (n.isNotEmpty) deviceName = n;
@@ -383,9 +427,31 @@ class MeshtasticRadio implements RadioLink {
 
   /// USB serial / Wi-Fi radio: same session as Bluetooth over the stream
   /// framing ([StreamWire]); the link ends when the wire does.
-  Future<void> _connectStream(String id) async {
+  Future<void> _connectStream(String id, int ep) async {
     _set(RadioState.connecting, StreamRadioId.label(id));
+    final port = StreamRadioId.serialPort(id);
+    if (port != null && PlatformCaps.streamRadios) {
+      final here = usbRadios();
+      if (!here.contains(id)) {
+        // The saved port is gone: maybe the cable is in another port.
+        final to = await _findMoved(id, here, ep);
+        _still(ep);
+        if (to == null) {
+          throw StateError(
+            'Not found: plug the radio in (it was on $port). '
+            'It is picked up again by itself.',
+          );
+        }
+        id = to;
+      }
+    }
     final conn = await openStream(id);
+    if (ep != _epoch) {
+      try {
+        await conn.close();
+      } catch (_) {}
+      throw _Superseded();
+    }
     _stream = conn;
     _set(RadioState.configuring);
     final s = MeshtasticSession(conn.wire);
@@ -406,11 +472,53 @@ class MeshtasticRadio implements RadioLink {
       }),
     );
     await s.start(timeout: const Duration(seconds: 30));
+    _still(ep);
     if (s.myNodeNum == null) throw StateError('No answer from the radio');
     final me = s.nodes[s.myNodeNum];
     final n = me?.longName ?? '';
     if (n.isNotEmpty) deviceName = n;
     _set(RadioState.ready);
+  }
+
+  /// The port another connected USB radio with node number [id]'s was
+  /// last seen with is on, or null. Looks at each free port once (until
+  /// the ports change or a radio is chosen again); ports of the other
+  /// saved radios are left alone.
+  Future<String?> _findMoved(String id, List<String> here, int ep) async {
+    final want = nodeFor?.call(id);
+    if (want == null) return null;
+    final skip = otherRadios?.call().toSet() ?? <String>{};
+    final cands = [
+      for (final p in here)
+        if (!skip.contains(p) && !_probed.contains(p)) p,
+    ].take(4);
+    for (final p in cands) {
+      _still(ep);
+      _probed.add(p);
+      StreamRadioConnection? c;
+      MeshtasticSession? s;
+      var hit = false;
+      try {
+        c = await openStream(p).timeout(const Duration(seconds: 6));
+        s = MeshtasticSession(c.wire);
+        await s.start(timeout: const Duration(seconds: 8));
+        hit = s.myNodeNum == want;
+      } catch (_) {
+        // Not a radio, busy, or no answer: next port.
+      } finally {
+        try {
+          await s?.close();
+          await c?.close();
+        } catch (_) {}
+      }
+      if (hit) {
+        deviceId = p;
+        onMoved?.call(id, p);
+        onDevice?.call(p);
+        return p;
+      }
+    }
+    return null;
   }
 
   Future<void> _onLost() async {
@@ -459,3 +567,6 @@ class MeshtasticRadio implements RadioLink {
     await _ready.close();
   }
 }
+
+/// The wanted radio changed while a connect was running.
+class _Superseded implements Exception {}

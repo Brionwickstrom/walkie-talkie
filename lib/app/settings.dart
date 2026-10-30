@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/link_policy.dart';
 import '../friends/friend_links.dart';
+import '../lora/saved_radios.dart';
 import '../trip/trip_settings.dart';
 import 'call_signs.dart';
 import 'groups.dart';
@@ -73,6 +74,7 @@ class AppSettings {
     QuietHours? quiet,
     this.radioId,
     this.radioName,
+    List<SavedRadio>? savedRadios,
     TripSettings? trip,
     List<PrivateGroup>? groups,
     this.activeGroup,
@@ -91,6 +93,7 @@ class AppSettings {
        peerVolumes = peerVolumes ?? {},
        friends = friends ?? [],
        wxTrusted = wxTrusted ?? {},
+       savedRadios = savedRadios ?? [],
        channelNames = channelNames ?? {},
        channelAdmins = channelAdmins ?? {},
        announceScopes = announceScopes ?? {},
@@ -261,6 +264,10 @@ class AppSettings {
   /// Paired Meshtastic LoRa radio (Bluetooth id / name), v1.7.0.
   String? radioId;
   String? radioName;
+
+  /// Every radio connected so far (v2.5.4). [radioId] is the one in use;
+  /// null = none connected.
+  final List<SavedRadio> savedRadios;
 
   /// Trip tab settings (v1.8.0).
   final TripSettings trip;
@@ -483,6 +490,7 @@ class SharedPrefsSettingsStore implements SettingsStore {
   static const _kSocial = 'social';
   static const _kRadioId = 'lora_radio_id';
   static const _kRadioName = 'lora_radio_name';
+  static const _kSavedRadios = 'saved_radios';
   static const _kTrip = 'trip_settings';
   static const _kMeshLinks = 'mesh_links';
 
@@ -567,6 +575,7 @@ class SharedPrefsSettingsStore implements SettingsStore {
       quiet: QuietHours.decode(prefs?.getString(_kQuiet)),
       radioId: prefs?.getString(_kRadioId),
       radioName: prefs?.getString(_kRadioName),
+      savedRadios: SavedRadio.decodeList(prefs?.getString(_kSavedRadios)),
       trip: TripSettings.decode(prefs?.getString(_kTrip)),
       meshLinks: MeshLink.decodeMap(prefs?.getString(_kMeshLinks)),
     );
@@ -631,6 +640,10 @@ class SharedPrefsSettingsStore implements SettingsStore {
         await prefs.setString(_kRadioId, s.radioId!);
         await prefs.setString(_kRadioName, s.radioName ?? '');
       }
+      await prefs.setString(
+        _kSavedRadios,
+        SavedRadio.encodeList(s.savedRadios),
+      );
       await prefs.setString(
         _kVolumes,
         AppSettings.encodeVolumes(s.peerVolumes),

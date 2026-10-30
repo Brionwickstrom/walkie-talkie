@@ -1525,6 +1525,43 @@ Tests: `test/v195_gateway_test.dart`, `test/v195_quiet_test.dart`.
 Tests: `test/v197_meshtastic_import_test.dart` (vectors from the official
 apps and the Python library), `test/v195_quiet_test.dart`.
 
+## v2.5.4: saved radios
+
+Settings > Long-range radio now keeps a list of **Saved radios** instead of one.
+
+- Every radio that connects is remembered: its id (Bluetooth id,
+  `serial:COM7` or `tcp:host`), its own long and short name (read from the
+  radio and kept up to date), its node number and when it last connected.
+  Stored as `saved_radios` in the preferences; `lora_radio_id` is still the one
+  in use, so older installs and downgrades keep working. An install with one
+  paired radio gets it as the first entry on first start.
+- The radio in use is marked **Connected** (or says why it is not). Tap another
+  to switch: the current radio is disconnected, then the chosen one connects.
+  Only one radio is connected at a time. Switching, adding and disconnecting
+  are blocked while anyone is talking or Radio settings is writing.
+- Each row has a menu: **Disconnect** (the radio in use; it stays in the
+  list), **Rename** (a name in this app only; empty goes back to the radio's
+  own name) and **Remove** (asks first; disconnects it if it is in use, and
+  Android forgets the Bluetooth pairing). This replaces the old Forget /
+  Disconnect radio button.
+- **Add a radio** keeps Find my radio (phone) / Find USB radio and Wi-Fi radio
+  (desktop). Radios found that are already saved are not listed again. Adding
+  one connects it.
+- Desktop: a saved USB radio shows "Not found: plug it in" when its COM port is
+  not there. If its port is gone and its node number is known, the app looks
+  at the other free COM ports once (never ports of other saved radios, at most
+  4, 8 s each, only while connecting) and takes the radio with the same node
+  number, saving the new port. A port that was probed is not probed again until
+  another one appears.
+- Radio settings and Radios nearby follow the radio in use. Nothing new runs in
+  the background: names are saved when the radio's own events change them, and
+  nothing scans.
+- Under the hood: a connect that is still running for a radio that was just
+  replaced now ends by itself instead of touching the new link, and a switch
+  skips the retry wait.
+
+Tests: `test/v254_saved_radios_test.dart`.
+
 ## v2.5.3: Radio settings page
 
 Settings > Long-range radio > **Radio settings** (above Meshtastic channels)

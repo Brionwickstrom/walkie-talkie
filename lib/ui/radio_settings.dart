@@ -10,22 +10,15 @@ import '../platform/platform_caps.dart';
 import 'mesh_channels.dart';
 import 'radio_settings_page.dart';
 import 'radios_nearby_page.dart';
+import 'saved_radios.dart';
+
+export 'saved_radios.dart' show radioStateText;
 
 /// How to pair, shown before and while pairing.
 const radioPinHelp =
     'When Android asks for a PIN: radios without a screen (SenseCAP '
     'T1000-E) use 123456. Radios with a screen (RAK WisMesh Pocket) show '
     'the PIN on their screen. Unless you changed it in the Meshtastic app.';
-
-String radioStateText(RadioState s) => switch (s) {
-  RadioState.none => 'No radio paired',
-  RadioState.bluetoothOff => 'Bluetooth is off',
-  RadioState.connecting => 'Connecting...',
-  RadioState.pairing => 'Waiting for the PIN (see below)',
-  RadioState.configuring => 'Loading radio settings...',
-  RadioState.ready => 'Connected',
-  RadioState.reconnecting => 'Not connected, retrying',
-};
 
 String _ago(DateTime t) {
   final d = DateTime.now().difference(t);
@@ -114,6 +107,11 @@ class _RadioSettingsState extends State<RadioSettings> {
     });
   }
 
+  Future<void> _add(FoundRadio r) async {
+    await widget.controller.pairRadio(r);
+    if (mounted) setState(() => _found = null);
+  }
+
   Future<void> _addWifiRadio(BuildContext context) async {
     final id = await askWifiRadio(context);
     if (id == null) return;
@@ -155,88 +153,9 @@ class _RadioSettingsState extends State<RadioSettings> {
           );
           children.add(const SizedBox(height: 8));
         }
-        if (!c.radioPaired) {
-          children.addAll([
-            Wrap(
-              spacing: 8,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                FilledButton.icon(
-                  key: const Key('radioScan'),
-                  icon: const Icon(Icons.settings_input_antenna),
-                  label: Text(
-                    _scanning
-                        ? 'Looking...'
-                        : desktop
-                        ? 'Find USB radio'
-                        : 'Find my radio',
-                  ),
-                  onPressed: _scanning ? null : _scan,
-                ),
-                if (desktop)
-                  OutlinedButton.icon(
-                    key: const Key('radioWifi'),
-                    icon: const Icon(Icons.wifi),
-                    label: const Text('Wi-Fi radio'),
-                    onPressed: () => _addWifiRadio(context),
-                  ),
-                if (_scanning)
-                  const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-              ],
-            ),
-            if (_found != null && _found!.isEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  desktop
-                      ? 'No USB radio found. Plug it in with a data USB cable '
-                            '(some cables only charge), wait a few seconds and '
-                            'try again.'
-                      : 'No radio found. Turn it on, keep it close, and make '
-                            'sure the official Meshtastic app is not connected '
-                            'to it.',
-                ),
-              ),
-            for (final r in _found ?? const <FoundRadio>[])
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: const Icon(Icons.settings_input_antenna),
-                title: Text(r.name),
-                subtitle: Text(
-                  r.isStream ? 'USB serial' : 'Signal ${r.rssi} dBm',
-                ),
-                trailing: FilledButton.tonal(
-                  onPressed: () => c.pairRadio(r),
-                  child: Text(r.isStream ? 'Connect' : 'Pair'),
-                ),
-              ),
-            if (!desktop) ...[
-              const SizedBox(height: 4),
-              Text(radioPinHelp, style: theme.textTheme.bodySmall),
-            ],
-          ]);
-        } else {
-          final ok = dev.state == RadioState.ready;
-          children.add(
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: Icon(
-                Icons.settings_input_antenna,
-                color: ok ? cs.primary : cs.outline,
-              ),
-              title: Text(dev.deviceName ?? c.settings.radioName ?? 'Radio'),
-              subtitle: Text(
-                [
-                  radioStateText(dev.state),
-                  if (!ok && dev.detail != null) dev.detail!,
-                ].join(' · '),
-              ),
-            ),
-          );
+        // v2.5.4: every radio connected so far; tap one to switch.
+        children.add(SavedRadiosList(controller: c));
+        if (c.radioPaired) {
           if (!dev.isStream &&
               (dev.state == RadioState.pairing ||
                   dev.state == RadioState.connecting)) {
@@ -315,17 +234,84 @@ class _RadioSettingsState extends State<RadioSettings> {
               ),
             );
           }
-          children.add(
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton.icon(
-                icon: const Icon(Icons.link_off),
-                label: Text(dev.isStream ? 'Disconnect radio' : 'Forget radio'),
-                onPressed: c.forgetRadio,
+        }
+        // Add another radio (it becomes the one in use).
+        final saved = {for (final r in c.savedRadios) r.id};
+        final fresh = [
+          for (final r in _found ?? const <FoundRadio>[])
+            if (!saved.contains(r.id)) r,
+        ];
+        children.addAll([
+          if (c.savedRadios.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text('Add a radio', style: theme.textTheme.titleSmall),
+            ),
+          Wrap(
+            spacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              FilledButton.icon(
+                key: const Key('radioScan'),
+                icon: const Icon(Icons.settings_input_antenna),
+                label: Text(
+                  _scanning
+                      ? 'Looking...'
+                      : desktop
+                      ? 'Find USB radio'
+                      : 'Find my radio',
+                ),
+                onPressed: _scanning ? null : _scan,
+              ),
+              if (desktop)
+                OutlinedButton.icon(
+                  key: const Key('radioWifi'),
+                  icon: const Icon(Icons.wifi),
+                  label: const Text('Wi-Fi radio'),
+                  onPressed: () => _addWifiRadio(context),
+                ),
+              if (_scanning)
+                const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+            ],
+          ),
+          if (_found != null && fresh.isEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                _found!.isNotEmpty
+                    ? 'Nothing new: the radios found are already in your list.'
+                    : desktop
+                    ? 'No USB radio found. Plug it in with a data USB cable '
+                          '(some cables only charge), wait a few seconds and '
+                          'try again.'
+                    : 'No radio found. Turn it on, keep it close, and make '
+                          'sure the official Meshtastic app is not connected '
+                          'to it.',
               ),
             ),
-          );
-        }
+          for (final r in fresh)
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.settings_input_antenna),
+              title: Text(r.name),
+              subtitle: Text(
+                r.isStream ? 'USB serial' : 'Signal ${r.rssi} dBm',
+              ),
+              trailing: FilledButton.tonal(
+                key: Key('radioAdd-${r.id}'),
+                onPressed: () => _add(r),
+                child: Text(r.isStream ? 'Connect' : 'Pair'),
+              ),
+            ),
+          if (!desktop && (!c.radioPaired || _found != null)) ...[
+            const SizedBox(height: 4),
+            Text(radioPinHelp, style: theme.textTheme.bodySmall),
+          ],
+        ]);
         // v1.9.5: LoRa gateways (Home gateway on the Synology, phones
         // sharing their radio) in this channel's relay room.
         if (c.radioPaired) {

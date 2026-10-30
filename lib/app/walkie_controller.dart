@@ -54,6 +54,8 @@ import '../lora/meshtastic_admin.dart';
 import '../lora/meshtastic_channels.dart';
 import '../lora/meshtastic_settings.dart';
 import '../lora/radio_clip.dart';
+import '../lora/saved_radios.dart';
+import '../lora/stream_radio.dart';
 import '../messaging/inbox.dart';
 import '../messaging/messenger.dart';
 import '../messaging/outbox.dart';
@@ -153,6 +155,16 @@ class WalkieController extends ChangeNotifier {
     final ble = PlatformCaps.bluetooth ? BleTransport() : null;
     radioDevice.deviceId = settings.radioId;
     radioDevice.deviceName = settings.radioName;
+    _migrateRadios();
+    radioDevice.nodeFor = (id) => _savedRadio(id)?.nodeId;
+    radioDevice.otherRadios = () => [
+      for (final r in settings.savedRadios)
+        if (r.id != radioDevice.deviceId && r.isSerial)
+          StreamRadioId.serialPort(r.id)!,
+    ];
+    radioDevice.onMoved = _radioMoved;
+    // v2.5.4: remember the connected radio's names and node number.
+    _subs.add(radioDevice.changes.listen((_) => _noteRadio()));
     if (settings.radioId != null) ble?.ignoreDevices.add(settings.radioId!);
     radioDevice.onDevice = (id) {
       ble?.ignoreDevices.clear();
@@ -1481,6 +1493,7 @@ class WalkieController extends ChangeNotifier {
       );
     }
     _subs.add(radioDevice.changes.listen((_) => notifyListeners()));
+    if (_radiosMigrated) unawaited(settingsStore.save(settings));
     radioDevice.start();
     _subs.add(
       manager.controls.listen((c) {
@@ -3138,18 +3151,175 @@ class WalkieController extends ChangeNotifier {
     }
   }
 
-  Future<void> pairRadio(FoundRadio r) async {
-    settings.radioId = r.id;
-    settings.radioName = r.name;
-    await settingsStore.save(settings);
-    await radioDevice.use(r.id, r.name);
-    notifyListeners();
+  // ------------------------------------------ saved radios (v2.5.4)
+
+  bool _radiosMigrated = false;
+  bool _radioNoted = false;
+
+  /// Radios saved by an older version: the one paired radio becomes the
+  /// first entry of the list.
+  void _migrateRadios() {
+    final id = settings.radioId;
+    if (id == null || settings.savedRadios.any((r) => r.id == id)) return;
+    settings.savedRadios.add(SavedRadio(id: id, name: settings.radioName));
+    _radiosMigrated = true;
   }
 
-  Future<void> forgetRadio() async {
-    await radioDevice.forget();
+  SavedRadio? _savedRadio(String? id) {
+    if (id == null) return null;
+    for (final r in settings.savedRadios) {
+      if (r.id == id) return r;
+    }
+    return null;
+  }
+
+  /// The saved radios, in the order they were added.
+  List<SavedRadio> get savedRadios => List.unmodifiable(settings.savedRadios);
+
+  /// The radio in use (connected or being connected), if any.
+  SavedRadio? get activeRadio => _savedRadio(radioDevice.deviceId);
+
+  /// Remember the radio that is connected now: its names, node number and
+  /// time. Runs on the radio's own change events, writes only on a real
+  /// change. No traffic.
+  void _noteRadio() {
+    final d = radioDevice;
+    final s = d.session;
+    final me = s?.myNodeNum;
+    if (!d.ready || s == null || me == null || d.deviceId == null) {
+      _radioNoted = false;
+      return;
+    }
+    final r = _savedRadio(d.deviceId) ?? _addSaved(d.deviceId!, d.deviceName);
+    var dirty = false;
+    if (!_radioNoted) {
+      _radioNoted = true;
+      r.lastConnected = DateTime.now();
+      dirty = true;
+    }
+    if (r.nodeId != me) {
+      r.nodeId = me;
+      dirty = true;
+    }
+    final node = s.nodes[me];
+    final ln = node?.longName ?? '';
+    final sn = node?.shortName ?? '';
+    if (ln.isNotEmpty && r.name != ln) {
+      r.name = ln;
+      dirty = true;
+    }
+    if (sn.isNotEmpty && r.shortName != sn) {
+      r.shortName = sn;
+      dirty = true;
+    }
+    if (ln.isNotEmpty && settings.radioName != ln) {
+      settings.radioName = ln;
+      dirty = true;
+    }
+    if (dirty) unawaited(settingsStore.save(settings));
+  }
+
+  SavedRadio _addSaved(String id, String? name) {
+    final r = SavedRadio(id: id, name: name);
+    settings.savedRadios.add(r);
+    return r;
+  }
+
+  /// A USB radio was found on another COM port.
+  void _radioMoved(String from, String to) {
+    final r = _savedRadio(from);
+    if (r != null && _savedRadio(to) == null) r.id = to;
+    settings.radioId = to;
+    unawaited(settingsStore.save(settings));
+  }
+
+  /// Why the radio in use cannot be changed right now, null when it can.
+  String? get radioSwitchBlockedText {
+    if (radioEditing) {
+      return 'The radio is being changed. Try again in a moment.';
+    }
+    if (radioEditBlocked) {
+      return 'A talk is going on. Radios can be changed when it is over.';
+    }
+    return null;
+  }
+
+  /// Add [r] to the saved radios (if new) and connect it, disconnecting
+  /// the one in use. Null when done, else why not.
+  Future<String?> pairRadio(FoundRadio r) async {
+    if (radioDevice.deviceId != r.id) {
+      final why = radioSwitchBlockedText;
+      if (why != null) {
+        _notice(why);
+        return why;
+      }
+    }
+    final saved = _savedRadio(r.id) ?? _addSaved(r.id, r.name);
+    return _useRadio(saved);
+  }
+
+  /// Switch to the saved radio [id]. Null when done, else why not.
+  Future<String?> switchRadio(String id) async {
+    final r = _savedRadio(id);
+    if (r == null || r.id == radioDevice.deviceId) return null;
+    final why = radioSwitchBlockedText;
+    if (why != null) {
+      _notice(why);
+      return why;
+    }
+    return _useRadio(r);
+  }
+
+  Future<String?> _useRadio(SavedRadio r) async {
+    settings.radioId = r.id;
+    settings.radioName = r.name ?? r.title;
+    await settingsStore.save(settings);
+    _radioNoted = false;
+    await radioDevice.use(r.id, r.name ?? r.title);
+    notifyListeners();
+    return null;
+  }
+
+  /// Disconnect the radio in use; it stays in the saved radios. Null when
+  /// done, else why not.
+  Future<String?> disconnectRadio() async {
+    if (radioDevice.deviceId == null) return null;
+    final why = radioSwitchBlockedText;
+    if (why != null) {
+      _notice(why);
+      return why;
+    }
+    await radioDevice.disconnect();
     settings.radioId = null;
     settings.radioName = null;
+    _radioNoted = false;
+    await settingsStore.save(settings);
+    notifyListeners();
+    return null;
+  }
+
+  /// Take [id] out of the saved radios (disconnecting it first when it is
+  /// the one in use; Android forgets its Bluetooth pairing too). Null when
+  /// done, else why not.
+  Future<String?> removeRadio(String id) async {
+    if (id == radioDevice.deviceId) {
+      final why = await disconnectRadio();
+      if (why != null) return why;
+    }
+    settings.savedRadios.removeWhere((r) => r.id == id);
+    await settingsStore.save(settings);
+    await radioDevice.removeBond(id);
+    notifyListeners();
+    return null;
+  }
+
+  /// Give a saved radio a name of your own; empty goes back to the
+  /// radio's own name. The radio itself is not changed.
+  Future<void> renameRadio(String id, String label) async {
+    final r = _savedRadio(id);
+    if (r == null) return;
+    final t = label.trim();
+    r.label = t.isEmpty || t == r.name ? null : t;
     await settingsStore.save(settings);
     notifyListeners();
   }
