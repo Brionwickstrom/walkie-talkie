@@ -189,6 +189,198 @@ Uint8List patchChannelPrecision(Uint8List settings, int precision) {
   return w.toBytes();
 }
 
+// ------------------------------------------- public frequency slot (v2.5.8)
+
+/// A region's band as the firmware has it (start / end MHz; spacing is 0
+/// in every region). [wide] = the 2.4 GHz band (812.5 kHz LongFast).
+class _Band {
+  const _Band(this.start, this.end, {this.wide = false});
+  final double start, end;
+  final bool wide;
+}
+
+/// Config.LoRaConfig.RegionCode -> band (Meshtastic firmware RadioInterface
+/// regions[] table).
+const _bands = <int, _Band>{
+  1: _Band(902.0, 928.0), // US
+  2: _Band(433.0, 434.0), // EU_433
+  3: _Band(869.4, 869.65), // EU_868
+  4: _Band(470.0, 510.0), // CN
+  5: _Band(920.5, 923.5), // JP
+  6: _Band(915.0, 928.0), // ANZ
+  7: _Band(920.0, 923.0), // KR
+  8: _Band(920.0, 925.0), // TW
+  9: _Band(868.7, 869.2), // RU
+  10: _Band(865.0, 867.0), // IN
+  11: _Band(864.0, 868.0), // NZ_865
+  12: _Band(920.0, 925.0), // TH
+  13: _Band(2400.0, 2483.5, wide: true), // LORA_24
+  14: _Band(433.0, 434.7), // UA_433
+  15: _Band(868.0, 868.6), // UA_868
+  16: _Band(433.0, 435.0), // MY_433
+  17: _Band(919.0, 924.0), // MY_919
+  18: _Band(917.0, 925.0), // SG_923
+  19: _Band(433.0, 434.7), // PH_433
+  20: _Band(868.0, 869.4), // PH_868
+  21: _Band(915.0, 918.0), // PH_915
+  22: _Band(433.05, 434.79), // ANZ_433
+  23: _Band(433.075, 434.775), // KZ_433
+  24: _Band(863.0, 868.0), // KZ_863
+  25: _Band(865.0, 868.0), // NP_865
+  26: _Band(902.0, 907.5), // BR_902
+};
+
+/// The firmware does this in 32 bit floats.
+double _f32(double x) => (Float32List(1)..[0] = x)[0];
+
+/// djb2 (Dan Bernstein), as the firmware's hash() of a channel name.
+int meshHashName(String name) {
+  var h = 5381;
+  for (final c in utf8.encode(name)) {
+    h = ((h << 5) + h + c) & 0xFFFFFFFF;
+  }
+  return h;
+}
+
+/// Kilohertz of the LongFast bandwidth in [region].
+double _longFastBw(_Band b) => b.wide ? 812.5 : 250.0;
+
+/// Number of frequency slots in [region] at LongFast, null when the region
+/// is not in the table.
+int? radioSlotCount(int region) {
+  final b = _bands[region];
+  if (b == null) return null;
+  final span = _f32(_f32(b.end) - _f32(b.start));
+  final width = _f32(_f32(_longFastBw(b)) / 1000);
+  final n = _f32(span / width).floor();
+  return n < 1 ? null : n;
+}
+
+/// The public LongFast frequency slot of [region] as `channel_num` takes
+/// it (1 based): hash("LongFast") % slots + 1, the slot every default
+/// Meshtastic radio uses (US = 20). Null for a region not in the table.
+int? radioPublicSlot(int region) {
+  final n = radioSlotCount(region);
+  return n == null ? null : meshHashName('LongFast') % n + 1;
+}
+
+/// The MHz of 1 based [slot] in [region] at LongFast, null when unknown.
+double? radioSlotMhz(int region, int slot) {
+  final b = _bands[region];
+  final n = radioSlotCount(region);
+  if (b == null || n == null) return null;
+  final bw = _f32(_longFastBw(b));
+  final i = (slot - 1) % n;
+  return _f32(
+    _f32(b.start) + _f32(bw / 2000) + _f32(i.toDouble() * _f32(bw / 1000)),
+  );
+}
+
+/// "906.875 MHz".
+String radioMhzText(double mhz) {
+  final t = mhz.toStringAsFixed(3);
+  return '${t.replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '')} MHz';
+}
+
+/// Where the radio is with "Relay through public radios".
+class RadioRelayInfo {
+  const RadioRelayInfo({
+    this.slot,
+    this.channelNum = 0,
+    this.region = 0,
+    this.problem,
+  });
+
+  /// The public LongFast slot of the radio's region; null = not offered.
+  final int? slot;
+
+  /// LoRaConfig.channel_num now (0 = the slot comes from the main channel's
+  /// name).
+  final int channelNum;
+  final int region;
+
+  /// Why the switch is not offered (null = offered).
+  final String? problem;
+
+  bool get on => slot != null && channelNum == slot;
+
+  /// A slot another app set: neither automatic nor the public one.
+  bool get custom => channelNum != 0 && !on;
+  bool get canTurnOn => slot != null && problem == null && !on;
+  bool get canTurnOff => channelNum != 0;
+
+  String get stateText {
+    if (on) {
+      final mhz = radioSlotMhz(region, slot!);
+      return 'On: frequency slot $slot, the public LongFast slot'
+          '${mhz == null ? '' : ' (${radioMhzText(mhz)})'}.';
+    }
+    if (channelNum == 0) {
+      return 'Off: the frequency slot comes from the main channel\'s name.';
+    }
+    final mhz = radioSlotMhz(region, channelNum);
+    return 'Off: frequency slot $channelNum${mhz == null ? '' : ' (${radioMhzText(mhz)})'}, '
+        'set in another app.';
+  }
+}
+
+/// [region], [preset], [usePreset] and [channelNum] are the radio's
+/// LoRaConfig (null = not read).
+RadioRelayInfo radioRelayInfo({
+  required int? region,
+  required int? preset,
+  required bool? usePreset,
+  required int? channelNum,
+}) {
+  final ch = channelNum ?? 0;
+  if (region == null || preset == null) {
+    return RadioRelayInfo(
+      channelNum: ch,
+      problem: 'Your radio did not send its radio settings yet.',
+    );
+  }
+  if (region == 0) {
+    return RadioRelayInfo(
+      channelNum: ch,
+      region: region,
+      problem: 'Set the region first.',
+    );
+  }
+  final slot = radioPublicSlot(region);
+  if (slot == null) {
+    return RadioRelayInfo(
+      channelNum: ch,
+      region: region,
+      problem: 'The public slot of this region is not known to the app.',
+    );
+  }
+  if (usePreset == false || preset != 0) {
+    return RadioRelayInfo(
+      channelNum: ch,
+      region: region,
+      slot: slot,
+      problem:
+          'Needs the Long range, fast (LongFast) speed: that is what '
+          'the public radios use.',
+    );
+  }
+  return RadioRelayInfo(slot: slot, channelNum: ch, region: region);
+}
+
+/// The sentence under the switch.
+const radioRelayExplain =
+    'Public Meshtastic radios near you repeat your radios\' packets for extra '
+    'range. The packets stay scrambled with your own channel key, so '
+    'strangers can\'t read your messages, names or locations. Your radios '
+    'repeat strangers\' packets too, which uses some airtime. There is no '
+    'public chat channel here, and the channel name and key do not change.';
+
+/// The warning in the confirm dialog.
+const radioRelayWarn =
+    'All your radios (Skunk Ape, Yowie, Yeti, Sasquatch) must switch '
+    'together, or they will lose each other: radios on different frequency '
+    'slots can\'t hear each other.';
+
 /// The message the user confirms before the region or speed changes.
 const radioConfirmText =
     'All radios in your group must use the same region and speed, or they '
@@ -346,6 +538,10 @@ class RadioSnapshot {
   int? get preset => rawInt(lora, 2);
   bool? get usePreset => lora == null ? null : rawInt(lora, 1) != 0;
   int? get hopLimit => rawInt(lora, 8);
+
+  /// LoRaConfig.channel_num: 0 / absent = the slot comes from the main
+  /// channel's name (v2.5.8).
+  int? get channelNum => lora == null ? null : (rawInt(lora, 11) ?? 0);
   int? get positionSecs => rawInt(position, 1);
   bool? get positionSmart => position == null ? null : rawInt(position, 2) != 0;
   String? get longName => rawString(owner, 2);
@@ -392,6 +588,7 @@ class RadioSnapshot {
     if (region != null) radioRegionText(region!),
     if (preset != null) radioPresetText(preset!, usePreset: usePreset ?? true),
     if (hopLimit != null) 'hop limit $hopLimit',
+    if ((channelNum ?? 0) != 0) 'frequency slot $channelNum',
     if (longName != null && longName!.isNotEmpty)
       'name $longName${(shortName ?? '').isEmpty ? '' : ' ($shortName)'}',
     if (sharing != null) 'location sharing ${sharing! ? 'on' : 'off'}',
@@ -482,6 +679,12 @@ class RadioChange {
   static RadioChange region(int code) =>
       RadioChange(lora: {7: code}, what: 'region');
 
+  /// Relay through public radios (v2.5.8): LoRaConfig.channel_num = the
+  /// public LongFast slot [slot] (on) or 0 (off: the slot comes from the
+  /// main channel's name). Nothing else changes.
+  static RadioChange relay(bool on, int slot) =>
+      RadioChange(lora: {11: on ? slot : 0}, what: 'public relay');
+
   /// A preset: use_preset on, the chosen modem preset; bandwidth / spread
   /// factor / coding rate stay (the radio ignores them with a preset).
   static RadioChange preset(int code) =>
@@ -523,6 +726,7 @@ class RadioChange {
             2: rawInt(b.lora, 2),
             7: rawInt(b.lora, 7),
             8: rawInt(b.lora, 8),
+            11: rawInt(b.lora, 11),
           },
     position: b.position == null
         ? const {}
@@ -794,6 +998,7 @@ class RadioSettingsWriter {
             bad.add(switch (e.key) {
               7 => 'the region',
               8 => 'the hop limit',
+              11 => 'the frequency slot',
               _ => 'the speed',
             });
           }

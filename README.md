@@ -1525,6 +1525,41 @@ Tests: `test/v195_gateway_test.dart`, `test/v195_quiet_test.dart`.
 Tests: `test/v197_meshtastic_import_test.dart` (vectors from the official
 apps and the Python library), `test/v195_quiet_test.dart`.
 
+## v2.5.8: Relay through public radios
+
+**Radio settings > Relay through public radios** is a switch that moves your
+radios to the public Meshtastic frequency slot, so public radios nearby repeat
+your packets for extra range. The channel itself (name, key) is not touched:
+your packets stay encrypted with your own key, so strangers can't read your
+messages, names or locations. There is no public chat channel.
+
+- **What it writes:** only `LoRaConfig.channel_num` (field 11). ON = the
+  region's public LongFast slot, OFF = 0 (the slot comes from the main
+  channel's name, as before). `use_preset`, the speed, region, hop limit,
+  every other LoRa field and all channels stay byte for byte. The state of the
+  switch is read from `channel_num` (ON when it equals the public slot).
+- **Which slot:** computed as the firmware does (`RadioInterface.cpp`):
+  `numChannels = floor((freqEnd - freqStart) / (bandwidth / 1000))` in 32 bit
+  floats, `slot = djb2("LongFast") % numChannels + 1`. LongFast is 250 kHz
+  (812.5 kHz in the 2.4 GHz band). US = 20 (906.875 MHz), ANZ 20, EU 868 1, EU
+  433 4, JP 12, KR 12, TW 16, TH 16, CN 36, IN 4, NZ 865 4, RU 2, 2.4 GHz 6.
+  The band table is the one of the firmware source (all 26 regions of the
+  region list); a radio with a very old firmware could use other band edges.
+- **Offered only with the LongFast speed** (and a region that is set). With
+  another speed the switch is off and says why; turning it off stays possible
+  whenever `channel_num` is not 0. A slot set by another app is shown
+  ("Off: frequency slot 7") with a "Back to automatic slot" button.
+- **Confirm dialog (both directions):** all your radios (Skunk Ape, Yowie,
+  Yeti, Sasquatch) must switch together or they lose each other; the radio
+  restarts. Shows "Frequency slot: automatic -> 20 (public LongFast, 906.875
+  MHz)". Region and speed confirms mention a custom slot that stays.
+- Same guards as the other radio edits (blocked during a talk, session key,
+  begin / commit, restart wait, read back and check, backup). **Restore
+  previous settings** now also restores the slot and says so in its confirm.
+- Not built: pacing / limiting voice over LoRa for the busier public slot.
+
+Tests: `test/v258_relay_test.dart`.
+
 ## v2.5.7: Location precision per channel
 
 **Radio settings > Location precision** sets how exactly your radio says where

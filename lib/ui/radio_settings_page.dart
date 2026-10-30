@@ -152,7 +152,14 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
     if (b == null) return;
     final ok = await _confirm(
       title: 'Restore previous settings?',
-      lines: ['Back to: ${b.previous.summary}'],
+      lines: [
+        'Back to: ${b.previous.summary}',
+        if (c.radioDevice.session?.channelNum != null &&
+            b.previous.channelNum != null &&
+            c.radioDevice.session!.channelNum != b.previous.channelNum)
+          'Frequency slot: ${_slotText(c.radioDevice.session!.channelNum!)} → '
+              '${_slotText(b.previous.channelNum!)}',
+      ],
     );
     if (ok != true || !mounted) return;
     setState(() {
@@ -246,11 +253,50 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
     );
   }
 
+  String _slotText(int n) => n == 0 ? 'automatic' : '$n';
+
+  RadioRelayInfo _relayInfo(MeshtasticSession s) => radioRelayInfo(
+    region: s.region,
+    preset: s.modemPreset,
+    usePreset: s.usePreset,
+    channelNum: s.channelNum,
+  );
+
+  Future<void> _toggleRelay(MeshtasticSession s, bool on) async {
+    final info = _relayInfo(s);
+    if (on && !info.canTurnOn) return;
+    if (!on && !info.canTurnOff) return;
+    final slot = info.slot ?? 0;
+    final mhz = info.slot == null ? null : radioSlotMhz(info.region, slot);
+    final ok = await _confirm(
+      title: on
+          ? 'Relay through public radios?'
+          : 'Stop relaying through public radios?',
+      intro: radioRelayWarn,
+      lines: [
+        on
+            ? 'Frequency slot: ${_slotText(s.channelNum ?? 0)} → $slot '
+                  '(public LongFast${mhz == null ? '' : ', ${radioMhzText(mhz)}'})'
+            : 'Frequency slot: ${_slotText(s.channelNum ?? 0)} → automatic '
+                  '(from the main channel\'s name)',
+        'Channel names and keys do not change.',
+      ],
+    );
+    if (ok != true || !mounted) return;
+    await _run(
+      RadioChange.relay(on, slot),
+      on ? 'Relaying through public radios.' : 'Public relay is off.',
+    );
+  }
+
   Future<void> _changeRegion(MeshtasticSession s) async {
     final ok = await _confirm(
       title: 'Change region?',
       lines: [
         'Region: ${radioRegionText(s.region ?? 0)} → ${radioRegionText(_region)}',
+        if ((s.channelNum ?? 0) != 0)
+          'Frequency slot ${s.channelNum} stays; check "Relay through public '
+              'radios" afterwards.',
       ],
     );
     if (ok != true || !mounted) return;
@@ -262,6 +308,9 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
       title: 'Change speed?',
       lines: [
         'Speed: ${radioPresetText(s.modemPreset ?? 0, usePreset: s.usePreset ?? true)} → ${radioPresetText(_preset)}',
+        if ((s.channelNum ?? 0) != 0)
+          'Frequency slot ${s.channelNum} stays; check "Relay through public '
+              'radios" afterwards.',
       ],
     );
     if (ok != true || !mounted) return;
@@ -451,6 +500,52 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
                   : null,
             ),
           ),
+      ],
+    );
+  }
+
+  Widget _relaySection(
+    ThemeData theme,
+    MeshtasticSession? s,
+    bool canEdit,
+    Widget Function(String) head,
+  ) {
+    if (s == null) return const SizedBox.shrink();
+    final info = _relayInfo(s);
+    final small = theme.textTheme.bodySmall;
+    final canTap = canEdit && (info.on ? info.canTurnOff : info.canTurnOn);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        head('Relay through public radios'),
+        SwitchListTile(
+          key: const Key('rs-relay'),
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Use the public frequency'),
+          subtitle: const Text(radioRelayExplain),
+          value: info.on,
+          onChanged: canTap ? (v) => _toggleRelay(s, v) : null,
+        ),
+        Text(info.stateText, key: const Key('rs-relay-state'), style: small),
+        if (info.problem != null && !info.on)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              info.problem!,
+              key: const Key('rs-relay-why'),
+              style: small?.copyWith(color: theme.colorScheme.error),
+            ),
+          ),
+        if (info.custom && info.canTurnOff)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              key: const Key('rs-relay-off'),
+              onPressed: canEdit ? () => _toggleRelay(s, false) : null,
+              child: const Text('Back to automatic slot'),
+            ),
+          ),
+        Text(radioRelayWarn, key: const Key('rs-relay-warn'), style: small),
       ],
     );
   }
@@ -741,6 +836,7 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
                   'your group needs the same region and speed.',
                   style: small,
                 ),
+                _relaySection(theme, s, canEdit, head),
                 if (backup != null) ...[
                   head('Undo'),
                   Text(
