@@ -1556,6 +1556,8 @@ style ids, so saved settings and old offline areas keep working).
   photo downloads wait 3 times the usual pause between requests. Old saved
   satellite areas still work (old tiles, upgraded when online). Deleting or
   trimming an area handles the new photo folders (`osip_2024`, `naip_live`).
+- Fix: on Windows, trimming the tile cache did not recognise the folder path
+  (backslashes), so tiles of saved areas could be removed; it now keeps them.
 - No background work: tiles load only when the map shows them.
 
 New: `lib/trip/imagery.dart` (Oregon outline, JPEG check, tile enlarge, photo

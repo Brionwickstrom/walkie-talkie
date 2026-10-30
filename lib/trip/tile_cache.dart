@@ -1235,7 +1235,9 @@ class TileCache {
         if (e is! File || !e.path.endsWith('.png')) continue;
         final st = await e.stat();
         total += st.size;
-        final parts = e.path.substring(dir.path.length + 1).split('/');
+        final parts = e.path
+            .substring(dir.path.length + 1)
+            .split(RegExp(r'[\\/]'));
         var keep = false;
         if (parts.length == 4) {
           final z = int.tryParse(parts[1]), x = int.tryParse(parts[2]);
