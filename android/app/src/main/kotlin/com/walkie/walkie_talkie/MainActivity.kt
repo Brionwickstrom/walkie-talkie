@@ -78,6 +78,11 @@ class MainActivity : FlutterActivity() {
                 showOverLockScreen()
                 BgBridge.deliver(this, mapOf("type" to "sosOpen", "from" to from, "id" to id))
             }
+            Notifier.ACTION_WX_OPEN -> {
+                showOverLockScreen()
+                Notifier.stopWx(this, i.getLongExtra("id", 0).toInt())
+                BgBridge.deliver(this, mapOf("type" to "wxOpen"))
+            }
             Notifier.ACTION_OPEN_INBOX -> {
                 BgBridge.deliver(this, mapOf("type" to "openInbox", "key" to (i.getStringExtra("key") ?: "")))
             }

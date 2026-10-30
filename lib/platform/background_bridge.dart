@@ -161,6 +161,32 @@ class BackgroundBridge {
     required String text,
   }) => _call<void>('showInfo', {'nid': nid, 'title': title, 'text': text});
 
+  /// v2.5.0: a weather alert. [extreme]: the loud channel (full-screen
+  /// while it sounds); [sound] false = high priority but silent (quiet
+  /// hours); [bypass] = through Do Not Disturb (the extreme switch).
+  Future<void> showWxAlert({
+    required int id,
+    required String title,
+    required String text,
+    required String big,
+    required bool extreme,
+    required bool sound,
+    required bool bypass,
+    required int timeoutMs,
+  }) => _call<void>('showWxAlert', {
+    'id': id,
+    'title': title,
+    'text': text,
+    'big': big,
+    'extreme': extreme,
+    'sound': sound,
+    'bypass': bypass,
+    'timeoutMs': timeoutMs,
+  });
+
+  Future<void> cancelWxAlert(int id) =>
+      _call<void>('cancelWxAlert', {'id': id});
+
   Future<String?> filesDir() => _call<String>('filesDir');
 
   /// One location fix (Android), or null.

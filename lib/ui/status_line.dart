@@ -49,6 +49,9 @@ class TalkStatusLine extends StatelessWidget {
     required this.onOpen,
     this.onOpenMessages,
     this.messagesNew = false,
+    this.weather,
+    this.weatherExtreme = false,
+    this.onOpenWeather,
   });
 
   final AudienceInfo audience;
@@ -72,6 +75,13 @@ class TalkStatusLine extends StatelessWidget {
   /// listened to yet, in any place.
   final VoidCallback? onOpenMessages;
   final bool messagesNew;
+
+  /// v2.5.0: the most important weather alert in force for your area, or
+  /// null. Shown as one small icon (amber; the error colour for Extreme),
+  /// never a banner.
+  final String? weather;
+  final bool weatherExtreme;
+  final VoidCallback? onOpenWeather;
 
   String get _audienceText {
     final people = '$here ${here == 1 ? 'person' : 'people'}';
@@ -183,6 +193,17 @@ class TalkStatusLine extends StatelessWidget {
               ),
             ),
           ),
+        if (weather != null && onOpenWeather != null)
+          _Shortcut(
+            key: const Key('talk-weather-shortcut'),
+            icon: weatherExtreme
+                ? Icons.thunderstorm_outlined
+                : Icons.warning_amber_rounded,
+            tooltip: 'Weather alert: $weather',
+            dot: false,
+            color: weatherExtreme ? cs.error : Colors.amber,
+            onTap: onOpenWeather!,
+          ),
         if (onOpenMessages != null)
           _Shortcut(
             key: const Key('talk-messages-shortcut'),
@@ -212,7 +233,9 @@ class _Shortcut extends StatelessWidget {
     required this.tooltip,
     required this.dot,
     required this.onTap,
+    this.color,
   });
+  final Color? color;
   final IconData icon;
   final String tooltip;
   final bool dot;
@@ -236,7 +259,7 @@ class _Shortcut extends StatelessWidget {
               key: Key(dot ? 'shortcut-dot' : 'shortcut-nodot'),
               isLabelVisible: dot,
               smallSize: 8,
-              child: Icon(icon, size: 20, color: cs.onSurfaceVariant),
+              child: Icon(icon, size: 20, color: color ?? cs.onSurfaceVariant),
             ),
           ),
         ),

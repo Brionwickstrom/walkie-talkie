@@ -61,6 +61,9 @@ class AppSettings {
     this.wifiDirect = true,
     this.notificationTalk = false,
     this.urgentLoud = true,
+    this.wxAlerts = true,
+    this.wxWifiOnly = false,
+    this.wxExtremeSound = false,
     this.joinAlertPrivate = true,
     this.joinAlertPublic = false,
     this.shareRadio = true,
@@ -226,6 +229,17 @@ class AppSettings {
 
   /// Urgent rings play at alarm volume, even in silent mode.
   bool urgentLoud;
+
+  /// Weather alerts from the National Weather Service (v2.5.0): on / off.
+  bool wxAlerts;
+
+  /// Check for weather alerts on Wi-Fi only.
+  bool wxWifiOnly;
+
+  /// Tornado Warnings and other Extreme alerts may sound during quiet hours
+  /// and Do Not Disturb. Off: they follow both (still shown on the lock
+  /// screen).
+  bool wxExtremeSound;
 
   /// Paired Meshtastic LoRa radio (Bluetooth id / name), v1.7.0.
   String? radioId;
@@ -424,6 +438,9 @@ class SharedPrefsSettingsStore implements SettingsStore {
   static const _kWifiDirect = 'wifi_direct';
   static const _kNotifTalk = 'notif_talk';
   static const _kUrgent = 'urgent_loud';
+  static const _kWxAlerts = 'wx_alerts';
+  static const _kWxWifi = 'wx_wifi_only';
+  static const _kWxExtreme = 'wx_extreme_sound';
   static const _kJoinPrivate = 'join_alert_private';
   static const _kJoinPublic = 'join_alert_public';
   static const _kShareRadio = 'share_radio';
@@ -504,6 +521,9 @@ class SharedPrefsSettingsStore implements SettingsStore {
       wifiDirect: prefs?.getBool(_kWifiDirect) ?? true,
       notificationTalk: prefs?.getBool(_kNotifTalk) ?? false,
       urgentLoud: prefs?.getBool(_kUrgent) ?? true,
+      wxAlerts: prefs?.getBool(_kWxAlerts) ?? true,
+      wxWifiOnly: prefs?.getBool(_kWxWifi) ?? false,
+      wxExtremeSound: prefs?.getBool(_kWxExtreme) ?? false,
       joinAlertPrivate: prefs?.getBool(_kJoinPrivate) ?? true,
       joinAlertPublic: prefs?.getBool(_kJoinPublic) ?? false,
       shareRadio: prefs?.getBool(_kShareRadio) ?? true,
@@ -553,6 +573,9 @@ class SharedPrefsSettingsStore implements SettingsStore {
       await prefs.setBool(_kWifiDirect, s.wifiDirect);
       await prefs.setBool(_kNotifTalk, s.notificationTalk);
       await prefs.setBool(_kUrgent, s.urgentLoud);
+      await prefs.setBool(_kWxAlerts, s.wxAlerts);
+      await prefs.setBool(_kWxWifi, s.wxWifiOnly);
+      await prefs.setBool(_kWxExtreme, s.wxExtremeSound);
       await prefs.setBool(_kJoinPrivate, s.joinAlertPrivate);
       await prefs.setBool(_kJoinPublic, s.joinAlertPublic);
       await prefs.setBool(_kShareRadio, s.shareRadio);

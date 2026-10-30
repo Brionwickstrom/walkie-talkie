@@ -1525,6 +1525,65 @@ Tests: `test/v195_gateway_test.dart`, `test/v195_quiet_test.dart`.
 Tests: `test/v197_meshtastic_import_test.dart` (vectors from the official
 apps and the Python library), `test/v195_quiet_test.dart`.
 
+## v2.5.0: Weather alerts (stage 1: straight from the National Weather Service)
+
+Warnings from the US National Weather Service for where the phone is and the
+places it has saved. Stage 1 of 2: the phone checks the NWS itself over the
+internet. The next update adds sharing alerts through the relay and over LoRa
+for devices with no internet (see "Built for the next stage"). Nothing else
+changes.
+
+- **Where:** the phone's last Trip fix (the GPS is never started for this, the
+  last fix is remembered for the next start), saved offline areas (their
+  centres) and the Trip forecast place; up to 6 places. A place is looked up
+  once (`/points`, coordinates rounded to 2 decimals, cached 30 days) for its
+  forecast zone and county zone; then ONE request
+  (`/alerts/active?zone=...`) covers all of them. Proper `User-Agent`
+  (`WalkieTalkie/<version> (+repo URL)`). Outside the US: "not covered".
+- **When:** every 10 minutes (5 while a warning is active, 30 with Offline
+  saver, backing off to 30 minutes after errors) while the app is open or kept
+  alive by background listening (the poll timer runs in the engine the
+  listening service already keeps awake), and when the app comes back to the
+  screen. With background listening off, alerts are delayed until the app is
+  opened. Wi-Fi only (default off) skips mobile data. No WorkManager and no
+  push service (no Firebase / Google).
+- **Which:** warnings only (plus Civil Emergency Message, Evacuation -
+  Immediate, Local Area Emergency). No watches, advisories, statements or
+  marine products. The kinds are a set in the store, ready for a later
+  per-type picker.
+- **Store:** `alerts.json` keeps alerts, cancelled events, the zone cache, the
+  last fix and the last check. Deduped by VTEC event (`KPQR.TO.W.0012` plus
+  year) or the NWS id; the newest revision wins; cancels (message type or VTEC
+  CAN / EXP) and expiry remove an alert, and an older copy cannot bring it
+  back. An alert missing from a later NWS answer for our zones is dropped. Each
+  alert is notified once; a restart never repeats it; an update only notifies
+  again if it became worse (for example Extreme).
+- **Notifications:** new channels `wx_warning_v1` (high, lock screen public, its
+  own chime), `wx_silent_v1` (same, no sound: quiet hours), `wx_extreme_v1`
+  (alarm tone, full-screen while it sounds) and `wx_extreme_dnd_v1` (through
+  Do Not Disturb, created once DND access is granted). Quiet hours and mute
+  only silence sound; Do Not Disturb applies. The switch "Extreme alerts can
+  sound anytime" (default OFF) lets Tornado Warnings and anything NWS rates
+  Extreme sound through quiet hours and Do Not Disturb (alarm for up to 30 s,
+  Silence button). Tapping opens the Alerts page. Windows shows alerts in the
+  app only while it runs.
+- **UI:** a small icon on the Talk status line while a warning is in force
+  (amber, error colour for Extreme), opening Alerts (a page on phones, a
+  dialog on wide screens): event, area, issued, expires, headline, what to do,
+  details, source line "National Weather Service, via internet". Settings >
+  Weather alerts: on/off (default on), Wi-Fi only, the extreme switch, status
+  and the areas covered.
+- **Built for the next stage:** one alert model (`WxAlert`) with a stable
+  `key`, `source` (internet / relay / radio), `trust` (unconfirmed /
+  confirmed / own NWS read) and the sending device (`fromDevice`,
+  `fromName`). `AlertStore.ingest` takes alerts from any source and
+  `WeatherAlerts.handle` notifies; an unconfirmed or relayed copy is upgraded
+  when the phone reads the NWS itself, without notifying twice. No keys are
+  built into the app and none are assumed: every device will sign with its own
+  Ed25519 key.
+
+Tests: `test/v250_weather_test.dart` (mocked NWS JSON, no live calls).
+
 ## v2.4.2: Radios nearby
 
 Settings > Long-range radio (Meshtastic): the "Meshtastic nodes heard: N" line

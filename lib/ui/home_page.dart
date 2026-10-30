@@ -25,6 +25,7 @@ import 'person_sheet.dart';
 import 'status_line.dart';
 import 'messages_page.dart';
 import 'quiet_widgets.dart';
+import 'weather_alerts_page.dart';
 import 'radio_settings.dart';
 import 'sheets.dart';
 import 'who_can_hear.dart';
@@ -204,6 +205,7 @@ class _HomePageState extends State<HomePage> {
             ),
           );
         }
+        if (r == 'alerts') openWeatherAlerts(context, c);
         if (r == 'sos') {
           final open = c.trip?.sos.unanswered ?? const [];
           if (open.isNotEmpty) _showSos(open.first, force: true);
@@ -373,6 +375,9 @@ class _HomePageState extends State<HomePage> {
           onOpen: () => _openStatus(context, audience, here),
           onOpenMessages: () => _openMessages(context, MessagesFilter.here),
           messagesNew: c.unheardAudio > 0,
+          weather: c.settings.wxAlerts ? c.weatherAlerts?.top?.event : null,
+          weatherExtreme: c.weatherAlerts?.top?.isExtreme ?? false,
+          onOpenWeather: () => openWeatherAlerts(context, c),
         );
         final talk = HomeBody(
           banners: [
@@ -1075,9 +1080,7 @@ class _HomePageState extends State<HomePage> {
     BuildContext context,
     MessagesFilter filter, {
     String? focusKey,
-  }) => unawaited(
-    openMessages(context, c, filter: filter, focusKey: focusKey),
-  );
+  }) => unawaited(openMessages(context, c, filter: filter, focusKey: focusKey));
 
   Future<void> _openRecordSheet(
     BuildContext context,
@@ -1414,6 +1417,9 @@ class _HomePageState extends State<HomePage> {
                 const Divider(height: 32),
                 _SectionTitle('Mute & quiet hours'),
                 QuietSettings(controller: c),
+                const Divider(height: 32),
+                _SectionTitle('Weather alerts'),
+                WeatherAlertsSettings(controller: c),
                 const Divider(height: 32),
                 _SectionTitle('Talk button'),
                 SwitchListTile(

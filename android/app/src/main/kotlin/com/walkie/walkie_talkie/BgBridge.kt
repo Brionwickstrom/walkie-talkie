@@ -147,6 +147,18 @@ object BgBridge {
                 Notifier.showInfo(ctx, int(call, "nid"), str(call, "title"), str(call, "text"))
                 result.success(null)
             }
+            "showWxAlert" -> {
+                Notifier.showWxAlert(
+                    ctx, int(call, "id"), str(call, "title"), str(call, "text"), str(call, "big"),
+                    bool(call, "extreme"), call.argument<Boolean>("sound") ?: true, bool(call, "bypass"),
+                    (call.argument<Number>("timeoutMs") ?: 0).toLong(),
+                )
+                result.success(null)
+            }
+            "cancelWxAlert" -> {
+                Notifier.cancelWx(ctx, int(call, "id"))
+                result.success(null)
+            }
             "cancel" -> {
                 Notifier.cancel(ctx, int(call, "nid"))
                 result.success(null)

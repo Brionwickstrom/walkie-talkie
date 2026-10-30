@@ -25,6 +25,14 @@ object Notifier {
     const val CH_URGENT = "urgent_v1"
     const val CH_URGENT_DND = "urgent_dnd_v1"
 
+    // v2.5.0 weather alerts: a warning (high, its own chime), the same
+    // without sound (quiet hours), extreme (alarm tone) and extreme through
+    // Do Not Disturb (only once DND access is granted, like CH_URGENT_DND).
+    const val CH_WX_WARN = "wx_warning_v1"
+    const val CH_WX_SILENT = "wx_silent_v1"
+    const val CH_WX_EXTREME = "wx_extreme_v1"
+    const val CH_WX_EXTREME_DND = "wx_extreme_dnd_v1"
+
     const val ACTION_STOP = "com.walkie.walkie_talkie.STOP"
     const val ACTION_DISMISS = "com.walkie.walkie_talkie.DISMISS"
     const val ACTION_PLAY = "com.walkie.walkie_talkie.PLAY"
@@ -36,6 +44,10 @@ object Notifier {
     const val ACTION_TALK = "com.walkie.walkie_talkie.TALK"
     const val ACTION_STOP_AUDIO = "com.walkie.walkie_talkie.STOP_AUDIO"
     const val ACTION_SOS_OPEN = "com.walkie.walkie_talkie.SOS_OPEN"
+    const val ACTION_WX_OPEN = "com.walkie.walkie_talkie.WX_OPEN"
+    const val ACTION_WX_DISMISS = "com.walkie.walkie_talkie.WX_DISMISS"
+    private const val WX_MS = 30000L
+    private const val WX_KEY_BIT = 1L shl 41
     private const val SOS_MS = 5 * 60000L
     private const val SOS_KEY_BIT = 1L shl 40
 
@@ -90,6 +102,7 @@ object Notifier {
                 },
             )
         }
+        wxChannels(ctx, nm)
         nm.createNotificationChannel(
             NotificationChannel(CH_TALK, "Someone is talking", NotificationManager.IMPORTANCE_DEFAULT).apply {
                 description = "Live push-to-talk while the app is closed"
@@ -102,6 +115,110 @@ object Notifier {
                 description = "Voice messages and beeps from other phones"
             },
         )
+    }
+
+    private val WX_PATTERN = longArrayOf(0, 400, 200, 400, 200, 800)
+
+    private fun wxChannels(ctx: Context, nm: NotificationManager) {
+        val note = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
+        val alarm = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_ALARM)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
+        nm.createNotificationChannel(
+            NotificationChannel(CH_WX_WARN, "Weather warnings", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "National Weather Service warnings for your area"
+                setSound(resUri(ctx, R.raw.wx_warning), note)
+                enableVibration(true)
+                vibrationPattern = WX_PATTERN
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+            },
+        )
+        nm.createNotificationChannel(
+            NotificationChannel(CH_WX_SILENT, "Weather warnings (quiet hours)", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "Weather warnings during mute / quiet hours: shown, no sound"
+                setSound(null, null)
+                enableVibration(false)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+            },
+        )
+        nm.createNotificationChannel(
+            NotificationChannel(CH_WX_EXTREME, "Extreme weather alerts", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "Tornado Warnings and other Extreme alerts (alarm tone)"
+                setSound(resUri(ctx, R.raw.wx_alarm), alarm)
+                enableVibration(true)
+                vibrationPattern = URGENT_PATTERN
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+            },
+        )
+        if (nm.isNotificationPolicyAccessGranted && nm.getNotificationChannel(CH_WX_EXTREME_DND) == null) {
+            nm.createNotificationChannel(
+                NotificationChannel(CH_WX_EXTREME_DND, "Extreme weather alerts (through Do Not Disturb)", NotificationManager.IMPORTANCE_HIGH).apply {
+                    description = "Extreme alerts while Do Not Disturb is on (the app plays the alarm)"
+                    setSound(null, null)
+                    enableVibration(true)
+                    vibrationPattern = URGENT_PATTERN
+                    lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                    setBypassDnd(true)
+                },
+            )
+        }
+    }
+
+    /**
+     * v2.5.0 weather alert. Always a high-priority notification that shows
+     * on the lock screen. [sound] false (mute / quiet hours): same, silent.
+     * [extreme]: alarm tone and a full-screen alert while it sounds.
+     * [bypass] (the "sound in quiet hours and Do Not Disturb" switch, only
+     * ever true for an extreme alert): through Do Not Disturb when access
+     * was granted, with the alarm played by the app for up to 30 s.
+     */
+    fun showWxAlert(
+        ctx: Context, id: Int, title: String, text: String, big: String,
+        extreme: Boolean, sound: Boolean, bypass: Boolean, timeoutMs: Long,
+    ) {
+        ensureChannels(ctx)
+        val dnd = nm(ctx).isNotificationPolicyAccessGranted
+        val loop = extreme && sound && bypass && dnd
+        val ch = when {
+            !sound -> CH_WX_SILENT
+            extreme && loop -> CH_WX_EXTREME_DND
+            extreme -> CH_WX_EXTREME
+            else -> CH_WX_WARN
+        }
+        val put: Intent.() -> Unit = { putExtra("id", id.toLong()) }
+        val open = activityIntent(ctx, ACTION_WX_OPEN, id, put)
+        val b = NotificationCompat.Builder(ctx, ch)
+            .setSmallIcon(R.drawable.ic_stat_walkie)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(big))
+            .setPriority(if (extreme) NotificationCompat.PRIORITY_MAX else NotificationCompat.PRIORITY_HIGH)
+            .setCategory(if (extreme) NotificationCompat.CATEGORY_ALARM else NotificationCompat.CATEGORY_EVENT)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setAutoCancel(true)
+            .setContentIntent(open)
+            .addAction(0, "Open", open)
+        if (timeoutMs > 0) b.setTimeoutAfter(timeoutMs)
+        if (extreme && sound) b.setFullScreenIntent(open, true)
+        if (loop) {
+            b.addAction(0, "Silence", broadcastIntent(ctx, ACTION_WX_DISMISS, id + 1) { putExtra("id", id.toLong()) })
+            b.setDeleteIntent(broadcastIntent(ctx, ACTION_WX_DISMISS, id + 2) { putExtra("id", id.toLong()) })
+        }
+        post(ctx, id, b.build())
+        if (loop) startRingSound(ctx, id.toLong() to WX_KEY_BIT, urgent = true, loud = true, ms = WX_MS, res = R.raw.wx_alarm)
+    }
+
+    fun stopWx(ctx: Context, id: Int) {
+        if (ringKey == (id.toLong() to WX_KEY_BIT)) stopRingSound()
+    }
+
+    fun cancelWx(ctx: Context, id: Int) {
+        cancel(ctx, id)
+        stopWx(ctx, id)
     }
 
     private fun nm(ctx: Context): NotificationManager =
@@ -378,7 +495,7 @@ object Notifier {
 
     private var urgentNow = false
 
-    private fun startRingSound(ctx: Context, key: Pair<Long, Long>, urgent: Boolean, loud: Boolean, ms: Long? = null) {
+    private fun startRingSound(ctx: Context, key: Pair<Long, Long>, urgent: Boolean, loud: Boolean, ms: Long? = null, res: Int = R.raw.ring) {
         main.post {
             stopRingSound()
             ringKey = key
@@ -398,7 +515,7 @@ object Notifier {
                         .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                         .build(),
                 )
-                mp.setDataSource(ctx.applicationContext, resUri(ctx, R.raw.ring))
+                mp.setDataSource(ctx.applicationContext, resUri(ctx, res))
                 mp.isLooping = true
                 mp.prepare()
                 mp.start()

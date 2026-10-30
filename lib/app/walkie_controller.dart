@@ -73,6 +73,11 @@ import '../trip/geo.dart';
 import '../trip/sos.dart';
 import '../trip/trip_controller.dart';
 import '../trip/trip_route.dart';
+import '../weather/alert_store.dart';
+import '../weather/nws_client.dart';
+import '../weather/weather_alerts.dart';
+import '../weather/wx_alert.dart';
+import '../weather/wx_notice.dart';
 import 'call_signs.dart';
 import 'config.dart';
 import 'group_handoff.dart';
@@ -1614,6 +1619,7 @@ class WalkieController extends ChangeNotifier {
       debugPrint('trip: $e');
     }
 
+    await _startWeatherAlerts();
     await applyBackgroundSettings();
     await _applyPttConfig();
     notifyListeners();
@@ -1786,6 +1792,9 @@ class WalkieController extends ChangeNotifier {
     if (foreground && !wasForeground && bridge.supported) {
       unawaited(refreshPhoneNet());
     }
+    if (foreground && !wasForeground) {
+      unawaited(_resumeWeatherAlerts());
+    }
     if (s != AppLifecycleState.detached) _wasVisible = true;
     if (foreground && !wasForeground) {
       for (final id in _talkingPrev) {
@@ -1888,6 +1897,8 @@ class WalkieController extends ChangeNotifier {
         }
       case 'sosOpen':
         _uiRequests.add('sos');
+      case 'wxOpen':
+        _uiRequests.add('alerts');
       case 'joinLink':
         // walkietalkie://join?... opened (v1.8.7): confirm in the UI.
         final url = a['url'];
@@ -2206,6 +2217,124 @@ class WalkieController extends ChangeNotifier {
   void scanNearbyNow() {
     _wifiDirect?.discoverNow();
     unawaited(manager.sendHello());
+  }
+
+  // ------------------------------------------------- weather alerts (v2.5.0)
+
+  /// National Weather Service alerts for where the phone is and the places
+  /// it has saved. Null before start-up finished.
+  WeatherAlerts? weatherAlerts;
+
+  Future<void> _startWeatherAlerts() async {
+    if (weatherAlerts != null) return;
+    try {
+      var ver = '2.5';
+      try {
+        ver = (await PackageInfo.fromPlatform()).version;
+      } catch (_) {}
+      final file = File('${(await _messageDir()).parent.path}/alerts.json');
+      final w = WeatherAlerts(
+        store: AlertStore(file: file),
+        client: NwsClient(
+          userAgent:
+              'WalkieTalkie/$ver (+https://github.com/Brionwickstrom/walkie-talkie)',
+        ),
+        points: _wxPoints,
+        enabled: () => settings.wxAlerts,
+        networkOk: _wxNetworkOk,
+        slow: () => settings.offlineSaver,
+        onNotify: _notifyWx,
+        onCleared: (a) => unawaited(bridge.cancelWxAlert(a.notificationId)),
+      );
+      await w.load();
+      w.addListener(notifyListeners);
+      weatherAlerts = w;
+      w.start();
+    } catch (e) {
+      debugPrint('weather alerts: $e');
+    }
+  }
+
+  Future<void> _resumeWeatherAlerts() async {
+    try {
+      await weatherAlerts?.resume();
+    } catch (_) {}
+  }
+
+  /// Places to watch: the last Trip fix (never starts GPS), the saved
+  /// offline areas (newest first) and the Trip forecast place.
+  List<WxWatchPoint> _wxPoints() {
+    final t = trip;
+    if (t == null) return const [];
+    final areas = [...t.areas.areas]..sort((a, b) => b.at.compareTo(a.at));
+    return [
+      if (t.myFix != null)
+        WxWatchPoint('Your last known location', t.myFix!.pos, isFix: true),
+      for (final a in areas) WxWatchPoint(a.name, a.bounds.center),
+      if (t.weather.forecast != null)
+        WxWatchPoint('Trip forecast place', t.weather.forecast!.place),
+    ];
+  }
+
+  /// Wi-Fi only: not on mobile data; nothing without a connection.
+  bool _wxNetworkOk() {
+    final n = phoneNet;
+    if (n == 'none') return false;
+    if (settings.wxWifiOnly && n == 'cell') return false;
+    return true;
+  }
+
+  Future<void> _notifyWx(WxAlert a) async {
+    final plan = planWxNotice(
+      a,
+      silenced: silenced,
+      extremeSwitch: settings.wxExtremeSound,
+    );
+    final text = wxNoticeText(a);
+    debugLog.add(
+      'wx',
+      '${a.event}: ${plan.sound ? 'sound' : 'silent'}'
+          '${plan.bypass ? ', through quiet hours / DND' : ''}',
+    );
+    if (bridge.supported) {
+      await bridge.showWxAlert(
+        id: a.notificationId,
+        title: text.title,
+        text: text.short,
+        big: text.big,
+        extreme: plan.extreme,
+        sound: plan.sound,
+        bypass: plan.bypass,
+        timeoutMs: a.expiresAt.difference(DateTime.now()).inMilliseconds,
+      );
+    } else if (foreground) {
+      // Windows: in-app only, while the app is running.
+      _notice('${text.title}: ${text.short}');
+    }
+  }
+
+  Future<void> setWxAlerts(bool on) async {
+    settings.wxAlerts = on;
+    if (!on) {
+      for (final a in weatherAlerts?.active ?? const <WxAlert>[]) {
+        unawaited(bridge.cancelWxAlert(a.notificationId));
+      }
+    }
+    notifyListeners();
+    await settingsStore.save(settings);
+    weatherAlerts?.settingsChanged();
+  }
+
+  Future<void> setWxWifiOnly(bool on) async {
+    settings.wxWifiOnly = on;
+    notifyListeners();
+    await settingsStore.save(settings);
+  }
+
+  Future<void> setWxExtremeSound(bool on) async {
+    settings.wxExtremeSound = on;
+    notifyListeners();
+    await settingsStore.save(settings);
   }
 
   Future<void> setUrgentLoud(bool on) async {
@@ -2573,9 +2702,8 @@ class WalkieController extends ChangeNotifier {
     }
   }
 
-  void markAllHeard({bool allPlaces = false}) => allPlaces
-      ? history?.markEverythingHeard()
-      : history?.markAllHeard(scope);
+  void markAllHeard({bool allPlaces = false}) =>
+      allPlaces ? history?.markEverythingHeard() : history?.markAllHeard(scope);
 
   /// Mark the voice messages [which] picks as played (Messages > Mark all
   /// as heard). One save per messenger.
@@ -4607,6 +4735,7 @@ class WalkieController extends ChangeNotifier {
     for (final l in _live.values) {
       l.timer?.cancel();
     }
+    weatherAlerts?.dispose();
     trip?.dispose();
     friendLinks.dispose();
     friendMessenger?.dispose();
