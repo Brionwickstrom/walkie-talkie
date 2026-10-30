@@ -32,7 +32,7 @@ class WalkieApp extends StatelessWidget {
     return ValueListenableBuilder<bool>(
       valueListenable: controller.offlineUi,
       builder: (context, offline, home) => MaterialApp(
-        title: 'Walkie Talkie',
+        title: 'Stalkie Talkie',
         theme: ThemeData(colorSchemeSeed: Colors.teal, useMaterial3: true),
         darkTheme: ThemeData(
           colorSchemeSeed: Colors.teal,

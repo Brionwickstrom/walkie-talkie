@@ -1460,7 +1460,7 @@ class _HomePageState extends State<HomePage> {
                       'to start, press again to stop (or hold while you '
                       'talk). Works while the app is listening. If you then '
                       'play music, the button goes back to the music app '
-                      'until you reopen Walkie Talkie.',
+                      'until you reopen Stalkie Talkie.',
                     ),
                     value: c.settings.headsetPtt,
                     onChanged: c.setHeadsetPtt,
@@ -1890,13 +1890,13 @@ Future<void> _explainAccessibility(
   title: 'Volume-down with other apps open',
   body:
       'To use volume-down as the talk button while another app is open, '
-      'Android needs you to turn on "Walkie Talkie volume-down talk button" '
+      'Android needs you to turn on "Stalkie Talkie volume-down talk button" '
       'under Accessibility (it may be under "Installed apps" or '
       '"Downloaded apps").\n\n'
       'It only watches the volume-down key while this setting is on and '
       'cannot read your screen.\n\n'
       'If Android says the setting is restricted: open Settings > Apps > '
-      'Walkie Talkie, tap the ⋮ menu (top right) > "Allow restricted '
+      'Stalkie Talkie, tap the ⋮ menu (top right) > "Allow restricted '
       'settings", then try again.\n\n'
       'With the screen off, Android does not pass the volume keys to apps, '
       'so use the headset button or the notification there.',
@@ -1910,7 +1910,7 @@ Future<void> _explainDnd(BuildContext context, WalkieController c) => _explain(
   title: 'Ring through Do Not Disturb?',
   body:
       'Urgent rings already play at alarm volume in silent mode. If you '
-      'also want them to ring while Do Not Disturb is on, allow Walkie '
+      'also want them to ring while Do Not Disturb is on, allow Stalkie '
       'Talkie under "Do Not Disturb access" on the next screen.\n\n'
       'Only urgent rings use this: Do Not Disturb is switched off while '
       'one rings (up to 1 minute) and switched back on right after. '

@@ -53,7 +53,7 @@ Future<void> showInviteSheet(BuildContext context, WalkieController c) async {
                 ? null
                 : () => c.bridge.shareText(
                     inv.shareText(),
-                    'Walkie Talkie invite',
+                    'Stalkie Talkie invite',
                   ),
             onCopy: inv == null
                 ? null
@@ -185,7 +185,7 @@ class InviteView extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            'Scan it in Walkie Talkie (Settings > Join with a code, or '
+            'Scan it in Stalkie Talkie (Settings > Join with a code, or '
             'Friends > Scan). A phone camera opens the download page.',
             textAlign: TextAlign.center,
             style: theme.textTheme.bodySmall,

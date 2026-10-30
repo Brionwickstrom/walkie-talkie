@@ -27,7 +27,7 @@ class ListenService : Service() {
         var running = false
             private set
 
-        private var title = "Walkie Talkie is listening"
+        private var title = "Stalkie Talkie is listening"
         private var text = "Tap to open"
         private var talkAction = false
         private var talking = false

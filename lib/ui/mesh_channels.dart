@@ -284,7 +284,7 @@ class _MeshImportViewState extends State<MeshImportView> {
                 subtitle: const Text(
                   'Retunes your radio to this QR\'s settings. This cuts it '
                   'off from your current group: you will not hear people on '
-                  'your current settings any more (Walkie over LoRa too) '
+                  'your current settings any more (Stalkie over LoRa too) '
                   'until you change it back.',
                 ),
               ),
@@ -350,7 +350,7 @@ class MeshChannelsSection extends StatelessWidget {
           child: Text('Meshtastic channels', style: theme.textTheme.titleSmall),
         ),
         Text(
-          'Share an open Walkie channel with a Meshtastic channel: scan '
+          'Share an open Stalkie channel with a Meshtastic channel: scan '
           'its QR (from the Meshtastic app) and it is added to your radio '
           'as an extra channel. Your main channel stays as it is.',
           style: theme.textTheme.bodySmall,
@@ -595,7 +595,7 @@ Future<void> pickWalkieChannel(
 ) async {
   final options = c.linkableChannels;
   if (options.isEmpty) {
-    _snack(context, 'No open Walkie channel is free to share.');
+    _snack(context, 'No open Stalkie channel is free to share.');
     return;
   }
   // A new channel: the highest free open number (low ones stay for talk).
@@ -607,7 +607,7 @@ Future<void> pickWalkieChannel(
     builder: (ctx) => StatefulBuilder(
       builder: (ctx, set) => AlertDialog(
         scrollable: true,
-        title: const Text('Share with a Walkie channel'),
+        title: const Text('Share with a Stalkie channel'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -710,7 +710,7 @@ Future<void> confirmUnlink(
           mainAxisSize: MainAxisSize.min,
           children: [
             const Text(
-              'Walkie stops using the Meshtastic channel for this channel.',
+              'Stalkie stops using the Meshtastic channel for this channel.',
             ),
             CheckboxListTile(
               key: const Key('mesh-unlink-remove'),

@@ -411,7 +411,7 @@ void main() {
         passcode: 'correct-horse-staple',
         groupName: 'Family',
       );
-      expect(inv.shareText(), contains('Needs Walkie Talkie 2.3.0 or newer'));
+      expect(inv.shareText(), contains('Needs Stalkie Talkie 2.3.0 or newer'));
       expect(inv.shareText(), contains('private group'));
       // A converted group still works on older phones: no such note.
       const legacy = Invite(
@@ -421,7 +421,7 @@ void main() {
         groupName: 'CH 3 group',
       );
       expect(legacy.needsNewVersion, isFalse);
-      expect(legacy.shareText(), isNot(contains('Needs Walkie Talkie')));
+      expect(legacy.shareText(), isNot(contains('Needs Stalkie Talkie')));
       expect(Invite.parse(legacy.appLink)!.channel, 3);
       expect(Invite.parse(legacy.appLink)!.groupId, 'ch3');
     });

@@ -204,7 +204,7 @@ void main() {
 
     for (final muted in [false, true]) {
       final word = muted ? 'unmute' : 'mute';
-      final title = muted ? 'Unmute Walkie?' : 'Mute Walkie?';
+      final title = muted ? 'Unmute Stalkie?' : 'Mute Stalkie?';
 
       testWidgets('v1.9.9 $word: a tap only shows "Keep holding to $word"', (
         t,
@@ -318,7 +318,7 @@ void main() {
       expect(find.text('Muted · hold to unmute'), findsOneWidget);
       await hold(t, 'muteButton', const Duration(milliseconds: 2600));
       await t.pumpAndSettle();
-      expect(find.text('Unmute Walkie?'), findsOneWidget);
+      expect(find.text('Unmute Stalkie?'), findsOneWidget);
       await t.tap(find.byKey(const Key('muteConfirmOk')));
       await t.pumpAndSettle();
       expect(muted, isFalse);

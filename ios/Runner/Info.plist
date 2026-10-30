@@ -9,13 +9,13 @@
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Share your location in a chat when you ask to.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Walkie Talkie needs the microphone to send your voice while you hold the talk button.</string>
+	<string>Stalkie Talkie needs the microphone to send your voice while you hold the talk button.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Walkie Talkie uses Bluetooth to talk to nearby phones when there is no Wi-Fi or internet.</string>
+	<string>Stalkie Talkie uses Bluetooth to talk to nearby phones when there is no Wi-Fi or internet.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
-	<string>Walkie Talkie uses Bluetooth to talk to nearby phones when there is no Wi-Fi or internet.</string>
+	<string>Stalkie Talkie uses Bluetooth to talk to nearby phones when there is no Wi-Fi or internet.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Walkie Talkie finds and talks to other phones on the same Wi-Fi or hotspot.</string>
+	<string>Stalkie Talkie finds and talks to other phones on the same Wi-Fi or hotspot.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_walkietalkie._udp</string>
@@ -31,7 +31,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Walkie Talkie</string>
+	<string>Stalkie Talkie</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>

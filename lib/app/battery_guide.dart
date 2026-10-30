@@ -34,55 +34,55 @@ BatteryGuide batteryGuideFor(String manufacturer) {
   final b = brandOf(manufacturer);
   return switch (b) {
     PhoneBrand.samsung => const BatteryGuide(PhoneBrand.samsung, 'Samsung', [
-      'Settings > Apps > Walkie Talkie > Battery: choose "Unrestricted".',
+      'Settings > Apps > Stalkie Talkie > Battery: choose "Unrestricted".',
       'Settings > Battery > Background usage limits > Never sleeping apps: '
-          'add Walkie Talkie.',
-      'Make sure Walkie Talkie is not in "Sleeping apps" or "Deep sleeping '
+          'add Stalkie Talkie.',
+      'Make sure Stalkie Talkie is not in "Sleeping apps" or "Deep sleeping '
           'apps" on the same screen.',
     ]),
     PhoneBrand.xiaomi => const BatteryGuide(
       PhoneBrand.xiaomi,
       'Xiaomi / Redmi / POCO',
       [
-        'Settings > Apps > Manage apps > Walkie Talkie > Autostart: on.',
+        'Settings > Apps > Manage apps > Stalkie Talkie > Autostart: on.',
         'Same screen > Battery saver: choose "No restrictions".',
-        'Open recent apps, long-press Walkie Talkie and tap the lock so it is '
+        'Open recent apps, long-press Stalkie Talkie and tap the lock so it is '
             'not cleared.',
       ],
     ),
     PhoneBrand.oneplus => const BatteryGuide(PhoneBrand.oneplus, 'OnePlus', [
-      'Settings > Apps > Walkie Talkie > Battery usage: allow background '
+      'Settings > Apps > Stalkie Talkie > Battery usage: allow background '
           'activity (or "Don\'t optimize").',
-      'Settings > Battery > Battery optimization > Walkie Talkie: '
+      'Settings > Battery > Battery optimization > Stalkie Talkie: '
           '"Don\'t optimize".',
-      'Open recent apps and lock Walkie Talkie so it is not cleared.',
+      'Open recent apps and lock Stalkie Talkie so it is not cleared.',
     ]),
     PhoneBrand.oppo => const BatteryGuide(PhoneBrand.oppo, 'Oppo / Realme', [
-      'Settings > Apps > App management > Walkie Talkie > Battery usage: '
+      'Settings > Apps > App management > Stalkie Talkie > Battery usage: '
           'allow background activity and auto launch.',
       'Settings > Battery > More settings: turn off "Optimize battery use" '
-          'for Walkie Talkie.',
-      'Open recent apps and lock Walkie Talkie.',
+          'for Stalkie Talkie.',
+      'Open recent apps and lock Stalkie Talkie.',
     ]),
     PhoneBrand.huawei => const BatteryGuide(
       PhoneBrand.huawei,
       'Huawei / Honor',
       [
-        'Settings > Battery > App launch > Walkie Talkie: turn off "Manage '
+        'Settings > Battery > App launch > Stalkie Talkie: turn off "Manage '
             'automatically", then turn on Auto-launch, Secondary launch and '
             'Run in background.',
-        'Open recent apps and lock Walkie Talkie.',
+        'Open recent apps and lock Stalkie Talkie.',
       ],
     ),
     PhoneBrand.pixel => const BatteryGuide(PhoneBrand.pixel, 'Pixel', [
-      'Settings > Apps > Walkie Talkie > App battery usage: choose '
+      'Settings > Apps > Stalkie Talkie > App battery usage: choose '
           '"Unrestricted".',
     ]),
     PhoneBrand.other => const BatteryGuide(PhoneBrand.other, 'this phone', [
-      'Settings > Apps > Walkie Talkie > Battery: choose "Unrestricted" (or '
+      'Settings > Apps > Stalkie Talkie > Battery: choose "Unrestricted" (or '
           'turn off battery optimization).',
       'If the phone has its own "auto-launch" or "sleeping apps" list, allow '
-          'Walkie Talkie there.',
+          'Stalkie Talkie there.',
     ]),
   };
 }

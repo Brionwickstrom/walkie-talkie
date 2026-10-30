@@ -18,7 +18,10 @@ class UpdateFlow {
   Future<void> check(BuildContext context, {bool userInitiated = false}) async {
     if (!Updater.supported && !Updater.desktopSupported) {
       if (userInitiated && context.mounted) {
-        _snack(context, 'Updates are installed from the App Store on this device.');
+        _snack(
+          context,
+          'Updates are installed from the App Store on this device.',
+        );
       }
       return;
     }
@@ -38,7 +41,9 @@ class UpdateFlow {
       if (rel == null) {
         if (userInitiated) {
           final cur = await updater.currentVersionLabel();
-          if (context.mounted) _snack(context, 'You have the latest version ($cur).');
+          if (context.mounted) {
+            _snack(context, 'You have the latest version ($cur).');
+          }
         }
         return;
       }
@@ -55,12 +60,14 @@ class UpdateFlow {
           if (context.mounted) {
             _snack(
               context,
-              'Downloading in your browser. Close Walkie Talkie, unzip it '
+              'Downloading in your browser. Close Stalkie Talkie, unzip it '
               'over the old folder and start WalkieTalkie.exe again.',
             );
           }
         } catch (e) {
-          if (context.mounted) _snack(context, 'Open ${rel.apkUrl} to download it.');
+          if (context.mounted) {
+            _snack(context, 'Open ${rel.apkUrl} to download it.');
+          }
         }
         return;
       }
@@ -109,7 +116,10 @@ class UpdateFlow {
     );
   }
 
-  Future<void> _downloadAndInstall(BuildContext context, ReleaseInfo rel) async {
+  Future<void> _downloadAndInstall(
+    BuildContext context,
+    ReleaseInfo rel,
+  ) async {
     final progress = ValueNotifier<double?>(0);
     var cancelled = false;
     final dialog = showDialog<void>(
@@ -170,7 +180,7 @@ class UpdateFlow {
           scrollable: true,
           title: const Text('Allow installing updates'),
           content: const Text(
-            'To install updates, Android needs you to allow Walkie Talkie to '
+            'To install updates, Android needs you to allow Stalkie Talkie to '
             'install apps (one time only).\n\n'
             'Tap "Open settings", turn on "Allow from this source", then come '
             'back here.',
@@ -220,6 +230,7 @@ class UpdateFlow {
   }
 
   static void _snack(BuildContext context, String msg) {
-    ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(msg)));
+    ScaffoldMessenger.maybeOf(context)
+        ?.showSnackBar(SnackBar(content: Text(msg)));
   }
 }

@@ -49,7 +49,7 @@
     <uses-feature android:name="android.hardware.microphone" android:required="true" />
 
     <application
-        android:label="Walkie Talkie"
+        android:label="Stalkie Talkie"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
@@ -80,7 +80,7 @@
                 <category android:name="android.intent.category.BROWSABLE"/>
                 <data android:scheme="walkietalkie" android:host="join"/>
             </intent-filter>
-            <!-- v1.8.3: "Open with" / "Share to" Walkie Talkie for trails
+            <!-- v1.8.3: "Open with" / "Share to" Stalkie Talkie for trails
                  (GPX, KML, KMZ), offline maps (MBTiles) and park maps
                  (image, PDF): imported on the Trip tab. -->
             <intent-filter android:label="Import to the Trip map">

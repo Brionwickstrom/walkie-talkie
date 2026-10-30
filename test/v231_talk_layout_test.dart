@@ -306,7 +306,7 @@ void main() {
     await t.pump(const Duration(milliseconds: 2600));
     await g.up();
     await settle(t);
-    expect(find.text('Unmute Walkie?'), findsOneWidget);
+    expect(find.text('Unmute Stalkie?'), findsOneWidget);
     await t.tap(find.byKey(const Key('muteConfirmOk')));
     await settle(t);
     expect(k.unmuted, 1);
@@ -329,14 +329,14 @@ void main() {
     await t.pump(const Duration(milliseconds: 1000));
     await g.up();
     await t.pump(const Duration(milliseconds: 100));
-    expect(find.text('Mute Walkie?'), findsNothing, reason: 'let go early');
+    expect(find.text('Mute Stalkie?'), findsNothing, reason: 'let go early');
     await t.pump(const Duration(seconds: 2));
     final g2 = await t.startGesture(t.getCenter(mute));
     await t.pump();
     await t.pump(const Duration(milliseconds: 2600));
     await g2.up();
     await settle(t);
-    expect(find.text('Mute Walkie?'), findsOneWidget);
+    expect(find.text('Mute Stalkie?'), findsOneWidget);
     await t.tap(find.byKey(const Key('muteConfirmCancel')));
     await settle(t);
     expect(k.muted, 0, reason: 'Cancel changes nothing');

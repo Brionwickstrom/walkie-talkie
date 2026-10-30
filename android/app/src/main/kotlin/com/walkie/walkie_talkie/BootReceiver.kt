@@ -17,7 +17,7 @@ class BootReceiver : BroadcastReceiver() {
         val on = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_BOOT, false)
         if (!on) return
         try {
-            ListenService.start(context, "Walkie Talkie is listening", "Starting up...", false, false, false)
+            ListenService.start(context, "Stalkie Talkie is listening", "Starting up...", false, false, false)
         } catch (_: Exception) {
         }
     }

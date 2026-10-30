@@ -808,7 +808,7 @@ class RoadData {
     if (bytes.offsetInBytes % 8 != 0) bytes = Uint8List.fromList(bytes);
     final bd = ByteData.sublistView(bytes);
     if (bytes.length < 64 || bd.getUint32(0, Endian.little) != _magic) {
-      throw const FormatException('Not a Walkie Talkie roads file');
+      throw const FormatException('Not a Stalkie Talkie roads file');
     }
     final nN = bd.getUint32(48, Endian.little);
     final nE = bd.getUint32(52, Endian.little);

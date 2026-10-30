@@ -173,7 +173,7 @@ String toGpx(
   String name,
   List<TrackPt> points, {
   List<({GeoPoint pos, String name, String type})> waypoints = const [],
-  String creator = 'Walkie Talkie',
+  String creator = 'Stalkie Talkie',
 }) {
   final b = StringBuffer()
     ..writeln('<?xml version="1.0" encoding="UTF-8"?>')

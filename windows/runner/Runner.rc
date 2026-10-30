@@ -90,10 +90,10 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "Walkie Talkie" "\0"
-            VALUE "FileDescription", "Walkie Talkie" "\0"
+            VALUE "FileDescription", "Stalkie Talkie" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "walkie_talkie" "\0"
-            VALUE "LegalCopyright", "Walkie Talkie" "\0"
+            VALUE "LegalCopyright", "Stalkie Talkie" "\0"
             VALUE "OriginalFilename", "WalkieTalkie.exe" "\0"
             VALUE "ProductName", "Walkie Talkie" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"

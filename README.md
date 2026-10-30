@@ -1525,6 +1525,35 @@ Tests: `test/v195_gateway_test.dart`, `test/v195_quiet_test.dart`.
 Tests: `test/v197_meshtastic_import_test.dart` (vectors from the official
 apps and the Python library), `test/v195_quiet_test.dart`.
 
+## v2.5.1: the app is now called Stalkie Talkie
+
+Only the visible name changes (the pun is on purpose, and it can change again
+later). Same app, same package, same signing key: it updates in place, and
+every setting, friend, group and message stays.
+
+- **Renamed (what people see):** the Android launcher label, the app title
+  (task switcher, Windows title bar), the listening notification and the boot
+  notification, the "Tap to open" text, the accessibility service name and
+  description, the Windows window title and file description, the iOS display
+  name and permission texts, the updater wording ("Close Stalkie Talkie, unzip
+  it...", "Install unknown apps"), invite and friend-code share text ("Stalkie
+  Talkie: join open channel..."), the debug log title, the Windows README
+  inside the zip, and the setup, battery, Do Not Disturb, Trip and channel help
+  texts. Where "Walkie" meant the app it is now "Stalkie": "Mute Stalkie?",
+  the "Stalkie" tag on Radios nearby, "Stalkie channel" on Meshtastic channels.
+- **Kept on purpose:** package id `com.walkie.walkie_talkie`, signing key,
+  `WalkieTalkie.exe`, `WalkieTalkie.apk` / `WalkieTalkie-Windows.zip` and the
+  updater's asset matching, the GitHub repo, is.gd/getwalkie, the
+  `walkietalkie://` link scheme, relay rooms and protocol / crypto strings
+  (`walkie-friend:`, `WalkieTalkie/private-group/...`), storage paths, the
+  Windows exe CompanyName / ProductName (Windows builds the data folder from
+  them: renaming would hide existing data), notification channel ids (only
+  display text is shown), the NWS User-Agent, the gateway and the internal
+  code name. Old invite text ("Walkie Talkie private channel ...") is still
+  read.
+
+Tests: `test/v251_name_test.dart`.
+
 ## v2.5.0: Weather alerts (stage 1: straight from the National Weather Service)
 
 Warnings from the US National Weather Service for where the phone is and the

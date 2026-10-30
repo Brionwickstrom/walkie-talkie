@@ -376,7 +376,7 @@ object Notifier {
         val n = NotificationCompat.Builder(ctx, CH_MSG)
             .setSmallIcon(R.drawable.ic_stat_walkie)
             .setContentTitle("$name beeped you")
-            .setContentText("Tap to open Walkie Talkie")
+            .setContentText("Tap to open Stalkie Talkie")
             .setAutoCancel(true)
             .setSilent(true)
             .setTimeoutAfter(5 * 60 * 1000L)

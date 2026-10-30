@@ -678,7 +678,7 @@ class WalkieController extends ChangeNotifier {
         : '${d['manufacturer']} ${d['model']}, Android ${d['release']} '
               '(SDK ${d['sdk']})';
     return [
-      'Walkie Talkie debug log',
+      'Stalkie Talkie debug log',
       'Created: ${DateTime.now().toIso8601String()}',
       'App version: $version',
       'Device: $device',
@@ -728,7 +728,7 @@ class WalkieController extends ChangeNotifier {
       return await bridge.shareFile(
         f.path,
         mime: 'text/plain',
-        title: 'Walkie Talkie debug log',
+        title: 'Stalkie Talkie debug log',
       );
     } catch (_) {
       return false;
@@ -1732,7 +1732,7 @@ class WalkieController extends ChangeNotifier {
     final q = quietStatus;
     return q != null
         ? '\u{1F507} $q · $_serviceWhere'
-        : 'Walkie Talkie is listening on $_serviceWhere';
+        : 'Stalkie Talkie is listening on $_serviceWhere';
   }
 
   String get _serviceBody {
@@ -1968,7 +1968,7 @@ class WalkieController extends ChangeNotifier {
     if (on && !foreground && !await bridge.micInBackground()) {
       await bridge.showInfo(
         nid: 77,
-        title: 'Open Walkie Talkie once to talk from here',
+        title: 'Open Stalkie Talkie once to talk from here',
         text:
             'Android only lets the app use the mic in the background after '
             'it was opened with "Stay reachable" on.',
@@ -3827,7 +3827,7 @@ class WalkieController extends ChangeNotifier {
           await bridge.showInfo(
             nid: 0x30000 + (c.peerId & 0xFFFF),
             title: 'Friend request from ${r.name}',
-            text: 'Open Walkie Talkie to accept or decline.',
+            text: 'Open Stalkie Talkie to accept or decline.',
           );
         }
         notifyListeners();
@@ -3925,7 +3925,7 @@ class WalkieController extends ChangeNotifier {
   /// Someone's friend QR was scanned. Returns an error text, or null.
   Future<String?> addFriendFromQr(String text) async {
     final q = PairKey.parseQr(text);
-    if (q == null) return 'That is not a Walkie Talkie friend code.';
+    if (q == null) return 'That is not a Stalkie Talkie friend code.';
     if (q.id == nodeId) return 'That is your own code.';
     await _addFriend(
       q.id,

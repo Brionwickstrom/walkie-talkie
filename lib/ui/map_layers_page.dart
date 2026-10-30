@@ -84,7 +84,7 @@ class MapLayersPage extends StatelessWidget {
                     'Import trails and maps you exported from AllTrails, '
                     'CalTopo, Gaia GPS or Google My Maps (GPX, KML, KMZ), an '
                     'offline map (MBTiles), or a park map picture or PDF. '
-                    'You can also open such a file with Walkie Talkie from '
+                    'You can also open such a file with Stalkie Talkie from '
                     'your file manager, browser or email.',
                   ),
                 ),

@@ -658,7 +658,7 @@ void main() {
         // Ann: Walkie tag, signal, direct, battery, hardware, private group.
         expect(find.text('Ann T1000 (ANN)'), findsOneWidget);
         expect(find.byKey(const Key('radio-walkie-${0x2001}')), findsOneWidget);
-        expect(find.text('Walkie · Ann'), findsOneWidget);
+        expect(find.text('Stalkie · Ann'), findsOneWidget);
         expect(find.textContaining('SNR 7.5 dB'), findsOneWidget);
         expect(find.textContaining('direct'), findsOneWidget);
         expect(find.textContaining('battery 91%'), findsOneWidget);

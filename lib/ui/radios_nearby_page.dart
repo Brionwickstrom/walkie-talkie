@@ -448,8 +448,8 @@ class _RadioTile extends StatelessWidget {
               ),
               child: Text(
                 r.walkieName == r.name || r.walkieName!.isEmpty
-                    ? 'Walkie'
-                    : 'Walkie · ${r.walkieName}',
+                    ? 'Stalkie'
+                    : 'Stalkie · ${r.walkieName}',
                 style: small?.copyWith(color: cs.onPrimaryContainer),
               ),
             ),

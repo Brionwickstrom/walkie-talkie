@@ -116,7 +116,7 @@ Future<void> showBatteryGuide(BuildContext context, WalkieController c) async {
   await showDialog<void>(
     context: context,
     builder: (ctx) => AlertDialog(
-      title: const Text('Let Walkie Talkie run in the background'),
+      title: const Text('Let Stalkie Talkie run in the background'),
       content: SingleChildScrollView(
         child: BatteryGuideView(
           guide: guide,

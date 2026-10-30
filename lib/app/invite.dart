@@ -115,10 +115,10 @@ class Invite {
       if (hasFriend) 'add me as a friend',
     ].join(' and ');
     final note = needsNewVersion
-        ? '\nNeeds Walkie Talkie 2.3.0 or newer: update the app first if '
+        ? '\nNeeds Stalkie Talkie 2.3.0 or newer: update the app first if '
               'you have an older version.'
         : '';
-    return 'Walkie Talkie: $what.$note\n'
+    return 'Stalkie Talkie: $what.$note\n'
         'Open in the app: $appLink\n'
         'No app yet? Get it here (then open the link above): $webLink';
   }
@@ -179,7 +179,7 @@ class Invite {
 
   static Invite? _legacyPrivate(String text) {
     final m = RegExp(
-      r'Walkie Talkie private (?:channel|group)\s*:?\s*CH\s*(\d+)\s*,?\s*passcode:\s*(.+)',
+      r'(?:Walkie|Stalkie) Talkie private (?:channel|group)\s*:?\s*CH\s*(\d+)\s*,?\s*passcode:\s*(.+)',
       caseSensitive: false,
       dotAll: true,
     ).firstMatch(text);

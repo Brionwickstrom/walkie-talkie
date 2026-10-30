@@ -43,7 +43,7 @@ $stage = Join-Path $dist 'WalkieTalkie'
 if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
 Copy-Item $rel $stage -Recurse
 @"
-Walkie Talkie for Windows
+Stalkie Talkie for Windows
 =========================
 
 1. Unzip this folder anywhere (for example Documents\WalkieTalkie).

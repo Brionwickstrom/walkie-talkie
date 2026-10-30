@@ -206,7 +206,7 @@ Future<bool> confirmMuteChange(
     builder: (ctx) => AlertDialog(
       scrollable: true,
       key: const Key('muteConfirm'),
-      title: Text('$word Walkie?'),
+      title: Text('$word Stalkie?'),
       content: Text(
         mute
             ? 'Incoming talk, rings and beeps go quiet and are kept in '

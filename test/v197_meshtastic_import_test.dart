@@ -969,7 +969,7 @@ void main() {
       await t.pump(const Duration(milliseconds: 1400));
       await g.up();
       await t.pumpAndSettle();
-      expect(find.text('Unmute Walkie?'), findsOneWidget);
+      expect(find.text('Unmute Stalkie?'), findsOneWidget);
       expect(unmuted, 0);
       await t.tap(find.byKey(const Key('muteConfirmCancel')));
       await t.pumpAndSettle();

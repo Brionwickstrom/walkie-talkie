@@ -380,7 +380,7 @@ class _SetupWizardPageState extends State<SetupWizardPage> {
       case SetupStep.permissions:
         return [
           const Text(
-            'Walkie Talkie works without internet by talking to phones '
+            'Stalkie Talkie works without internet by talking to phones '
             'nearby. That needs these permissions.',
           ),
           const SizedBox(height: 8),

@@ -697,7 +697,7 @@ class AddPeopleView extends StatelessWidget {
               : 'Pick friends. Each gets an invitation in their Direct chat '
                     'with you (kept up to 24 hours if they are out of '
                     'reach). The group code is sealed so only that friend '
-                    'can open it. They need Walkie Talkie 2.3.0 or newer.',
+                    'can open it. They need Stalkie Talkie 2.3.0 or newer.',
           key: const Key('add-people-note'),
           style: theme.textTheme.bodySmall,
         ),
