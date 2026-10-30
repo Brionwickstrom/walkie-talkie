@@ -228,6 +228,13 @@ object BgBridge {
                 val pct = bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
                 result.success(mapOf("pct" to (if (pct in 0..100) pct else -1), "chg" to bm.isCharging))
             }
+            // v2.5.6: tell Dart when the phone is plugged in or unplugged
+            // (Driving mode only runs while charging). Event driven: no
+            // polling, nothing runs between plug / unplug.
+            "watchPower" -> {
+                watchPower(ctx)
+                result.success(null)
+            }
             "ignoringBattery" -> {
                 val pm = ctx.getSystemService(Context.POWER_SERVICE) as PowerManager
                 result.success(pm.isIgnoringBatteryOptimizations(ctx.packageName))
@@ -428,6 +435,37 @@ object BgBridge {
         }
     }
 
+    private var powerReceiver: android.content.BroadcastReceiver? = null
+
+    /** Registers once; sends {type: power, chg} now and on every change. */
+    private fun watchPower(ctx: Context) {
+        val appCtx = ctx.applicationContext
+        if (powerReceiver == null) {
+            val r = object : android.content.BroadcastReceiver() {
+                override fun onReceive(c: Context, i: Intent) {
+                    deliver(appCtx, mapOf("type" to "power", "chg" to isCharging(c)))
+                }
+            }
+            val f = android.content.IntentFilter().apply {
+                addAction(Intent.ACTION_POWER_CONNECTED)
+                addAction(Intent.ACTION_POWER_DISCONNECTED)
+            }
+            if (Build.VERSION.SDK_INT >= 33) {
+                appCtx.registerReceiver(r, f, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                appCtx.registerReceiver(r, f)
+            }
+            powerReceiver = r
+        }
+        deliver(appCtx, mapOf("type" to "power", "chg" to isCharging(appCtx)))
+    }
+
+    private fun isCharging(ctx: Context): Boolean {
+        val bm = ctx.getSystemService(Context.BATTERY_SERVICE) as android.os.BatteryManager
+        return bm.isCharging
+    }
+
     private var locListener: LocationListener? = null
     private var gpsFallback: Runnable? = null
     private var lastFixAt = 0L
@@ -435,7 +473,7 @@ object BgBridge {
     /**
      * Continuous fixes for the Trip tab (live location, trail recording):
      * each one goes to Dart as an action {type: loc, lat, lng, acc, t, alt,
-     * spd}. GPS when allowed, else network. False without permission.
+     * spd, brg}. GPS when allowed, else network. False without permission.
      *
      * v2.2.0: [accurate] false (the phone is idle in the background and only
      * shares its place with friends) asks for the network / fused location
@@ -476,6 +514,7 @@ object BgBridge {
                         "t" to location.time,
                         "alt" to (if (location.hasAltitude()) location.altitude else null),
                         "spd" to (if (location.hasSpeed()) location.speed.toDouble() else null),
+                        "brg" to (if (location.hasBearing()) location.bearing.toDouble() else null),
                     ),
                 )
             }

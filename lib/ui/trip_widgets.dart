@@ -8,6 +8,7 @@ import '../trip/map_net.dart' show MapNetState;
 import 'package:flutter/services.dart';
 
 import '../app/walkie_controller.dart';
+import '../trip/friend_motion.dart';
 import '../trip/geo.dart';
 import '../trip/sos.dart';
 import '../trip/trip_controller.dart';
@@ -821,7 +822,7 @@ class TripPersonTile extends StatelessWidget {
       sub = [
         if (me != null)
           formatDistanceBearing(me, pp.pos, imperial: trip.settings.imperial),
-        'fix ${formatAge(DateTime.now().difference(pp.at))} old',
+        'fix ${exactAge(DateTime.now().difference(pp.at))} old',
         if (pp.hops > 1)
           'via ${pp.hops} hops'
         else

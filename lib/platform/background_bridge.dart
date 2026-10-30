@@ -202,7 +202,7 @@ class BackgroundBridge {
   }
 
   /// Continuous location fixes (Trip tab); they arrive on [actions] as
-  /// `{type: loc, lat, lng, acc, t, alt, spd}`. False without permission.
+  /// `{type: loc, lat, lng, acc, t, alt, spd, brg}`. False without permission.
   Future<bool> startLocationUpdates(
     Duration interval, {
     bool highAccuracy = true,
@@ -286,6 +286,11 @@ class BackgroundBridge {
     if (p == null || p < 0 || p > 100) return null;
     return (pct: p, charging: m?['chg'] == true);
   }
+
+  /// Start telling the app when the phone is plugged in or unplugged: a
+  /// `{type: power, chg}` action now and on every change (v2.5.6). Event
+  /// driven, no polling. A no-op off Android.
+  Future<void> watchPower() => _call<void>('watchPower');
 
   /// True when Android won't put the app to sleep.
   Future<bool> ignoringBatteryOptimizations() async =>

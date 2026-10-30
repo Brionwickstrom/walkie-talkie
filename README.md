@@ -1525,6 +1525,46 @@ Tests: `test/v195_gateway_test.dart`, `test/v195_quiet_test.dart`.
 Tests: `test/v197_meshtastic_import_test.dart` (vectors from the official
 apps and the Python library), `test/v195_quiet_test.dart`.
 
+## v2.5.6: friend location accuracy
+
+Friends' dots on the Trip map are now closer to where they are right now.
+
+- **Speed and heading in the location message.** Live updates and check-ins
+  carry the sender's speed (1 byte, 0.5 m/s steps) and direction of travel
+  (1 byte, 1.4 degree steps) after the battery byte, flagged by two new bits
+  (8 = speed, 16 = heading) in the flags byte. A location is 14 bytes, at most
+  17 with battery, speed and heading. Older apps read the same place, accuracy
+  and battery and ignore the rest; messages from older apps just have no
+  speed. Heading is sent only while moving (1 m/s or more).
+  Android now passes the location's bearing (`brg`) to Dart.
+- **Dead reckoning (`lib/trip/friend_motion.dart`).** Between updates the dot
+  is moved along the heading at the speed, but only for a fix of 50 m or better
+  that was reported moving at 2 m/s (4.5 mph) or more, not held at base camp.
+  At most 75 s after the fix was taken and at most 500 m; after that the dot
+  goes back to the real last fix. Slow, still, unsure or unknown fixes are
+  never moved. The person sheet says "Moving 31 mph heading E; the dot is a
+  guess 120 m ahead".
+- **Accuracy circle and fading.** A circle of the reported accuracy (plus a
+  little while the dot is guessed ahead) in true metres, drawn when 8 m or
+  more. The dot, circle and label fade from solid (first 2 minutes) to 45% at
+  30 minutes. A small arrow shows the direction of a moving friend.
+- **The real age.** The label under the dot and the friend list say "12 s",
+  "2 min 5 s", "3 h 5 min" instead of "just now". The map redraws every 2 s
+  only while the Trip page is on screen and a friend shares a place.
+- **Driving mode, only while plugged in.** Needs Trip mode on. It starts when
+  the phone is plugged in (Android: charging; Windows: AC power) and moving at
+  6 m/s (13 mph) or more (the phone's speed, or the distance between fixes),
+  and ends 2 minutes after the last fast fix, or at once when unplugged. While
+  on: high-accuracy GPS every 2 s and live updates every 5 s once moved 20 m
+  (at least every 30 s). Off in Offline power save. A "Driving mode - plugged
+  in" chip shows on the map. On battery nothing changes: no new GPS use, no
+  extra sends. Plug / unplug arrives as an event from Android
+  (`ACTION_POWER_CONNECTED/DISCONNECTED`), no polling; the 2 minute battery
+  reading also checks it.
+- Not built: seeing friends who are together as one, sending on movement.
+
+Tests: `test/v256_friend_test.dart`.
+
 ## v2.5.5: newer satellite imagery everywhere
 
 The **Satellite** and **Satellite + roads and names** map styles now show the

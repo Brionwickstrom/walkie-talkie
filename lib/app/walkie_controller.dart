@@ -63,6 +63,7 @@ import '../messaging/ringer.dart';
 import '../messaging/sent_log.dart';
 import '../messaging/storage.dart';
 import '../messaging/voice_clip.dart';
+import '../platform/ac_power.dart';
 import '../platform/background_bridge.dart';
 import '../platform/platform_caps.dart';
 import '../transports/ble_transport.dart';
@@ -924,10 +925,23 @@ class WalkieController extends ChangeNotifier {
   int? batteryPct;
 
   Future<void> _refreshBattery() async {
+    final ac = acPowerOnline();
+    if (ac != null) await _setCharging(ac);
     final b = await bridge.batteryLevel();
-    if (b == null || b.pct == batteryPct) return;
+    if (b == null) return;
+    await _setCharging(b.charging);
+    if (b.pct == batteryPct) return;
     batteryPct = b.pct;
     notifyListeners();
+  }
+
+  /// On a charger (v2.5.6, Android: plugged in / charging, Windows: AC
+  /// power). Tells the Trip layer, which gates Driving mode on it.
+  bool charging = false;
+
+  Future<void> _setCharging(bool on) async {
+    charging = on;
+    await trip?.setPluggedIn(on);
   }
 
   /// Someone's last known battery: their hellos, else their latest
@@ -1633,6 +1647,9 @@ class WalkieController extends ChangeNotifier {
       await t.start();
       await t.setOfflineSaver(settings.offlineSaver);
       trip = t;
+      // v2.5.6: Driving mode follows plug / unplug (event driven).
+      await t.setPluggedIn(charging);
+      unawaited(bridge.watchPower());
     } catch (e) {
       debugPrint('trip: $e');
     }
@@ -1910,9 +1927,13 @@ class WalkieController extends ChangeNotifier {
               accuracyM: (a['acc'] as num?)?.toDouble(),
               speedMps: (a['spd'] as num?)?.toDouble(),
               altM: (a['alt'] as num?)?.toDouble(),
+              bearingDeg: (a['brg'] as num?)?.toDouble(),
             ),
           );
         }
+      case 'power':
+        // v2.5.6: plugged in / unplugged. Driving mode follows it at once.
+        await _setCharging(a['chg'] == true);
       case 'sosOpen':
         _uiRequests.add('sos');
       case 'wxOpen':

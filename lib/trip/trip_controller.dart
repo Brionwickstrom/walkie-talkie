@@ -11,6 +11,7 @@ import '../app/conn_probes.dart' show probeInternet;
 import '../app/power_plan.dart';
 import '../core/transport.dart';
 import '../core/transport_manager.dart' show InboundTrip;
+import 'friend_motion.dart';
 import 'geo.dart';
 import 'imagery.dart';
 import 'imports/geo_import.dart' show ImportedData, ImportedLine;
@@ -53,11 +54,21 @@ import 'weather.dart';
 
 /// A GPS fix.
 class Fix {
-  const Fix(this.pos, this.at, {this.accuracyM, this.speedMps, this.altM});
+  const Fix(
+    this.pos,
+    this.at, {
+    this.accuracyM,
+    this.speedMps,
+    this.altM,
+    this.bearingDeg,
+  });
   final GeoPoint pos;
   final DateTime at;
   final double? accuracyM;
   final double? speedMps;
+
+  /// Direction of travel in degrees from north (v2.5.6), null = unknown.
+  final double? bearingDeg;
   final double? altM;
 }
 
@@ -73,6 +84,11 @@ class PersonPos {
   int hops;
   double? accuracyM;
   bool held = false;
+
+  /// Their speed (m/s) and direction (degrees) in that fix, when they sent
+  /// them (v2.5.6); used to move their dot between updates.
+  double? speedMps;
+  double? headingDeg;
 }
 
 /// One line of the Trip feed (quick messages, check-ins, alerts).
@@ -428,6 +444,11 @@ class TripController extends ChangeNotifier {
       drive != null;
 
   Duration get _wantedInterval {
+    final base = _baseInterval;
+    return drivingMode && base > drivingGpsInterval ? drivingGpsInterval : base;
+  }
+
+  Duration get _baseInterval {
     final now = _clock();
     final p = plan;
     if (drive != null) return p.driveInterval;
@@ -447,6 +468,7 @@ class TripController extends ChangeNotifier {
   /// mode left running in the background) a balanced / network location
   /// with a longer interval is enough to keep friends' maps current.
   bool get _wantHighAccuracy =>
+      drivingMode ||
       _onScreen ||
       nav != null ||
       drive != null ||
@@ -457,8 +479,12 @@ class TripController extends ChangeNotifier {
   bool? get locationHighAccuracy => _locAccurate;
   bool? _locAccurate;
 
+  /// Driving mode as of the last [_updateLocationNeed].
+  bool _locDriving = false;
+
   Future<void> _updateLocationNeed() async {
     if (!_started) return;
+    _locDriving = drivingMode;
     if (_needLocation) {
       final want = _wantedInterval;
       final acc = _wantHighAccuracy;
@@ -498,11 +524,86 @@ class TripController extends ChangeNotifier {
     if (recorder.add(f.pos, f.at, accuracyM: f.accuracyM)) {
       if (recorder.track!.points.length % 20 == 0) unawaited(_saveTracks());
     }
+    _noteSpeed(f);
     _maybeSendLive();
     _navFix(f.pos);
     _driveFix(f);
+    // Driving mode started or ended (speed, or the 2 minute hold ran out).
+    if (drivingMode != _locDriving) unawaited(_updateLocationNeed());
     notifyListeners();
   }
+
+  // ------------------------------------------------------- driving mode
+
+  /// GPS fix interval while Driving mode is on (v2.5.6).
+  static const drivingGpsInterval = Duration(seconds: 2);
+
+  /// Driving starts at this speed (m/s, about 13 mph) and is kept this long
+  /// after the last fast fix (traffic lights, a short stop).
+  static const drivingSpeedMps = 6.0;
+  static const drivingHold = Duration(minutes: 2);
+
+  bool _pluggedIn = false;
+  DateTime? _movingUntil;
+  Fix? _prevFix;
+
+  /// The phone is on a charger (Android: plugged in / charging; Windows:
+  /// on AC power).
+  bool get pluggedIn => _pluggedIn;
+
+  /// Driving mode (v2.5.6): faster, more precise GPS and live updates while
+  /// you are driving, and ONLY while the phone is plugged in or charging.
+  /// The moment it is unplugged this is false and everything is as before,
+  /// so on battery it costs nothing. Needs Trip mode on (sharing your
+  /// place) and is off in Offline power save.
+  bool get drivingMode {
+    final until = _movingUntil;
+    return _pluggedIn &&
+        settings.tripMode &&
+        !_offline &&
+        until != null &&
+        _clock().isBefore(until);
+  }
+
+  /// Power source changed (called by the app from the phone's plug / unplug
+  /// events and its battery reading).
+  Future<void> setPluggedIn(bool on) async {
+    if (on == _pluggedIn) return;
+    _pluggedIn = on;
+    await _updateLocationNeed();
+    notifyListeners();
+  }
+
+  /// Fast movement seen in [f]: its own speed, else the speed between this
+  /// and the previous fix (phones in balanced mode report no speed).
+  void _noteSpeed(Fix f) {
+    final prev = _prevFix;
+    _prevFix = f;
+    var v = f.speedMps;
+    if (v == null || !v.isFinite || v < 0) {
+      v = null;
+      if (prev != null &&
+          (f.accuracyM ?? 1000) <= 100 &&
+          (prev.accuracyM ?? 1000) <= 100) {
+        final dt = f.at.difference(prev.at).inMilliseconds / 1000;
+        if (dt >= 1 && dt <= 180) v = distanceM(prev.pos, f.pos) / dt;
+      }
+    }
+    if (v != null && v >= drivingSpeedMps) {
+      _movingUntil = _clock().add(drivingHold);
+    }
+  }
+
+  /// Where to draw a friend's dot now, and how big its circle is (v2.5.6).
+  FriendEstimate friendEstimate(PersonPos pp) => estimateFriend(
+    pos: pp.pos,
+    at: pp.at,
+    now: _clock(),
+    speedMps: pp.speedMps,
+    headingDeg: pp.headingDeg,
+    accuracyM: pp.accuracyM,
+    held: pp.held,
+  );
 
   // ------------------------------------------------------------ navigation
 
@@ -2377,10 +2478,14 @@ class TripController extends ChangeNotifier {
     final now = _clock();
     final last = _lastLiveSent;
     final moved = _lastLivePos == null ? 1e9 : distanceM(_lastLivePos!, f.pos);
+    // Driving mode (plugged in only): every 5 s once moved 20 m, at least
+    // every 30 s; otherwise 15 s / 10 m, at least every 60 s.
+    final fast = drivingMode;
     final due =
         last == null ||
-        (now.difference(last) >= const Duration(seconds: 15) && moved > 10) ||
-        now.difference(last) >= const Duration(seconds: 60);
+        (now.difference(last) >= Duration(seconds: fast ? 5 : 15) &&
+            moved > (fast ? 20 : 10)) ||
+        now.difference(last) >= Duration(seconds: fast ? 30 : 60);
     if (!due) return;
     _lastLiveSent = now;
     _lastLivePos = f.pos;
@@ -2394,7 +2499,22 @@ class TripController extends ChangeNotifier {
     accuracyM: f.accuracyM,
     fixAge: _clock().difference(f.at),
     battery: checkIn ? battery?.call() : null,
+    speedMps: _wireSpeed(f),
+    headingDeg: _wireHeading(f),
   );
+
+  static double? _wireSpeed(Fix f) {
+    final v = f.speedMps;
+    return v != null && v.isFinite && v >= 0 ? v : null;
+  }
+
+  /// Direction only while moving (a still phone's bearing is stale).
+  static double? _wireHeading(Fix f) {
+    final b = f.bearingDeg, v = _wireSpeed(f);
+    return b != null && b.isFinite && b >= 0 && v != null && v >= 1.0
+        ? b
+        : null;
+  }
 
   /// This phone's battery 0..100 for check-ins (null = unknown), v1.8.3.
   int? Function()? battery;
@@ -2697,6 +2817,8 @@ class TripController extends ChangeNotifier {
           people[origin] =
               PersonPos(origin, msg.pos, fixAt, t.transport, t.hops)
                 ..accuracyM = msg.accuracyM
+                ..speedMps = msg.speedMps
+                ..headingDeg = msg.headingDeg
                 ..held = held;
         }
         if (lost.enabled) {

@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 
 import '../app/walkie_controller.dart';
+import '../trip/friend_motion.dart';
 import '../trip/geo.dart';
 import '../trip/imports/map_layers.dart';
 import '../trip/imports/map_packs.dart';
@@ -33,6 +34,7 @@ import 'map_layers_page.dart';
 import 'map_packs_page.dart';
 import 'map_search_page.dart';
 import 'drive_page.dart';
+import 'friend_marker.dart';
 import 'nav_page.dart';
 import 'network_map_page.dart';
 import 'offline_areas_page.dart';
@@ -89,10 +91,21 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
     widget.onFullScreen?.call(on);
   }
 
+  /// Redraws the friends' ages and moving dots (v2.5.6) every 2 s while the
+  /// page is on screen and someone shares a place; stopped in the background.
+  Timer? _tick;
+  bool _fg = true;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _tick = Timer.periodic(const Duration(seconds: 2), (_) {
+      final tc = t;
+      if (mounted && _fg && tc != null && tc.people.isNotEmpty) {
+        setState(() {});
+      }
+    });
     t?.setVisible(true);
     _startCompass();
     if (widget.focus != null) _follow = false;
@@ -102,6 +115,7 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _hlTimer?.cancel();
+    _tick?.cancel();
     t?.setVisible(false);
     for (final s in _sensors) {
       s.cancel();
@@ -113,6 +127,7 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
   /// left on the Trip tab with the screen off used to keep them going).
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    _fg = state == AppLifecycleState.resumed;
     if (state == AppLifecycleState.resumed) {
       if (_sensors.isEmpty) _startCompass();
     } else if (state == AppLifecycleState.paused ||
@@ -380,53 +395,11 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
           ),
         ),
       for (final pp in trip.people.values)
-        Marker(
-          point: ll(pp.pos),
-          width: 130,
-          height: 66,
-          child: GestureDetector(
-            onTap: () => _personSheet(context, trip, pp.id),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const SizedBox(height: 17),
-                Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    CircleAvatar(
-                      radius: 14,
-                      backgroundColor: avatarColor(pp.id),
-                      child: Text(
-                        initials(c.nameOf(pp.id)),
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      right: -8,
-                      bottom: -4,
-                      child: CircleAvatar(
-                        radius: 8,
-                        backgroundColor: Colors.white,
-                        child: Icon(
-                          pp.hops > 1 ? Icons.hub : transportIcon(pp.via),
-                          size: 11,
-                          color: Colors.black87,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                _label(
-                  '${c.nameOf(pp.id)} · ${formatAge(DateTime.now().difference(pp.at))}',
-                  avatarColor(pp.id),
-                ),
-              ],
-            ),
-          ),
+        friendMarker(
+          trip,
+          pp,
+          c.nameOf(pp.id),
+          onTap: () => _personSheet(context, trip, pp.id),
         ),
       if (me != null)
         Marker(
@@ -488,6 +461,7 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
               ),
             ),
             PolylineLayer(polylines: lines),
+            CircleLayer(circles: friendCircles(trip)),
             MarkerLayer(markers: markers),
             PhotoDateLine(trip: trip),
             SimpleAttributionWidget(
@@ -507,6 +481,32 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
             ),
           ],
         ),
+        if (trip.drivingMode)
+          Positioned(
+            top: 8,
+            left: 8,
+            child: DecoratedBox(
+              key: const Key('drivingChip'),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.6),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.directions_car, size: 14, color: Colors.white),
+                    SizedBox(width: 4),
+                    Text(
+                      'Driving mode · plugged in',
+                      style: TextStyle(color: Colors.white, fontSize: 11),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -1910,6 +1910,18 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
     );
   }
 
+  /// "\nMoving 34 mph heading NE; dot is a guess 120 m ahead" (v2.5.6).
+  String _movingLine(TripController trip, PersonPos pp) {
+    final v = pp.speedMps, h = pp.headingDeg;
+    if (v == null || h == null || v < deadReckonMinSpeedMps) return '';
+    final est = trip.friendEstimate(pp);
+    final speed = trip.settings.imperial
+        ? '${(v * 2.23694).round()} mph'
+        : '${(v * 3.6).round()} km/h';
+    return '\nMoving $speed heading ${cardinal(h)}'
+        '${est.projected ? '; the dot is a guess ${formatDistance(est.aheadM, imperial: trip.settings.imperial)} ahead' : ''}';
+  }
+
   Future<void> _personSheet(
     BuildContext context,
     TripController trip,
@@ -1930,7 +1942,8 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
               Text(
                 '${pp.pos.lat.toStringAsFixed(5)}, ${pp.pos.lng.toStringAsFixed(5)}'
                 '${pp.accuracyM != null ? ' (±${pp.accuracyM!.round()} m)' : ''}\n'
-                'Fix taken ${hhmm(pp.at)}${pp.held ? ' (via base camp)' : ''}',
+                'Fix taken ${hhmm(pp.at)} (${exactAge(DateTime.now().difference(pp.at))} ago)${pp.held ? ' (via base camp)' : ''}'
+                '${_movingLine(trip, pp)}',
               ),
               const SizedBox(height: 8),
               Wrap(

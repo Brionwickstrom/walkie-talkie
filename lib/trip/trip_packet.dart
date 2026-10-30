@@ -5,7 +5,7 @@ import 'geo.dart';
 
 /// Tiny binary Trip messages (v1.8.0), the payload of a
 /// `FrameType.trip` frame. Built to fit a LoRa packet with room to spare:
-/// a location is 14 bytes, an SOS 16, a canned message 6.
+/// a location is 14 bytes (up to 17 with battery, speed and heading), an SOS 16, a canned message 6.
 ///
 /// Byte 0 = (version << 4) | kind, then a 16 bit message id (with the
 /// sender id this de-duplicates repeats and copies that arrive over several
@@ -71,6 +71,11 @@ sealed class TripMsg {
           final age = r.u8();
           // v1.8.3: battery byte at the end (older apps ignore it).
           final bt = flags & 4 != 0 ? r.u8() : null;
+          // v2.5.6: speed (0.5 m/s steps) and heading (360/256 degree
+          // steps) after the battery byte. Older apps stop reading before
+          // them and ignore the rest, so nothing else changes.
+          final spd = flags & 8 != 0 ? r.u8() : null;
+          final hdg = flags & 16 != 0 ? r.u8() : null;
           return PosMsg(
             id,
             p,
@@ -78,6 +83,8 @@ sealed class TripMsg {
             accuracyM: flags & 2 != 0 ? acc.toDouble() : null,
             fixAge: Duration(seconds: age * 4),
             battery: bt != null && bt <= 100 ? bt : null,
+            speedMps: spd == null ? null : spd / 2,
+            headingDeg: hdg == null ? null : hdg * 360 / 256,
           );
         case TripKind.sos:
           final flags = r.u8();
@@ -180,10 +187,20 @@ class PosMsg extends TripMsg {
     this.accuracyM,
     this.fixAge = Duration.zero,
     this.battery,
+    this.speedMps,
+    this.headingDeg,
   });
   final GeoPoint pos;
   final bool checkIn;
   final double? accuracyM;
+
+  /// Sender's speed in m/s (v2.5.6, one byte, 0.5 m/s steps up to
+  /// 127 m/s), null = unknown.
+  final double? speedMps;
+
+  /// Sender's direction of travel in degrees from north (v2.5.6, one byte,
+  /// 1.4 degree steps), null = unknown / not moving.
+  final double? headingDeg;
 
   /// Sender's phone battery 0..100 (v1.8.3, one byte), null = unknown.
   final int? battery;
@@ -198,12 +215,18 @@ class PosMsg extends TripMsg {
       ..u8(
         (checkIn ? 1 : 0) |
             (accuracyM != null ? 2 : 0) |
-            (battery != null ? 4 : 0),
+            (battery != null ? 4 : 0) |
+            (speedMps != null ? 8 : 0) |
+            (headingDeg != null ? 16 : 0),
       )
       ..point(pos)
       ..u8((accuracyM ?? 0).round().clamp(0, 255))
       ..u8((fixAge.inSeconds ~/ 4).clamp(0, 255));
     if (battery != null) w.u8(battery!.clamp(0, 100));
+    if (speedMps != null) w.u8((speedMps! * 2).round().clamp(0, 255));
+    if (headingDeg != null) {
+      w.u8((normDeg(headingDeg!) * 256 / 360).round() % 256);
+    }
   }
 }
 
