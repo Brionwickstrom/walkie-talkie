@@ -37,7 +37,13 @@ enum FrameType {
   /// sharing its radio), a phone's request to put a frame on the radio,
   /// or a gateway's announcement. See `core/gateway_protocol.dart`. Never
   /// sent over LoRa itself; older phones drop it.
-  gateway(8);
+  gateway(8),
+
+  /// Signed weather alert (v2.5.2): one NWS warning, signed with the
+  /// sending device's own Ed25519 key. Travels in the relay rooms
+  /// `wx-<state>` and, compact, over the LoRa radio (sealed on a private
+  /// group). See `weather/wx_codec.dart`. Older phones drop it.
+  alert(9);
 
   const FrameType(this.code);
   final int code;

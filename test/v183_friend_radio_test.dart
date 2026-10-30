@@ -55,6 +55,7 @@ class AirRadio implements RadioLink {
     bool wantAck = false,
     int priority = 0,
     int channel = 0,
+    int hopLimit = 0,
   }) async {
     sent.add((payload, to, wantAck));
     final o = other;

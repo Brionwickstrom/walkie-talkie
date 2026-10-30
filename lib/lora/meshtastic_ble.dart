@@ -122,6 +122,7 @@ class MeshtasticRadio implements RadioLink {
     bool wantAck = false,
     int priority = 0,
     int channel = 0,
+    int hopLimit = 0,
   }) async {
     final s = session;
     if (s == null || !ready) throw StateError('radio not ready');
@@ -131,6 +132,7 @@ class MeshtasticRadio implements RadioLink {
       wantAck: wantAck,
       priority: priority,
       channel: channel,
+      hopLimitOverride: hopLimit,
     );
   }
 

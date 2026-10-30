@@ -407,6 +407,7 @@ class MeshtasticSession {
     bool wantResponse = false,
     int priority = 0,
     int channel = 0,
+    int hopLimitOverride = 0,
   }) async {
     if (payload.length > meshDataPayloadLen) {
       throw ArgumentError('payload ${payload.length} > $meshDataPayloadLen');
@@ -419,7 +420,11 @@ class MeshtasticSession {
       wantAck: wantAck,
       // The radio's own hop limit (Meshtastic repeats it that many
       // times); 3 is the firmware default.
-      hopLimit: (hopLimit ?? 0) > 0 ? hopLimit! : 3,
+      hopLimit: hopLimitOverride > 0
+          ? hopLimitOverride
+          : (hopLimit ?? 0) > 0
+          ? hopLimit!
+          : 3,
       priority: priority,
       decoded: MeshData(
         portnum: port,

@@ -90,6 +90,24 @@ class InboundLobby {
   final int? rssi;
 }
 
+/// A signed weather alert frame (v2.5.2, see `weather/wx_codec.dart`)
+/// heard on the radio or a link. [group]: it came sealed inside the private
+/// group we are in (so only its members could have sent it).
+class InboundAlert {
+  InboundAlert(
+    this.frame,
+    this.transport, {
+    this.group = false,
+    this.hops = 1,
+    this.rssi,
+  });
+  final Frame frame;
+  final TransportKind transport;
+  final bool group;
+  final int hops;
+  final int? rssi;
+}
+
 /// A "who's here?" probe (v1.8.5, see [LobbyProbe]): someone refreshed
 /// their people list and wants everyone to answer now.
 class InboundProbe {
@@ -494,6 +512,7 @@ class TransportManager {
   final _controls = StreamController<InboundControl>.broadcast();
   final _trips = StreamController<InboundTrip>.broadcast();
   final _lobby = StreamController<InboundLobby>.broadcast();
+  final _alerts = StreamController<InboundAlert>.broadcast();
   final _probes = StreamController<InboundProbe>.broadcast();
   final _peerChanges = StreamController<List<Peer>>.broadcast();
   final _transportChanges = StreamController<void>.broadcast();
@@ -541,6 +560,10 @@ class TransportManager {
   /// "Who's where" beacons heard on the local links / phone mesh. They
   /// never create a [Peer] (people list) entry.
   Stream<InboundLobby> get lobby => _lobby.stream;
+
+  /// Signed weather alerts heard (v2.5.2). They never create a [Peer]; the
+  /// weather layer checks the signature.
+  Stream<InboundAlert> get alerts => _alerts.stream;
 
   /// "Who's here?" probes (v1.8.5) heard on any link, the mesh or LoRa.
   Stream<InboundProbe> get probes => _probes.stream;
@@ -725,6 +748,7 @@ class TransportManager {
     await _controls.close();
     await _trips.close();
     await _lobby.close();
+    await _alerts.close();
     await _probes.close();
     await _peerChanges.close();
     await _transportChanges.close();
@@ -1195,6 +1219,7 @@ class TransportManager {
       case FrameType.sealed:
       case FrameType.mesh:
       case FrameType.gateway:
+      case FrameType.alert: // weather alerts have their own path
         return false;
     }
   }
@@ -1425,6 +1450,46 @@ class TransportManager {
     }
   }
 
+  void _emitAlert(
+    Frame f,
+    InboundFrame inbound,
+    int hops, {
+    required bool group,
+  }) {
+    if (_alerts.isClosed) return;
+    _alerts.add(
+      InboundAlert(
+        f,
+        inbound.transport,
+        group: group,
+        hops: hops,
+        rssi: inbound.rssi,
+      ),
+    );
+  }
+
+  /// A signed weather alert on the LoRa radio (v2.5.2): [f] is the plain
+  /// alert frame; on a private group it is sealed with the group key (so
+  /// only members read it), on an open channel it goes out plain. One
+  /// broadcast packet, the radio's rate limiter, Meshtastic priority ALERT,
+  /// hop limit 3, no ack. False when no radio is connected, or it does not
+  /// fit one packet. Phones never pass these on: the radio mesh floods them.
+  bool sendAlertRadio(Frame f) {
+    final r = radio;
+    if (r == null || r.status != TransportStatus.running) return false;
+    return r.sendRadio(_wire(f), priority: LoraPriority.alert);
+  }
+
+  /// Payload bytes left for an alert frame on the radio on this channel.
+  int get alertRadioBudget =>
+      loraPayloadBudget - frameOverhead - Frame.headerSize;
+
+  /// A radio is connected and ready for [sendAlertRadio].
+  bool get alertRadioReady {
+    final r = radio;
+    return r != null && r.status == TransportStatus.running;
+  }
+
   /// A phone in our room asks gateways to transmit: do it when we share
   /// our radio and it can reach the target.
   void _onGatewayRequest(int sender, GatewayEnvelope env) {
@@ -1432,7 +1497,7 @@ class TransportManager {
     final r = radio!;
     final inner = env.innerFrame;
     if (inner == null || inner.type == FrameType.audio) return;
-    if (inner.type == FrameType.lobby) return;
+    if (inner.type == FrameType.lobby || inner.type == FrameType.alert) return;
     if (!gatewaySeenIds.add(env.packetId)) return;
     final to = env.to;
     if (to != 0 && !r.peerSignals.containsKey(to)) return;
@@ -1456,7 +1521,8 @@ class TransportManager {
     final f = inbound.frame;
     if (f.type == FrameType.lobby ||
         f.type == FrameType.mesh ||
-        f.type == FrameType.gateway) {
+        f.type == FrameType.gateway ||
+        f.type == FrameType.alert) {
       return;
     }
     final ourRoom = isPrivateScope(scope)
@@ -2400,6 +2466,15 @@ class TransportManager {
       return;
     }
 
+    // Weather alerts (v2.5.2) are signed by the device that sends them, so
+    // a plain one is read on any channel (the weather layer labels it
+    // "unconfirmed" unless its key is trusted). They never touch the people
+    // list. A sealed one is handled below, once the group key opened it.
+    if (f.type == FrameType.alert) {
+      _emitAlert(f, inbound, hops, group: false);
+      return;
+    }
+
     // Private channels: only frames that decrypt with our key count. Plain
     // frames are ignored while private, sealed ones while public, so phones
     // without the passcode never show up, ring or play audio (and vice
@@ -2425,6 +2500,11 @@ class TransportManager {
         return;
       }
       f = opened;
+      if (f.type == FrameType.alert) {
+        // Sealed with our group's key: only a member can have sent it.
+        _emitAlert(f, inbound, hops, group: true);
+        return;
+      }
     } else if (key != null) {
       return;
     }
@@ -2655,6 +2735,7 @@ class TransportManager {
         case FrameType.mesh:
         case FrameType.lobby:
         case FrameType.gateway:
+        case FrameType.alert:
           break; // never nested / handled above
       }
     }

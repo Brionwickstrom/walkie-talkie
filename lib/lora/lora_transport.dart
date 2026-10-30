@@ -29,6 +29,9 @@ abstract class RadioLink {
     bool wantAck = false,
     int priority = 0,
     int channel = 0,
+
+    /// Hops the radios may repeat it (0 = the radio's own setting).
+    int hopLimit = 0,
   });
 }
 
@@ -36,7 +39,31 @@ abstract class RadioLink {
 ///
 /// [sos] (Trip SOS and its answers) jumps the queue but still uses the
 /// same rate limiter, so the radio stays within its duty cycle.
-enum LoraPriority { sos, urgent, normal, bulk, presence }
+///
+/// [alert] (v2.5.2, a signed weather alert) goes right after [sos]. It is
+/// declared last so the numbers the gateway protocol sends for the older
+/// values do not move: use [rank] to order, never [index].
+enum LoraPriority {
+  sos,
+  urgent,
+  normal,
+  bulk,
+  presence,
+  alert;
+
+  /// Order in the queue: lower goes first.
+  int get rank => switch (this) {
+    LoraPriority.sos => 0,
+    LoraPriority.alert => 1,
+    LoraPriority.urgent => 2,
+    LoraPriority.normal => 3,
+    LoraPriority.bulk => 4,
+    LoraPriority.presence => 5,
+  };
+}
+
+/// Weather alerts are repeated at most this many hops (v2.5.2).
+const int alertHopLimit = 3;
 
 /// Token bucket: at most [burst] packets at once, then one every
 /// [refillEvery]. LoRa LongFast needs ~1-2 s of airtime per full packet
@@ -330,7 +357,7 @@ class LoraTransport extends Transport {
       _Queued? worst;
       for (final q in _queue) {
         if (worst == null ||
-            q.priority.index > worst.priority.index ||
+            q.priority.rank > worst.priority.rank ||
             (q.priority == worst.priority && q.seq < worst.seq)) {
           worst = q;
         }
@@ -368,7 +395,7 @@ class LoraTransport extends Transport {
         if (free != null && free <= 0) break;
         if (!limiter.tryTake()) break;
         _queue.sort((a, b) {
-          final p = a.priority.index.compareTo(b.priority.index);
+          final p = a.priority.rank.compareTo(b.priority.rank);
           return p != 0 ? p : a.seq.compareTo(b.seq);
         });
         final q = _queue.removeAt(0);
@@ -400,13 +427,15 @@ class LoraTransport extends Transport {
             to: to,
             wantAck: ack,
             channel: slot,
-            priority:
-                q.priority == LoraPriority.urgent ||
-                    q.priority == LoraPriority.sos
+            priority: q.priority == LoraPriority.alert
+                ? MeshPacketPb.priorityAlert
+                : q.priority == LoraPriority.urgent ||
+                      q.priority == LoraPriority.sos
                 ? MeshPacketPb.priorityHigh
                 : q.priority == LoraPriority.presence
                 ? MeshPacketPb.priorityDefault
                 : MeshPacketPb.priorityReliable,
+            hopLimit: q.priority == LoraPriority.alert ? alertHopLimit : 0,
           );
           sentPackets++;
         } catch (_) {}

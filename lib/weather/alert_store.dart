@@ -76,6 +76,13 @@ class AlertStore {
   /// Kinds kept and notified.
   Set<WxKind> kinds;
 
+  /// Alerts from devices we do not trust kept at once.
+  static const maxUnconfirmed = 8;
+
+  /// A relay / radio copy is not dropped for missing from an NWS answer
+  /// before it is this old here.
+  static const radioGrace = Duration(minutes: 10);
+
   final Map<String, WxAlert> _alerts = {};
 
   /// Cancelled events: key -> rev of the cancel, so an older copy arriving
@@ -147,26 +154,55 @@ class AlertStore {
       }
       final old = _alerts[a.key];
       if (old == null) {
+        // Copies from devices we do not trust are limited: a stranger on an
+        // Open channel cannot fill the list.
+        if (a.trust == WxTrust.unconfirmed &&
+            _alerts.values
+                    .where((x) => x.trust == WxTrust.unconfirmed)
+                    .length >=
+                maxUnconfirmed) {
+          continue;
+        }
         final n = inherited ? a.copyWith(notified: true) : a;
         _alerts[a.key] = n;
         r.added.add(n);
         if (!n.notified) r.toNotify.add(n);
         continue;
       }
-      if (a.rev < old.rev) continue;
-      if (a.rev == old.rev && a.trust.index <= old.trust.index) continue;
-      // Same event, newer text. Notify again only if it got worse.
+      // A weaker copy never replaces a more trusted one (our own NWS read
+      // beats a confirmed relay / radio copy, which beats an unconfirmed
+      // one): a stranger cannot overwrite what a trusted source said.
+      if (a.trust.index < old.trust.index) continue;
+      final upgraded = a.trust.index > old.trust.index;
+      if (a.rev < old.rev) {
+        if (upgraded) {
+          // The more trusted copy is older text: keep the newer text, take
+          // the trust (and say where it came from).
+          final n = old.copyWith(
+            source: a.source,
+            trust: a.trust,
+            fromDevice: a.fromDevice,
+            fromName: a.fromName,
+            notified: old.notified && !(a.alarms && !old.alarmed),
+          );
+          _alerts[a.key] = n;
+          r.updated.add(n);
+          if (!n.notified) r.toNotify.add(n);
+        }
+        continue;
+      }
+      if (a.rev == old.rev && !upgraded) continue;
+      // Same event, newer text (or the same text from a better source).
+      // Notify again only if it got worse, or if it is now confirmed and
+      // the extreme alarm has not sounded for it yet.
       final worse =
           (a.isExtreme && !old.isExtreme) ||
           a.severity.index > old.severity.index;
+      final alarmNow = upgraded && a.alarms && !old.alarmed;
       final n = a.copyWith(
-        notified: old.notified && !worse,
+        notified: old.notified && !worse && !alarmNow,
+        alarmed: old.alarmed,
         firstSeen: old.firstSeen,
-        // The most trusted copy wins: our own NWS read beats a relay or
-        // radio copy, which beats an unconfirmed one (a radio alert is
-        // upgraded when this phone checks the NWS itself).
-        source: a.trust.index >= old.trust.index ? a.source : old.source,
-        trust: a.trust.index >= old.trust.index ? a.trust : old.trust,
       );
       _alerts[a.key] = n;
       r.updated.add(n);
@@ -175,11 +211,22 @@ class AlertStore {
     if (authoritative != null) {
       for (final e in _alerts.entries.toList()) {
         final a = e.value;
-        if (a.source != WxSource.nws || seen.contains(e.key)) continue;
-        // Not in the answer for the zones we asked about (cancelled early,
-        // or for a place we no longer watch): gone. With no zone listed we
-        // cannot tell, so it stays until it expires.
+        if (seen.contains(e.key)) continue;
+        // With no zone listed we cannot tell, so it stays until it expires.
         if (a.ugc.isEmpty) continue;
+        if (a.source == WxSource.nws) {
+          // Not in the answer for the zones we asked about (cancelled
+          // early, or for a place we no longer watch): gone.
+          _alerts.remove(e.key);
+          r.removed.add(a);
+          continue;
+        }
+        // A relay or radio copy the NWS does not list for the zones it
+        // names (v2.5.2): withdrawn, cancelled or false. Only for zones we
+        // just asked about, and not in the first minutes (the sender may
+        // know it a little before our answer does).
+        if (!a.ugc.any(authoritative.contains)) continue;
+        if (now.difference(a.firstSeen) < radioGrace) continue;
         _alerts.remove(e.key);
         r.removed.add(a);
       }
@@ -229,7 +276,9 @@ class AlertStore {
 
   void markNotified(String key) {
     final a = _alerts[key];
-    if (a != null) a.notified = true;
+    if (a == null) return;
+    a.notified = true;
+    if (a.alarms) a.alarmed = true;
   }
 
   // ------------------------------------------------------------ persistence

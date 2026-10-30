@@ -77,6 +77,8 @@ import '../weather/alert_store.dart';
 import '../weather/nws_client.dart';
 import '../weather/weather_alerts.dart';
 import '../weather/wx_alert.dart';
+import '../weather/wx_keys.dart';
+import '../weather/wx_mesh.dart';
 import '../weather/wx_notice.dart';
 import 'call_signs.dart';
 import 'config.dart';
@@ -226,6 +228,7 @@ class WalkieController extends ChangeNotifier {
             ),
     );
     friendLinks.setFriends(settings.friends);
+    friendLinks.onWxKey = _onFriendWxKey;
     manager.sealedHandler = friendLinks.handle;
     whosWhere = WhosWhere(
       localId: nodeId,
@@ -747,6 +750,7 @@ class WalkieController extends ChangeNotifier {
     if (n != phoneNet) debugLog.add('net', 'phone network: ${n ?? '?'}');
     phoneNet = n;
     cellInfo = cell;
+    unawaited(_syncWxRooms());
     final cs = cellStatus.name;
     if (cs != _lastCellLog) {
       _lastCellLog = cs;
@@ -2204,6 +2208,7 @@ class WalkieController extends ChangeNotifier {
     await manager.setOfflineSaver(on);
     friendLinks.setOfflineSaver(on);
     await whosWhere.setPlan(powerPlan);
+    unawaited(_syncWxRooms());
     await trip?.setOfflineSaver(on);
     if (on) {
       for (final conv in _live.keys.toList()) {
@@ -2245,14 +2250,165 @@ class WalkieController extends ChangeNotifier {
         slow: () => settings.offlineSaver,
         onNotify: _notifyWx,
         onCleared: (a) => unawaited(bridge.cancelWxAlert(a.notificationId)),
+        onRead: (got, zones) async {
+          await wxMesh?.onNwsRead(got, zones);
+        },
       );
       await w.load();
       w.addListener(notifyListeners);
       weatherAlerts = w;
+      await _startWxMesh(w, file.parent);
+      w.addListener(() => unawaited(_syncWxRooms()));
       w.start();
     } catch (e) {
       debugPrint('weather alerts: $e');
     }
+  }
+
+  // ------------------------------- weather over relay and radio (v2.5.2)
+
+  /// This device's own weather signing key (made on first run, kept in the
+  /// app's private folder). Null until the weather layer started.
+  WxDeviceKey? wxKey;
+
+  /// Shares the alerts this device read, and takes signed ones from the
+  /// relay rooms and the radio.
+  WxMesh? wxMesh;
+  WxRooms? _wxRooms;
+
+  /// Friends' weather key ids, told by the friends themselves in their
+  /// sealed presence (friend id -> key id).
+  final Map<int, String> _friendWxKeys = {};
+
+  Future<void> _startWxMesh(WeatherAlerts w, Directory dir) async {
+    final key = await WxDeviceKey.loadOrCreate(File('${dir.path}/wx_key.json'));
+    wxKey = key;
+    final mesh = WxMesh(
+      key: key,
+      weather: w,
+      nodeId: () => nodeId,
+      shareOn: () => settings.wxShare && settings.wxAlerts,
+      isTrusted: (id) => settings.wxTrusted.containsKey(id),
+      deviceName: _wxDeviceName,
+      radioReady: () => manager.alertRadioReady,
+      radioBudget: () => manager.alertRadioBudget,
+      sendRadio: manager.sendAlertRadio,
+      radioChannel: () => manager.channel,
+      stateFile: File('${dir.path}/wx_pub.json'),
+    );
+    final rooms = WxRooms(
+      factory: (room) => MultiRelayTransport(
+        serverUris: relayUrisFor(settings),
+        factory: (u) => RelayTransport(
+          serverUri: u,
+          connector: RelayConnector.platform(),
+          room: room,
+          // Not a talk link: a keep-alive every few minutes is plenty.
+          pingInterval: const Duration(minutes: 4),
+        ),
+      ),
+      onFrame: (f) => unawaited(mesh.onRelayFrame(f)),
+    );
+    wxMesh = mesh;
+    _wxRooms = rooms;
+    _subs.add(
+      manager.alerts.listen(
+        (a) => unawaited(mesh.onRadioFrame(a.frame, group: a.group)),
+      ),
+    );
+    friendLinks.wxKeyId = () => settings.wxAlerts ? wxKey?.id : null;
+    unawaited(_syncWxRooms());
+  }
+
+  /// Join the relay rooms of the states we cover, or leave them all (alerts
+  /// off, offline power save, no connection / Wi-Fi only on mobile data,
+  /// no relay, no known place). Cheap: it only compares sets.
+  Future<void> _syncWxRooms() async {
+    final r = _wxRooms;
+    final w = weatherAlerts;
+    if (r == null || w == null) return;
+    try {
+      final relays = relayUrisFor(settings);
+      final want =
+          settings.wxAlerts &&
+              powerPlan.internetRelay &&
+              _wxNetworkOk() &&
+              relays.isNotEmpty
+          ? wxStates(w.coveredZones)
+          : <String>{};
+      if (want.isEmpty) {
+        if (r.states.isNotEmpty) await r.closeAll();
+        return;
+      }
+      if (want.difference(r.states).isEmpty &&
+          r.states.difference(want).isEmpty) {
+        return;
+      }
+      await r.sync(want, localNodeId: nodeId);
+    } catch (e) {
+      debugPrint('weather rooms: $e');
+    }
+  }
+
+  String _wxDeviceName(int node, String keyId) {
+    final t = settings.wxTrusted[keyId];
+    if (t != null && t.isNotEmpty) return t;
+    for (final e in _friendWxKeys.entries) {
+      if (e.value == keyId) return nameOf(e.key);
+    }
+    return manager.peer(node)?.displayName ?? '';
+  }
+
+  void _onFriendWxKey(int friendId, String keyId) {
+    final old = _friendWxKeys[friendId];
+    if (old == keyId) return;
+    _friendWxKeys[friendId] = keyId;
+    if (old != null && settings.wxTrusted.remove(old) != null) {
+      // A new key (they reinstalled): the old trust no longer applies.
+      _notice(
+        "${nameOf(friendId)}'s weather key changed. Trust it again on "
+        'their card.',
+      );
+      unawaited(settingsStore.save(settings));
+    }
+    notifyListeners();
+  }
+
+  /// This device's weather key id (what friends compare), null before it
+  /// exists.
+  String? get wxKeyId => wxKey?.id;
+
+  /// The weather key id [friendId] told us (null: not heard yet).
+  String? friendWxKeyId(int friendId) => _friendWxKeys[friendId];
+
+  bool isFriendWxTrusted(int friendId) {
+    final k = _friendWxKeys[friendId];
+    return k != null && settings.wxTrusted.containsKey(k);
+  }
+
+  /// "Trust weather alerts from this device" on a friend's card.
+  Future<void> setFriendWxTrust(int friendId, bool on) async {
+    final k = _friendWxKeys[friendId];
+    if (k == null) return;
+    if (on) {
+      settings.wxTrusted[k] = nameOf(friendId);
+    } else {
+      settings.wxTrusted.remove(k);
+    }
+    notifyListeners();
+    await settingsStore.save(settings);
+  }
+
+  Future<void> removeWxTrust(String keyId) async {
+    if (settings.wxTrusted.remove(keyId) == null) return;
+    notifyListeners();
+    await settingsStore.save(settings);
+  }
+
+  Future<void> setWxShare(bool on) async {
+    settings.wxShare = on;
+    notifyListeners();
+    await settingsStore.save(settings);
   }
 
   Future<void> _resumeWeatherAlerts() async {
@@ -2323,12 +2479,14 @@ class WalkieController extends ChangeNotifier {
     notifyListeners();
     await settingsStore.save(settings);
     weatherAlerts?.settingsChanged();
+    unawaited(_syncWxRooms());
   }
 
   Future<void> setWxWifiOnly(bool on) async {
     settings.wxWifiOnly = on;
     notifyListeners();
     await settingsStore.save(settings);
+    unawaited(_syncWxRooms());
   }
 
   Future<void> setWxExtremeSound(bool on) async {
@@ -4708,6 +4866,8 @@ class WalkieController extends ChangeNotifier {
     unawaited(settingsStore.save(settings));
     await _relay.setServerUris(relayUrisFor(settings));
     await whosWhere.setRelayFactory(_lobbyRelayFactory(relayUrisFor(settings)));
+    await _wxRooms?.closeAll();
+    unawaited(_syncWxRooms());
     notifyListeners();
   }
 
@@ -4736,6 +4896,8 @@ class WalkieController extends ChangeNotifier {
       l.timer?.cancel();
     }
     weatherAlerts?.dispose();
+    wxMesh?.dispose();
+    unawaited(_wxRooms?.closeAll() ?? Future<void>.value());
     trip?.dispose();
     friendLinks.dispose();
     friendMessenger?.dispose();

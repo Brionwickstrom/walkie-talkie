@@ -23,15 +23,17 @@ class WxNotice {
 
 /// The rule from the owner: quiet hours only silence sound, and Do Not
 /// Disturb still applies, unless the extreme switch (default off) is on and
-/// the alert is Extreme or a Tornado Warning.
+/// the alert is Extreme or a Tornado Warning. An UNCONFIRMED copy (from a
+/// device we do not trust on an Open channel, v2.5.2) is announced like any
+/// other warning (the warning channel) and never as extreme.
 WxNotice planWxNotice(
   WxAlert a, {
   required bool silenced,
   required bool extremeSwitch,
 }) {
-  final bypass = a.isExtreme && extremeSwitch;
+  final bypass = a.alarms && extremeSwitch;
   return WxNotice(
-    extreme: a.isExtreme,
+    extreme: a.alarms,
     sound: !silenced || bypass,
     bypass: bypass,
   );
@@ -65,11 +67,13 @@ String wxClock(DateTime t, {DateTime? now}) {
   final todo = a.instruction.isEmpty ? '' : WxAlert.unwrap(a.instruction);
   String cut(String s, int n) =>
       s.length <= n ? s : '${s.substring(0, n - 1)}…';
+  final trust = a.trust == WxTrust.unconfirmed ? a.trustLine : null;
   return (
     title: a.event,
-    short: cut('$until$area', 120),
+    short: cut('${trust == null ? '' : '$trust · '}$until$area', 120),
     big: cut(
       [
+        ?trust,
         if (head.isNotEmpty) head else '$until$area',
         if (todo.isNotEmpty) todo,
       ].join('\n'),

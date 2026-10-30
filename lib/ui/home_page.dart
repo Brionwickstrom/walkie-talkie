@@ -772,6 +772,11 @@ class _HomePageState extends State<HomePage> {
           canRemove: c.isAdmin && p.here,
           onVolume: (x) => c.setPeerVolume(p.id, x),
           onAlwaysAllow: (v) => c.setAlwaysAllow(p.id, v),
+          onWxTrust: c.settings.wxAlerts
+              ? (v) => c.setFriendWxTrust(p.id, v)
+              : null,
+          wxKeyId: c.friendWxKeyId(p.id),
+          wxTrusted: c.isFriendWxTrusted(p.id),
           onRing: () {
             Navigator.pop(ctx);
             c.ring(toPeer: p.id);

@@ -218,6 +218,7 @@ class TxRadio implements RadioLink {
     bool wantAck = false,
     int priority = 0,
     int channel = 0,
+    int hopLimit = 0,
   }) async => sent.add((payload, channel));
 }
 
@@ -242,6 +243,7 @@ class GwRadio implements GatewayRadioLink {
     bool wantAck = false,
     int priority = 0,
     int channel = 0,
+    int hopLimit = 0,
   }) async => sent.add(channel);
   @override
   int? meshChannelIndex(MeshChannelRef ref) => slots[ref];

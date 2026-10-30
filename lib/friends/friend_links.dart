@@ -306,6 +306,13 @@ class FriendLinks {
 
   /// The friend's app is too old for private talk (v1.5.4+ needed: older
   /// apps answer with their big button, which goes to the whole channel).
+  /// This device's weather key id, sent to friends in their presence
+  /// (null = none yet). Sealed with the pair key, so only that friend reads it.
+  String? Function()? wxKeyId;
+
+  /// A friend told us their weather key id (v2.5.2).
+  void Function(int friendId, String keyId)? onWxKey;
+
   bool needsUpdate(int id) => featureOf(id) < privateTalkFeature;
   final _inbound = StreamController<FriendInbound>.broadcast();
   final _paired = StreamController<(int, String, PairKey)>.broadcast();
@@ -574,7 +581,7 @@ class FriendLinks {
           message: ControlMessage(
             ControlKind.fhello,
             name: _name(),
-            x: {'v': feature},
+            x: {'v': feature, 'wk': ?wxKeyId?.call()},
           ),
         ),
       );
@@ -693,6 +700,12 @@ class FriendLinks {
       if (_feature[f.senderId] != v) {
         _feature[f.senderId] = v;
         _emit();
+      }
+      // The friend's weather signing key id (v2.5.2), sealed with the pair
+      // key: it is really theirs, so it can be shown on their card.
+      final wk = msg.x['wk'];
+      if (wk is String && RegExp(r'^[0-9a-f]{20}$').hasMatch(wk)) {
+        onWxKey?.call(f.senderId, wk);
       }
       final n = msg.name;
       if (n != null && n.isNotEmpty && n != friend!.name) {

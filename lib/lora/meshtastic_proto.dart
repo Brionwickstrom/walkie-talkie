@@ -129,7 +129,8 @@ class MeshPacketPb {
   final int hopLimit;
   final bool wantAck;
 
-  /// MeshPacket.Priority: 64 = DEFAULT, 70 = RELIABLE, 100 = ALERT ...
+  /// MeshPacket.Priority: 64 = DEFAULT, 70 = RELIABLE, 80 = RESPONSE,
+  /// 100 = HIGH, 110 = ALERT, 120 = ACK.
   final int priority;
   final int rxRssi;
   final int hopStart;
@@ -141,7 +142,14 @@ class MeshPacketPb {
 
   static const priorityDefault = 64;
   static const priorityReliable = 70;
-  static const priorityHigh = 100; // ALERT
+
+  /// SOS and urgent rings (Meshtastic `HIGH`). Before v2.5.2 this was
+  /// commented "ALERT", which is 110: kept at 100, so nothing on the air
+  /// changes for those packets.
+  static const priorityHigh = 100;
+
+  /// Weather alerts (Meshtastic `ALERT`, v2.5.2).
+  static const priorityAlert = 110;
 
   Uint8List encode() {
     final w = PbWriter()

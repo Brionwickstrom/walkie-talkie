@@ -1525,6 +1525,61 @@ Tests: `test/v195_gateway_test.dart`, `test/v195_quiet_test.dart`.
 Tests: `test/v197_meshtastic_import_test.dart` (vectors from the official
 apps and the Python library), `test/v195_quiet_test.dart`.
 
+## v2.5.2: weather alerts stage 2 (relay push + LoRa backup)
+
+Stage 1 (v2.5.0) reads the National Weather Service. Stage 2 lets a phone or PC
+that has internet pass the warnings it reads to phones that do not, over the
+relay and over the LoRa radio. Nothing about the NWS check changes: a device
+that can read the NWS still does, and its own read always wins.
+
+- **Publishing.** Any device with internet (Android or Windows) that already
+  checks the NWS publishes the warnings it reads. Setting: Weather alerts >
+  "Share alerts with other phones" (on by default; only does anything while
+  Weather alerts are on).
+- **Per-device key.** Each device makes its own Ed25519 key on first run
+  (`wx_key.json` in the app's private folder; there is no master key in the
+  app). A reinstall makes a new key, so friends must trust it again. The key
+  id (12 hex digits) is shown in Settings and on the friend's card. Every
+  frame carries the key id, the device id and a signature over the frame.
+- **Relay.** Signed alerts go to `wx-<state>` rooms through the same
+  `MultiRelayTransport` as the lobby room. A phone joins the rooms of the states
+  its covered zones are in. Relays only learn the state. No relay change.
+- **LoRa.** A compact signed `FrameType.alert` in one packet: event code,
+  office, ETN, issued, expiry, severity, up to ~26 zones (only the zones this
+  phone covers), a 64-byte short area text, the key and an Ed25519 signature.
+  If more zones are needed, a second zones-only packet follows. Sent as
+  Meshtastic priority ALERT 110, hop limit 3, broadcast, no ack, through the
+  existing rate limiter. On a private group the frame is sealed first.
+- **When it sends.** On a new or materially changed warning (upgrade, longer,
+  more zones) and a reminder every 20 minutes while active. Before an
+  on-air send: a random 5-30 s wait, skipped if the same warning (VTEC key) is
+  heard on the air meanwhile, plus a per-warning cooldown. Only devices with
+  internet originate; radio-only phones never originate and never re-air what
+  they heard (the mesh floods it). Older apps drop the unknown frame type.
+- **Trust.** Private-group frames and trusted devices count as confirmed.
+  Anything else (the Open channel, relay rooms from an unknown key) shows
+  "Unconfirmed, from <device>", still notifies on the warning channel, and
+  NEVER triggers the full-screen / extreme alarm. Mark a device trusted on the
+  friend's card ("Trust weather alerts from this device"; key shown). The
+  friend's key id arrives sealed with the pair key in the friend hello.
+  An unconfirmed warning is upgraded when this device reads the NWS itself; once
+  an NWS read has covered the zones, radio/relay warnings the NWS does not
+  list are dropped (after 10 minutes). One AlertStore dedupes all paths.
+- **Source line.** "National Weather Service, via internet / via <device> over
+  relay / via <device> over radio".
+- **Limits.** Warnings only (the v2.5.0 set), cancels are not sent (expiry and the
+  NWS recheck end them), no plain-text Meshtastic copy, no Firebase, at most 8
+  unconfirmed warnings at a time, signatures are verified at a limited rate.
+- **Battery.** No new polling. Relay rooms are persistent sockets with the
+  usual 4-minute keep-alive and exist only while Weather alerts are on, a
+  relay is set, there is a connection (not mobile data when Wi-Fi only is set)
+  and offline power save is off. Radio sends happen only on NWS reads.
+
+Fixed on the way: the Meshtastic priority constants (HIGH 100, ALERT 110) were
+mixed up in a comment/constant pair.
+
+Tests: `test/v252_weather_mesh_test.dart`.
+
 ## v2.5.1: the app is now called Stalkie Talkie
 
 Only the visible name changes (the pun is on purpose, and it can change again

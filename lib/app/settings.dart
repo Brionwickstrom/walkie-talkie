@@ -64,6 +64,8 @@ class AppSettings {
     this.wxAlerts = true,
     this.wxWifiOnly = false,
     this.wxExtremeSound = false,
+    this.wxShare = true,
+    Map<String, String>? wxTrusted,
     this.joinAlertPrivate = true,
     this.joinAlertPublic = false,
     this.shareRadio = true,
@@ -87,6 +89,7 @@ class AppSettings {
        groups = groups ?? PrivateGroup.migrate(legacyPrivate ?? const {}),
        peerVolumes = peerVolumes ?? {},
        friends = friends ?? [],
+       wxTrusted = wxTrusted ?? {},
        channelNames = channelNames ?? {},
        channelAdmins = channelAdmins ?? {},
        announceScopes = announceScopes ?? {},
@@ -240,6 +243,14 @@ class AppSettings {
   /// and Do Not Disturb. Off: they follow both (still shown on the lock
   /// screen).
   bool wxExtremeSound;
+
+  /// Share the alerts this device reads from the NWS with other phones
+  /// (relay rooms and the radio), v2.5.2. Receiving needs only [wxAlerts].
+  bool wxShare;
+
+  /// Devices whose weather alerts are trusted anywhere (v2.5.2): the key
+  /// id (what the friend's phone shows) -> the name it had when trusted.
+  final Map<String, String> wxTrusted;
 
   /// Paired Meshtastic LoRa radio (Bluetooth id / name), v1.7.0.
   String? radioId;
@@ -408,6 +419,20 @@ class MemorySettingsStore implements SettingsStore {
   Future<void> save(AppSettings s) async => saved = s;
 }
 
+Map<String, String> _decodeTrusted(String? s) {
+  if (s == null || s.isEmpty) return {};
+  try {
+    final j = jsonDecode(s);
+    if (j is! Map) return {};
+    return {
+      for (final e in j.entries)
+        if (e.value is String) '${e.key}': e.value as String,
+    };
+  } catch (_) {
+    return {};
+  }
+}
+
 class SharedPrefsSettingsStore implements SettingsStore {
   const SharedPrefsSettingsStore();
   static const _kId = 'node_id';
@@ -441,6 +466,8 @@ class SharedPrefsSettingsStore implements SettingsStore {
   static const _kWxAlerts = 'wx_alerts';
   static const _kWxWifi = 'wx_wifi_only';
   static const _kWxExtreme = 'wx_extreme_sound';
+  static const _kWxShare = 'wx_share';
+  static const _kWxTrusted = 'wx_trusted';
   static const _kJoinPrivate = 'join_alert_private';
   static const _kJoinPublic = 'join_alert_public';
   static const _kShareRadio = 'share_radio';
@@ -524,6 +551,8 @@ class SharedPrefsSettingsStore implements SettingsStore {
       wxAlerts: prefs?.getBool(_kWxAlerts) ?? true,
       wxWifiOnly: prefs?.getBool(_kWxWifi) ?? false,
       wxExtremeSound: prefs?.getBool(_kWxExtreme) ?? false,
+      wxShare: prefs?.getBool(_kWxShare) ?? true,
+      wxTrusted: _decodeTrusted(prefs?.getString(_kWxTrusted)),
       joinAlertPrivate: prefs?.getBool(_kJoinPrivate) ?? true,
       joinAlertPublic: prefs?.getBool(_kJoinPublic) ?? false,
       shareRadio: prefs?.getBool(_kShareRadio) ?? true,
@@ -576,6 +605,8 @@ class SharedPrefsSettingsStore implements SettingsStore {
       await prefs.setBool(_kWxAlerts, s.wxAlerts);
       await prefs.setBool(_kWxWifi, s.wxWifiOnly);
       await prefs.setBool(_kWxExtreme, s.wxExtremeSound);
+      await prefs.setBool(_kWxShare, s.wxShare);
+      await prefs.setString(_kWxTrusted, jsonEncode(s.wxTrusted));
       await prefs.setBool(_kJoinPrivate, s.joinAlertPrivate);
       await prefs.setBool(_kJoinPublic, s.joinAlertPublic);
       await prefs.setBool(_kShareRadio, s.shareRadio);

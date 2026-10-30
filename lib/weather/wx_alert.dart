@@ -23,7 +23,8 @@ enum WxSource {
 
   const WxSource(this.label);
 
-  /// The line shown under an alert.
+  /// The line shown under an alert when the device is not known; see
+  /// [WxAlert.sourceLine].
   final String label;
 
   static WxSource byName(String? n) =>
@@ -139,6 +140,7 @@ class WxAlert {
     this.fromName = '',
     DateTime? firstSeen,
     this.notified = false,
+    this.alarmed = false,
   }) : firstSeen = firstSeen ?? issued;
 
   /// Dedupe key: the VTEC event (`vtec:KPQR.TO.W.0012.2026`) when the
@@ -190,6 +192,10 @@ class WxAlert {
   /// The phone already notified for it (so a restart never repeats it).
   bool notified;
 
+  /// The phone already sounded the extreme alarm for it. An unconfirmed
+  /// extreme alert never does; once it is confirmed it may, once.
+  bool alarmed;
+
   WxKind get kind => wxKindOf(event);
 
   /// Tornado Warnings and anything NWS rates Extreme.
@@ -197,6 +203,33 @@ class WxAlert {
       severity == WxSeverity.extreme || _extremeEvents.contains(event);
 
   bool get isCancel => messageType == 'cancel';
+
+  /// May sound the extreme (full-screen) alarm: extreme, and not an
+  /// unconfirmed copy from a stranger on an Open channel.
+  bool get alarms => isExtreme && trust != WxTrust.unconfirmed;
+
+  String get _who => fromName.isNotEmpty
+      ? fromName
+      : fromDevice.isNotEmpty
+      ? 'device ${fromDevice.length > 8 ? fromDevice.substring(0, 8) : fromDevice}'
+      : 'another device';
+
+  /// "National Weather Service, via internet" / "... via (device) over
+  /// relay" / "... via (device) over radio".
+  String get sourceLine => switch (source) {
+    WxSource.nws => source.label,
+    WxSource.relay => 'National Weather Service, via $_who over relay',
+    WxSource.lora => 'National Weather Service, via $_who over radio',
+  };
+
+  /// "Unconfirmed, from Ridge phone" for a copy from an unknown device,
+  /// "Confirmed ..." for a group or trusted device; null for what this
+  /// phone read from the NWS itself.
+  String? get trustLine => switch (trust) {
+    WxTrust.unconfirmed => 'Unconfirmed, from $_who',
+    WxTrust.confirmed => 'Confirmed by your group or a trusted device',
+    WxTrust.nws => null,
+  };
 
   /// When it stops counting (never null).
   DateTime get expiresAt =>
@@ -217,8 +250,11 @@ class WxAlert {
     WxSource? source,
     WxTrust? trust,
     bool? notified,
+    bool? alarmed,
     DateTime? firstSeen,
     String? messageType,
+    String? fromDevice,
+    String? fromName,
   }) => WxAlert(
     key: key,
     nwsId: nwsId,
@@ -240,10 +276,11 @@ class WxAlert {
     messageType: messageType ?? this.messageType,
     source: source ?? this.source,
     trust: trust ?? this.trust,
-    fromDevice: fromDevice,
-    fromName: fromName,
+    fromDevice: fromDevice ?? this.fromDevice,
+    fromName: fromName ?? this.fromName,
     firstSeen: firstSeen ?? this.firstSeen,
     notified: notified ?? this.notified,
+    alarmed: alarmed ?? this.alarmed,
   );
 
   Map<String, Object?> toJson() => {
@@ -271,6 +308,7 @@ class WxAlert {
     if (fromName.isNotEmpty) 'dn': fromName,
     'fs': firstSeen.millisecondsSinceEpoch,
     'nt': notified,
+    if (alarmed) 'al': true,
   };
 
   static WxAlert? fromJson(Object? j) {
@@ -316,6 +354,7 @@ class WxAlert {
         fromName: (j['dn'] as String?) ?? '',
         firstSeen: ms(j['fs']),
         notified: j['nt'] == true,
+        alarmed: j['al'] == true,
       );
     } catch (_) {
       return null;

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../weather/wx_keys.dart';
 import 'home_view.dart';
 
 /// Everything in the per-person sheet (long-press a person on Talk):
@@ -28,7 +29,17 @@ class PersonSheetView extends StatelessWidget {
     required this.onMute,
     required this.onBlock,
     required this.onRemove,
+    this.onWxTrust,
+    this.wxKeyId,
+    this.wxTrusted = false,
   });
+
+  /// "Trust weather alerts from this device" (a friend's card only, v2.5.2).
+  /// Null hides it. [wxKeyId]: the key their phone told us (null = not heard
+  /// yet, the switch waits).
+  final ValueChanged<bool>? onWxTrust;
+  final String? wxKeyId;
+  final bool wxTrusted;
 
   final PersonView person;
   final double volume;
@@ -107,6 +118,23 @@ class PersonSheetView extends StatelessWidget {
             value: alwaysAllow,
             onChanged: onAlwaysAllow,
           ),
+          if (isFriend && onWxTrust != null)
+            SwitchListTile(
+              key: const Key('wx-trust'),
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Trust weather alerts from this device'),
+              subtitle: Text(
+                wxKeyId == null
+                    ? 'Their key shows here once they are online with '
+                          'weather alerts on.'
+                    : 'Key ${wxKeyShow(wxKeyId!)}. Their alerts then count '
+                          'as confirmed on any channel and over the radio. '
+                          'It is the key shown in their Settings.',
+                key: const Key('wx-trust-key'),
+              ),
+              value: wxKeyId != null && wxTrusted,
+              onChanged: wxKeyId == null ? null : onWxTrust,
+            ),
           const Divider(),
           Wrap(
             alignment: WrapAlignment.center,

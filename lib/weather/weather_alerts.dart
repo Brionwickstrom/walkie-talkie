@@ -58,6 +58,7 @@ class WeatherAlerts extends ChangeNotifier {
     this.slow = _no,
     this.onNotify,
     this.onCleared,
+    this.onRead,
     DateTime Function()? clock,
     this.initialDelay = const Duration(seconds: 20),
   }) : _clock = clock ?? DateTime.now;
@@ -81,6 +82,11 @@ class WeatherAlerts extends ChangeNotifier {
 
   /// An alert ended: take its notification down.
   final void Function(WxAlert a)? onCleared;
+
+  /// This device just read these alerts from the NWS itself for [zones]
+  /// (v2.5.2: the hook that shares them over the relay and the radio, and
+  /// that decides which states' relay rooms to join).
+  final Future<void> Function(List<WxAlert> got, Set<String> zones)? onRead;
   final DateTime Function() _clock;
   final Duration initialDelay;
 
@@ -280,7 +286,21 @@ class WeatherAlerts extends ChangeNotifier {
     lastError = null;
     store.lastChecked = now;
     await handle(got, authoritative: zones);
+    try {
+      await onRead?.call(got, zones);
+    } catch (_) {}
     return !lookupFailed;
+  }
+
+  /// The zones of the places we cover (known from earlier lookups), also
+  /// without internet.
+  Set<String> get coveredZones {
+    final pts = _watched.isEmpty ? _gather() : _watched;
+    return {
+      for (final p in pts)
+        if (store.zones[wxPlaceKey(p.point)] case final z?)
+          if (z.supported) ...z.zones,
+    };
   }
 
   /// Take alerts from any source: store them, notify the new ones, take

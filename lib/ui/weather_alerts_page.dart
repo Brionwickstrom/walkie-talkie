@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../app/walkie_controller.dart';
 import '../weather/weather_alerts.dart';
 import '../weather/wx_alert.dart';
+import '../weather/wx_keys.dart';
 import '../weather/wx_notice.dart';
 import 'adaptive_layout.dart';
 
@@ -182,12 +183,7 @@ class _AlertCard extends StatelessWidget {
     final dim = theme.textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant);
     final issued = wxClock(a.issued.toLocal(), now: now);
     final until = wxClock(a.expiresAt.toLocal(), now: now);
-    final trust = switch (a.trust) {
-      WxTrust.unconfirmed =>
-        'Unconfirmed, from ${a.fromName.isNotEmpty ? a.fromName : 'another device'}',
-      WxTrust.confirmed => 'Confirmed by your group',
-      WxTrust.nws => null,
-    };
+    final trust = a.trustLine;
     return Card(
       margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
       child: Padding(
@@ -259,7 +255,7 @@ class _AlertCard extends StatelessWidget {
                   color: a.trust == WxTrust.unconfirmed ? Colors.amber : null,
                 ),
               ),
-            Text(a.source.label, key: const Key('wx-source'), style: dim),
+            Text(a.sourceLine, key: const Key('wx-source'), style: dim),
           ],
         ),
       ),
@@ -333,6 +329,45 @@ class WeatherAlertsSettings extends StatelessWidget {
                     key: const Key('wx-dnd'),
                     onPressed: c.bridge.openDndSettings,
                     child: const Text('Allow Do Not Disturb access'),
+                  ),
+                ),
+              SwitchListTile(
+                key: const Key('wx-share'),
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Share alerts with other phones'),
+                subtitle: const Text(
+                  'When this phone reads a warning from the National Weather '
+                  'Service it passes it on, signed with this device\'s own '
+                  'key, to phones in radio range and through the relay (the '
+                  'relay only learns the state). A few small packets per '
+                  'warning.',
+                ),
+                value: c.settings.wxShare,
+                onChanged: c.setWxShare,
+              ),
+              if (c.wxKeyId != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Text(
+                    'This device\'s weather key: ${wxKeyShow(c.wxKeyId!)}\n'
+                    'Friends compare it before they trust this device. '
+                    'Reinstalling makes a new key.',
+                    key: const Key('wx-mykey'),
+                    style: dim,
+                  ),
+                ),
+              for (final e in c.settings.wxTrusted.entries)
+                ListTile(
+                  key: Key('wx-trusted-${e.key}'),
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  leading: const Icon(Icons.verified_user_outlined),
+                  title: Text('Trusted: ${e.value}'),
+                  subtitle: Text('Key ${wxKeyShow(e.key)}'),
+                  trailing: IconButton(
+                    tooltip: 'Stop trusting',
+                    icon: const Icon(Icons.close),
+                    onPressed: () => c.removeWxTrust(e.key),
                   ),
                 ),
               ListTile(

@@ -515,12 +515,13 @@ void main() {
 
     test('later sources: a relay copy is unconfirmed until our own NWS read upgrades it', () {
       final s = newStore();
-      final relay = alertOf(feat())
+      final flood = feat(event: 'Flash Flood Warning', vtec: null, id: 'f');
+      final relay = alertOf(flood)
           .copyWith(source: WxSource.lora, trust: WxTrust.unconfirmed);
       expect(s.ingest([relay]).toNotify, hasLength(1));
       s.markNotified(relay.key);
       expect(s.active().single.trust, WxTrust.unconfirmed);
-      final own = alertOf(feat());
+      final own = alertOf(flood);
       final r = s.ingest([own]);
       final a = s.active().single;
       expect(a.trust, WxTrust.nws);
@@ -953,7 +954,10 @@ void main() {
       await t.pumpWidget(MaterialApp(home: WeatherAlertsPage(controller: c)));
       await t.pump();
       expect(find.text('Unconfirmed, from Ridge phone'), findsOneWidget);
-      expect(find.text('National Weather Service, via radio'), findsOneWidget);
+      expect(
+        find.text('National Weather Service, via Ridge phone over radio'),
+        findsOneWidget,
+      );
       await t.pumpWidget(const SizedBox());
     });
 
