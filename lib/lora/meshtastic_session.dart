@@ -318,6 +318,7 @@ class MeshtasticSession {
         name: ch.name,
         psk: ch.psk,
         uplinkEnabled: ch.uplink,
+        positionPrecision: ch.positionPrecision,
       );
       changed = true;
     }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../app/walkie_controller.dart';
 import '../lora/meshtastic_admin.dart';
+import '../lora/meshtastic_channels.dart';
 import '../lora/meshtastic_session.dart';
 import '../lora/meshtastic_settings.dart';
 import 'adaptive_layout.dart';
@@ -47,7 +48,7 @@ String? radioEditBlockedText(WalkieController c) {
 const radioNotHereText =
     'Not here (use the Meshtastic app): factory reset, reboot, firmware, '
     'security keys, the main channel name and key, Wi-Fi / MQTT, modules, '
-    'display, role, position precision and intervals, transmit power, '
+    'display, role, position intervals, transmit power, '
     'custom speed.';
 
 /// The lines of the read-only summary.
@@ -91,6 +92,9 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
   int _hop = 3;
   int _region = 0;
   int _preset = 0;
+
+  /// Channel slot -> the precision picked in the list (not saved yet).
+  final Map<int, int> _prec = {};
   MeshWriteStep? _step;
   String? _failed;
   String? _saved;
@@ -121,6 +125,11 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
     _hop = (s.hopLimit ?? 3).clamp(0, 7);
     _region = s.region ?? 0;
     _preset = s.modemPreset ?? 0;
+    _prec
+      ..clear()
+      ..addAll({
+        for (final ch in c.radioChannels) ch.index: ch.positionPrecision,
+      });
   }
 
   Future<void> _run(RadioChange change, String savedText) async {
@@ -172,6 +181,7 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
   Future<bool?> _confirm({
     required String title,
     required List<String> lines,
+    String intro = radioConfirmText,
   }) => showDialog<bool>(
     context: context,
     builder: (ctx) => AlertDialog(
@@ -182,7 +192,7 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(radioConfirmText, key: const Key('rs-confirm-text')),
+          Text(intro, key: const Key('rs-confirm-text')),
           const SizedBox(height: 8),
           for (final l in lines) Text(l),
           const SizedBox(height: 8),
@@ -256,6 +266,193 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
     );
     if (ok != true || !mounted) return;
     await _run(RadioChange.preset(_preset), 'Speed saved.');
+  }
+
+  /// A channel's name as the Meshtastic apps show it.
+  String _channelName(MeshtasticSession s, MeshRadioChannel ch) =>
+      ch.effectiveName(
+        meshPresetDisplayName(
+          s.modemPreset ?? 0,
+          usePreset: s.usePreset ?? true,
+        ),
+      );
+
+  Future<void> _savePrecision(MeshtasticSession s, MeshRadioChannel ch) async {
+    final p = _prec[ch.index] ?? ch.positionPrecision;
+    if (validatePrecision(p) != null) return;
+    await _run(
+      RadioChange.precisionOf(ch.index, p),
+      'Location precision of ${_channelName(s, ch)} is ${radioPrecisionText(p)}.',
+    );
+  }
+
+  /// One tap: no extra question for one channel.
+  Future<void> _fullOne(MeshtasticSession s, MeshRadioChannel ch) async {
+    setState(() => _prec[ch.index] = precisionFull);
+    await _run(
+      RadioChange.precisionOf(ch.index, precisionFull),
+      'Location precision of ${_channelName(s, ch)} is Full (exact).',
+    );
+  }
+
+  Future<void> _fullAll(MeshtasticSession s) async {
+    final todo = [
+      for (final ch in c.radioChannels)
+        if (ch.positionPrecision != precisionFull) ch,
+    ];
+    if (todo.isEmpty) return;
+    final ok = await _confirm(
+      title: 'Share your exact spot on every channel?',
+      intro: radioPrecisionNote,
+      lines: [
+        for (final ch in todo)
+          '${_channelName(s, ch)}: Full (exact), now ${radioPrecisionText(ch.positionPrecision)}',
+      ],
+    );
+    if (ok != true || !mounted) return;
+    await _run(
+      RadioChange.precisionAll([
+        for (final ch in todo) ch.index,
+      ], precisionFull),
+      'All channels share your exact spot (Full).',
+    );
+  }
+
+  Widget _precisionSection(
+    ThemeData theme,
+    MeshtasticSession? s,
+    bool canEdit,
+    Widget Function(String) head,
+  ) {
+    final small = theme.textTheme.bodySmall;
+    final chans = s == null ? const <MeshRadioChannel>[] : c.radioChannels;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        head('Location precision'),
+        Text(
+          'How exactly your radio says where you are, set for each channel '
+          'on it. $radioPrecisionNote',
+          key: const Key('rs-prec-note'),
+          style: small,
+        ),
+        if (chans.isEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              'No channels read from the radio yet.',
+              key: const Key('rs-prec-none'),
+              style: small,
+            ),
+          ),
+        for (final ch in chans)
+          Card(
+            key: Key('rs-prec-card-${ch.index}'),
+            margin: const EdgeInsets.only(top: 8),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Builder(
+                builder: (_) {
+                  final cur = ch.positionPrecision;
+                  final picked = _prec[ch.index] ?? cur;
+                  final known = radioPrecisionLevels.any(
+                    (l) => l.code == picked,
+                  );
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${_channelName(s!, ch)} · '
+                        '${ch.isPrimary ? 'main channel' : 'channel ${ch.index + 1}'}',
+                        style: theme.textTheme.titleSmall,
+                      ),
+                      Text(
+                        'Now: ${radioPrecisionText(cur)}',
+                        key: Key('rs-prec-now-${ch.index}'),
+                      ),
+                      KeyedSubtree(
+                        key: ValueKey('rs-prec-box-${ch.index}-$picked-$cur'),
+                        child: DropdownButtonFormField<int>(
+                          key: Key('rs-prec-${ch.index}'),
+                          initialValue: picked,
+                          isExpanded: true,
+                          decoration: const InputDecoration(
+                            labelText: 'Precision',
+                          ),
+                          items: [
+                            for (final l in radioPrecisionLevels)
+                              DropdownMenuItem(
+                                value: l.code,
+                                child: Text(
+                                  l.code == precisionOff ||
+                                          l.code == precisionFull
+                                      ? l.label
+                                      : '${l.label} (${l.code})',
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            if (!known)
+                              DropdownMenuItem(
+                                value: picked,
+                                child: Text(radioPrecisionText(picked)),
+                              ),
+                          ],
+                          onChanged: canEdit
+                              ? (v) => setState(
+                                  () => _prec[ch.index] = v ?? picked,
+                                )
+                              : null,
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          radioPrecisionHint(picked),
+                          key: Key('rs-prec-hint-${ch.index}'),
+                          style: small,
+                        ),
+                      ),
+                      Wrap(
+                        spacing: 8,
+                        children: [
+                          TextButton(
+                            key: Key('rs-prec-save-${ch.index}'),
+                            onPressed: canEdit && picked != cur
+                                ? () => _savePrecision(s, ch)
+                                : null,
+                            child: const Text('Save'),
+                          ),
+                          FilledButton.tonal(
+                            key: Key('rs-prec-full-${ch.index}'),
+                            onPressed: canEdit && cur != precisionFull
+                                ? () => _fullOne(s, ch)
+                                : null,
+                            child: const Text('Full (exact)'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ),
+        if (chans.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: OutlinedButton.icon(
+              key: const Key('rs-prec-all'),
+              icon: const Icon(Icons.my_location),
+              label: const Text('Set all channels to Full'),
+              onPressed:
+                  canEdit &&
+                      chans.any((ch) => ch.positionPrecision != precisionFull)
+                  ? () => _fullAll(s!)
+                  : null,
+            ),
+          ),
+      ],
+    );
   }
 
   @override
@@ -466,6 +663,7 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
                       ? _toggleLocation
                       : null,
                 ),
+                _precisionSection(theme, s, canEdit, head),
                 head('Region and speed'),
                 DropdownButtonFormField<int>(
                   key: const Key('rs-region'),

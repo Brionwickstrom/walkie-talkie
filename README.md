@@ -1525,6 +1525,34 @@ Tests: `test/v195_gateway_test.dart`, `test/v195_quiet_test.dart`.
 Tests: `test/v197_meshtastic_import_test.dart` (vectors from the official
 apps and the Python library), `test/v195_quiet_test.dart`.
 
+## v2.5.7: Location precision per channel
+
+**Radio settings > Location precision** sets how exactly your radio says where
+you are, for **every channel on the connected radio** (the main channel and
+each extra one). Each channel is a card with its name, the value it has now
+and a list of the Meshtastic levels with a plain line each: Off (not shared),
+~23 km (10), ~12 km (11), ~5.8 km (12), ~2.9 km (13), ~1.5 km (14), ~700 m
+(15), ~350 m (16), ~180 m (17), ~90 m (18), ~45 m (19) and Full (exact, 32). A
+value set by another app (for example 24 bits) is shown as "Custom (24 bits)".
+
+- **Save** writes the picked level to that channel. **Full (exact)** is one
+  tap per channel (no question). **Set all channels to Full** asks first (it
+  names each channel and what it has now) and changes every channel that is
+  not Full yet in one edit.
+- A note says that Full shows your exact spot to everyone on the channel.
+- Same guards as the other radio edits: blocked while a talk is going on, one
+  write at a time, session key, begin / commit, restart wait, read back and
+  check; the previous precision of every changed channel goes into the backup
+  and **Restore previous settings** puts it back.
+- The channel is read from the radio right before the write and sent back as
+  it was (key, name, uplink, every other field, role) with only
+  `module_settings.position_precision` changed. The key is never logged,
+  stored in the backup or shown.
+- "position precision" is gone from the "Not here" line.
+
+Tests: `test/v257_precision_test.dart` (the fake radio of
+`test/v253_radio_settings_test.dart` now has channels).
+
 ## v2.5.6: friend location accuracy
 
 Friends' dots on the Trip map are now closer to where they are right now.

@@ -546,6 +546,7 @@ class MeshRadioChannel {
     required this.keyKind,
     required this.keyXor,
     this.uplinkEnabled = false,
+    this.positionPrecision = 0,
   });
 
   /// From a decoded `Channel` with its raw [psk] (dropped here).
@@ -555,6 +556,7 @@ class MeshRadioChannel {
     required String name,
     required List<int> psk,
     bool uplinkEnabled = false,
+    int positionPrecision = 0,
   }) {
     final secondary = role == MeshChannelRole.secondary;
     return MeshRadioChannel(
@@ -564,6 +566,7 @@ class MeshRadioChannel {
       keyKind: meshClassifyPsk(psk, secondary: secondary),
       keyXor: meshXorHash(meshExpandPsk(psk)),
       uplinkEnabled: uplinkEnabled,
+      positionPrecision: positionPrecision,
     );
   }
 
@@ -575,6 +578,9 @@ class MeshRadioChannel {
   /// Xor of the expanded key (one byte of the channel hash, not the key).
   final int keyXor;
   final bool uplinkEnabled;
+
+  /// Location precision shared on this channel (v2.5.7), 0 = none.
+  final int positionPrecision;
 
   bool get isPrimary => role == MeshChannelRole.primary;
   bool get isSecondary => role == MeshChannelRole.secondary;

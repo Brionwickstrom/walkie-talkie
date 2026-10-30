@@ -572,12 +572,29 @@ class RadioConfigPb {
 /// role=3 (0 disabled, 1 primary, 2 secondary). The key ([psk]) is never
 /// printed ([toString]) and the session drops it right away.
 class ChannelPb {
-  ChannelPb(this.index, this.name, this.psk, this.role, {this.uplink = false});
+  ChannelPb(
+    this.index,
+    this.name,
+    this.psk,
+    this.role, {
+    this.uplink = false,
+    this.positionPrecision = 0,
+    this.rawSettings,
+  });
   final int index;
   final String name;
   final Uint8List psk;
   final int role;
   final bool uplink;
+
+  /// ChannelSettings.module_settings.position_precision (v2.5.7): 0 = no
+  /// position shared on this channel, 10-19 = a circle, 32 = exact.
+  final int positionPrecision;
+
+  /// The raw `ChannelSettings` as the radio sent them (the key is in
+  /// there): only for writing the channel back with one field changed.
+  /// Never shown, logged or stored.
+  final Uint8List? rawSettings;
 
   @override
   String toString() => 'ChannelPb($index, role $role, "$name")';
@@ -589,25 +606,40 @@ class ChannelPb {
   bool get usesDefaultKey => psk.isEmpty || (psk.length == 1 && psk[0] <= 1);
 
   static ChannelPb decode(Uint8List b) {
-    var index = 0, role = 0;
+    var index = 0, role = 0, prec = 0;
     var name = '';
     var psk = Uint8List(0);
     var up = false;
+    Uint8List? raw;
     for (final f in pbDecode(b)) {
       switch (f.number) {
         case 1:
           index = f.asInt32;
         case 2:
+          raw = Uint8List.fromList(f.asBytes);
           for (final s in pbDecode(f.asBytes)) {
             if (s.number == 2) psk = Uint8List.fromList(s.asBytes);
             if (s.number == 3) name = s.asString;
             if (s.number == 5) up = s.asBool;
+            if (s.number == 7 && s.wireType == 2) {
+              for (final m in pbDecode(s.asBytes)) {
+                if (m.number == 1 && m.wireType == 0) prec = m.asInt;
+              }
+            }
           }
         case 3:
           role = f.asInt;
       }
     }
-    return ChannelPb(index, name, psk, role, uplink: up);
+    return ChannelPb(
+      index,
+      name,
+      psk,
+      role,
+      uplink: up,
+      positionPrecision: prec,
+      rawSettings: raw,
+    );
   }
 }
 

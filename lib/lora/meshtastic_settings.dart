@@ -88,6 +88,107 @@ String radioPresetText(int code, {bool usePreset = true}) {
   return meshPresetLabel(code);
 }
 
+/// Location precision of a channel (v2.5.7): ChannelSettings.module_settings
+/// .position_precision, the number of bits of the position that are shared
+/// on that channel. The Meshtastic apps offer 0 (none), 10 to 19 and 32
+/// (exact); the firmware takes 0 to 32.
+const int precisionOff = 0;
+const int precisionFull = 32;
+
+/// [code] is the precision value, [label] the size of the circle the
+/// position is blurred to, [hint] says it in plain words.
+const radioPrecisionLevels = <RadioChoice>[
+  RadioChoice(0, 'Off', 'Your position is not shared on this channel.'),
+  RadioChoice(10, '~23 km', 'Only the wider area you are in.'),
+  RadioChoice(11, '~12 km', 'Roughly which town or county you are near.'),
+  RadioChoice(12, '~5.8 km', 'Roughly which town you are in.'),
+  RadioChoice(13, '~2.9 km', 'Roughly which part of town.'),
+  RadioChoice(14, '~1.5 km', 'Roughly which neighborhood.'),
+  RadioChoice(15, '~700 m', 'A few streets around you.'),
+  RadioChoice(16, '~350 m', 'A street or two around you.'),
+  RadioChoice(17, '~180 m', 'About a city block.'),
+  RadioChoice(18, '~90 m', 'Close: about a building or two.'),
+  RadioChoice(19, '~45 m', 'Very close to your real spot.'),
+  RadioChoice(32, 'Full (exact)', 'Your exact spot, as precise as the GPS.'),
+];
+
+/// "Off", "~2.9 km (13)", "Full (exact)" or "Custom (24 bits)".
+String radioPrecisionText(int p) {
+  for (final l in radioPrecisionLevels) {
+    if (l.code == p) {
+      return p == precisionOff || p == precisionFull
+          ? l.label
+          : '${l.label} ($p)';
+    }
+  }
+  return 'Custom ($p bits)';
+}
+
+/// The plain sentence for a precision value.
+String radioPrecisionHint(int p) {
+  for (final l in radioPrecisionLevels) {
+    if (l.code == p) return l.hint;
+  }
+  return 'A setting from another app; pick one of the others to change it.';
+}
+
+/// Shown under the precision lists.
+const radioPrecisionNote =
+    'Full shows your exact spot to everyone on the channel. The smaller '
+    'circles only share a blurred area. Everyone who has the channel sees '
+    'what you choose here for it.';
+
+/// null when [p] is a precision the radio takes (0-32).
+String? validatePrecision(int p) =>
+    p < 0 || p > 32 ? 'Pick a precision from 0 to 32.' : null;
+
+/// ChannelSettings.module_settings.position_precision of the raw
+/// `ChannelSettings` [settings] (0 when absent).
+int channelPrecisionOf(Uint8List settings) {
+  var v = 0;
+  for (final f in pbDecode(settings)) {
+    if (f.number == 7 && f.wireType == 2) {
+      for (final m in pbDecode(f.asBytes)) {
+        if (m.number == 1 && m.wireType == 0) v = m.asInt;
+      }
+    }
+  }
+  return v;
+}
+
+/// The raw `ChannelSettings` [settings] with only the position precision
+/// changed: the key, name, id, uplink / downlink and every other field
+/// (also ones this app does not know) are copied as the radio sent them.
+Uint8List patchChannelPrecision(Uint8List settings, int precision) {
+  final fields = pbDecode(settings);
+  final at = fields.indexWhere((f) => f.number == 7 && f.wireType == 2);
+  if (at < 0) {
+    if (precision == 0) return settings;
+    var pos = fields.length;
+    for (var i = 0; i < fields.length; i++) {
+      if (fields[i].number > 7) {
+        pos = i;
+        break;
+      }
+    }
+    final inner = patchVarints(Uint8List(0), {1: precision});
+    fields.insert(pos, PbField(7, 2, 0, inner));
+  }
+  final w = PbWriter();
+  var done = false;
+  for (final f in fields) {
+    if (f.number == 7 && f.wireType == 2) {
+      if (!done) {
+        w.message(7, patchVarints(f.asBytes, {1: precision}));
+        done = true;
+      }
+      continue;
+    }
+    w.raw(f);
+  }
+  return w.toBytes();
+}
+
 /// The message the user confirms before the region or speed changes.
 const radioConfirmText =
     'All radios in your group must use the same region and speed, or they '
@@ -219,6 +320,7 @@ class RadioSnapshot {
     this.lora,
     this.position,
     this.owner,
+    this.channelPrecisions = const {},
   });
 
   final int node;
@@ -226,6 +328,19 @@ class RadioSnapshot {
   final Uint8List? lora;
   final Uint8List? position;
   final Uint8List? owner;
+
+  /// Location precision of the channels that were read (slot -> value,
+  /// v2.5.7). Only the number is kept, never the channel's key.
+  final Map<int, int> channelPrecisions;
+
+  RadioSnapshot withPrecisions(Map<int, int> p) => RadioSnapshot(
+    node: node,
+    at: at,
+    lora: lora,
+    position: position,
+    owner: owner,
+    channelPrecisions: p,
+  );
 
   int? get region => rawInt(lora, 7);
   int? get preset => rawInt(lora, 2);
@@ -244,6 +359,8 @@ class RadioSnapshot {
     if (lora != null) 'lora': base64.encode(lora!),
     if (position != null) 'position': base64.encode(position!),
     if (owner != null) 'owner': base64.encode(owner!),
+    if (channelPrecisions.isNotEmpty)
+      'prec': {for (final e in channelPrecisions.entries) '${e.key}': e.value},
   };
 
   static RadioSnapshot? fromJson(Object? j) {
@@ -258,6 +375,12 @@ class RadioSnapshot {
         lora: b('lora'),
         position: b('position'),
         owner: b('owner'),
+        channelPrecisions: j['prec'] is Map
+            ? {
+                for (final e in (j['prec'] as Map).entries)
+                  int.parse('${e.key}'): (e.value as num).toInt(),
+              }
+            : const {},
       );
     } catch (_) {
       return null;
@@ -272,6 +395,8 @@ class RadioSnapshot {
     if (longName != null && longName!.isNotEmpty)
       'name $longName${(shortName ?? '').isEmpty ? '' : ' ($shortName)'}',
     if (sharing != null) 'location sharing ${sharing! ? 'on' : 'off'}',
+    if (channelPrecisions.isNotEmpty)
+      'location precision ${channelPrecisions.values.map(radioPrecisionText).join(', ')}',
   ].join(', ');
 }
 
@@ -318,6 +443,7 @@ class RadioChange {
     this.shortName,
     this.lora = const {},
     this.position = const {},
+    this.channelPrecision = const {},
     this.what = 'settings',
   });
 
@@ -329,13 +455,18 @@ class RadioChange {
   /// PositionConfig varint fields to set.
   final Map<int, int?> position;
 
+  /// Channel slot -> location precision to set on that channel (v2.5.7).
+  final Map<int, int> channelPrecision;
+
   /// "region", "speed", ... for the progress text.
   final String what;
 
   bool get touchesOwner => longName != null || shortName != null;
   bool get touchesLora => lora.isNotEmpty;
   bool get touchesPosition => position.isNotEmpty;
-  bool get isEmpty => !touchesOwner && !touchesLora && !touchesPosition;
+  bool get touchesChannels => channelPrecision.isNotEmpty;
+  bool get isEmpty =>
+      !touchesOwner && !touchesLora && !touchesPosition && !touchesChannels;
 
   /// The radio restarts for LoRa changes (and maybe others: the writer
   /// waits and asks again if it does not).
@@ -368,6 +499,16 @@ class RadioChange {
     what: 'location',
   );
 
+  /// Location precision [p] on channel [slot] only.
+  static RadioChange precisionOf(int slot, int p) =>
+      RadioChange(channelPrecision: {slot: p}, what: 'location precision');
+
+  /// Location precision [p] on each of [slots].
+  static RadioChange precisionAll(Iterable<int> slots, int p) => RadioChange(
+    channelPrecision: {for (final i in slots) i: p},
+    what: 'location precision',
+  );
+
   /// Put back what [b] had (only the fields this page changes, on top of
   /// what the radio has now).
   static RadioChange restore(RadioSnapshot b) => RadioChange(
@@ -386,6 +527,7 @@ class RadioChange {
     position: b.position == null
         ? const {}
         : {1: rawInt(b.position, 1), 2: rawInt(b.position, 2)},
+    channelPrecision: b.channelPrecisions,
     what: 'previous settings',
   );
 }
@@ -451,8 +593,30 @@ class RadioSettingsWriter {
       ? Future.value()
       : Future<void>.delayed(writeGap);
 
-  /// The radio's LoRa config, position config and owner as raw bytes.
-  Future<RadioSnapshot> read([MeshtasticSession? s0]) async {
+  /// Channel [index] as the radio sends it, or an error that says which
+  /// channel (never anything about its key).
+  Future<ChannelPb> _readChannel(MeshtasticSession s, int index) async {
+    final r = await _ask(
+      s,
+      AdminPb.getChannel(index),
+      (r) => r.channel != null && r.channel!.index == index,
+    );
+    final c = r?.channel;
+    if (c == null || c.rawSettings == null || c.role == 0) {
+      throw MeshWriteException(
+        'Your radio did not send channel ${index + 1}, so nothing was '
+        'changed.',
+      );
+    }
+    return c;
+  }
+
+  /// The radio's LoRa config, position config and owner as raw bytes, and
+  /// the location precision of the channel slots in [channels].
+  Future<RadioSnapshot> read([
+    MeshtasticSession? s0,
+    Iterable<int> channels = const [],
+  ]) async {
     final s = s0 ?? _ready();
     final lora = await _ask(
       s,
@@ -465,12 +629,21 @@ class RadioSettingsWriter {
       (r) => r.positionConfig != null,
     );
     final owner = await _ask(s, AdminPb.getOwner(), (r) => r.owner != null);
+    final prec = <int, int>{};
+    for (final i in channels) {
+      try {
+        prec[i] = (await _readChannel(s, i)).positionPrecision;
+      } on MeshWriteException {
+        // Not readable: the check afterwards says so.
+      }
+    }
     return RadioSnapshot(
       node: s.myNodeNum!,
       at: _clock(),
       lora: lora?.loraConfig,
       position: pos?.positionConfig,
       owner: owner?.owner,
+      channelPrecisions: prec,
     );
   }
 
@@ -507,6 +680,15 @@ class RadioSettingsWriter {
         'Your radio did not send its name, so nothing was changed.',
       );
     }
+    // The channels to change, as the radio has them now (their keys stay
+    // in memory only for this write).
+    final chans = <int, ChannelPb>{};
+    for (final i in change.channelPrecision.keys) {
+      if (validatePrecision(change.channelPrecision[i]!) != null) {
+        throw MeshWriteException('Pick a precision from 0 to 32.');
+      }
+      chans[i] = await _readChannel(s, i);
+    }
     // The last interval it had while sharing was on.
     var onSecs = previousBackup?.sharingSecs;
     var onSmart = previousBackup?.sharingSmart;
@@ -515,7 +697,11 @@ class RadioSettingsWriter {
       onSmart = before.positionSmart;
     }
     final backup = RadioBackup(
-      previous: before,
+      previous: chans.isEmpty
+          ? before
+          : before.withPrecisions({
+              for (final e in chans.entries) e.key: e.value.positionPrecision,
+            }),
       sharingSecs: onSecs,
       sharingSmart: onSmart,
     );
@@ -562,6 +748,19 @@ class RadioSettingsWriter {
         wantResponse: false,
       );
     }
+    for (final e in change.channelPrecision.entries) {
+      final c = chans[e.key]!;
+      await _gap();
+      await s.sendAdmin(
+        AdminPb.setChannel(
+          index: e.key,
+          settings: patchChannelPrecision(c.rawSettings!, e.value),
+          role: c.role,
+          passkey: key,
+        ),
+        wantResponse: false,
+      );
+    }
     await _gap();
     await s.sendAdmin(AdminPb.commitEdit(passkey: key), wantResponse: false);
     onStep?.call(MeshWriteStep.restarting);
@@ -571,7 +770,7 @@ class RadioSettingsWriter {
       change.expectReboot ? rebootWait : quickWait,
     );
     onStep?.call(MeshWriteStep.verifying);
-    final now = await read(after);
+    final now = await read(after, change.channelPrecision.keys);
     final bad = verify(change, now);
     if (bad.isNotEmpty) {
       throw MeshWriteException(
@@ -608,6 +807,11 @@ class RadioSettingsWriter {
         (e) => rawInt(now.position, e.key) != (e.value ?? 0),
       )) {
         bad.add('location sharing');
+      }
+    }
+    for (final e in c.channelPrecision.entries) {
+      if (now.channelPrecisions[e.key] != e.value) {
+        bad.add('the location precision of channel ${e.key + 1}');
       }
     }
     if (c.touchesOwner) {

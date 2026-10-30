@@ -87,6 +87,12 @@ class Fw implements MeshtasticWire {
   int commits = 0;
   bool _open = false;
   Uint8List? _pLora, _pPos, _pOwner;
+
+  /// Channel slot -> the raw `Channel` (v2.5.7). Sent in the config
+  /// download, answered to get_channel, changed by set_channel + commit.
+  final channels = <int, Uint8List>{};
+  final _pChannels = <int, Uint8List>{};
+  final sentChannels = <int, Uint8List>{};
   final _queue = <Uint8List>[];
   final _notify = StreamController<void>.broadcast();
 
@@ -109,6 +115,9 @@ class Fw implements MeshtasticWire {
     );
     _push((w) => w.message(5, (PbWriter()..message(6, lora)).toBytes()));
     _push((w) => w.message(5, (PbWriter()..message(2, position)).toBytes()));
+    for (final e in channels.entries) {
+      _push((w) => w.message(10, e.value));
+    }
     _push((w) => w.uint(7, nonce));
   }
 
@@ -145,12 +154,31 @@ class Fw implements MeshtasticWire {
       (f) => f.number == 101 && f.asBytes.length == passkey.length,
     );
     final first = fields.firstWhere((f) => f.number != 101);
-    final isSet = {32, 34, 64, 65}.contains(first.number);
+    final isSet = {32, 33, 34, 64, 65}.contains(first.number);
     if (isSet && requireKey && !hasKey) {
       log.add('REJECTED:${first.number}');
       return;
     }
     switch (first.number) {
+      case 1:
+        final slot = first.asInt - 1;
+        log.add('get:channel$slot');
+        _reply(
+          (w) => w.message(
+            2,
+            channels[slot] ?? (PbWriter()..uint(1, slot)).toBytes(),
+          ),
+        );
+      case 33:
+        final slot =
+            pbDecode(first.asBytes)
+                .where((f) => f.number == 1)
+                .map((f) => f.asInt)
+                .firstOrNull ??
+            0;
+        log.add('set_channel$slot');
+        sentChannels[slot] = Uint8List.fromList(first.asBytes);
+        _pChannels[slot] = sentChannels[slot]!;
       case 3:
         log.add('get:owner');
         _reply((w) => w.message(4, owner));
@@ -172,6 +200,7 @@ class Fw implements MeshtasticWire {
         log.add('begin');
         _open = true;
         _pLora = _pPos = _pOwner = null;
+        _pChannels.clear();
       case 32:
         log.add('set_owner');
         sentOwner = Uint8List.fromList(first.asBytes);
@@ -205,6 +234,7 @@ class Fw implements MeshtasticWire {
           if (_pLora != null) lora = _pLora!;
           if (_pPos != null) position = _pPos!;
           if (_pOwner != null) owner = _pOwner!;
+          channels.addAll(_pChannels);
         }
         if (rebootOnCommit && _pLora != null) {
           _push((w) => w.boolean(8, true));
