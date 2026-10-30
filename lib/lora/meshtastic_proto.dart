@@ -493,6 +493,8 @@ class RadioConfigPb {
     this.txEnabled,
     this.btMode,
     this.fixedPin,
+    this.positionSecs,
+    this.positionSmart,
   });
   final int? region;
   final int? modemPreset;
@@ -508,6 +510,11 @@ class RadioConfigPb {
   /// 0 = random PIN (shown on screen), 1 = fixed PIN, 2 = no PIN.
   final int? btMode;
   final int? fixedPin;
+
+  /// PositionConfig.position_broadcast_secs (1) / ..._smart_enabled (2),
+  /// v2.5.3 (null when this Config is not the position one).
+  final int? positionSecs;
+  final bool? positionSmart;
 
   static RadioConfigPb? decode(Uint8List b) {
     for (final f in pbDecode(b)) {
@@ -539,6 +546,14 @@ class RadioConfigPb {
           hopLimit: hop,
           txEnabled: tx,
         );
+      }
+      if (f.number == 2) {
+        var secs = 0, smart = false;
+        for (final l in pbDecode(f.asBytes)) {
+          if (l.number == 1) secs = l.asInt;
+          if (l.number == 2) smart = l.asBool;
+        }
+        return RadioConfigPb(positionSecs: secs, positionSmart: smart);
       }
       if (f.number == 7) {
         var mode = 0, pin = 0;
@@ -673,13 +688,36 @@ class FromRadio {
   }
 }
 
-/// Region names for the settings screen.
+/// Region names for the settings screen (all of Config.LoRaConfig
+/// .RegionCode, v2.5.3).
 String regionName(int code) => switch (code) {
   0 => 'not set',
   1 => 'US 915',
   2 => 'EU 433',
   3 => 'EU 868',
+  4 => 'CN',
+  5 => 'JP',
   6 => 'ANZ',
+  7 => 'KR',
+  8 => 'TW',
+  9 => 'RU',
+  10 => 'IN',
+  11 => 'NZ 865',
+  12 => 'TH',
+  13 => '2.4 GHz',
+  14 => 'UA 433',
+  15 => 'UA 868',
+  16 => 'MY 433',
+  17 => 'MY 919',
+  18 => 'SG 923',
+  19 => 'PH 433',
+  20 => 'PH 868',
+  21 => 'PH 915',
+  22 => 'ANZ 433',
+  23 => 'KZ 433',
+  24 => 'KZ 863',
+  25 => 'NP 865',
+  26 => 'BR 902',
   _ => 'region $code',
 };
 

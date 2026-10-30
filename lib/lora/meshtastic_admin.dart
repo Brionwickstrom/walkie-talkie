@@ -8,13 +8,15 @@ import 'protobuf.dart';
 
 /// `AdminMessage` (admin.proto) for our own radio (v1.9.7):
 /// get_channel_request=1 (index + 1), get_channel_response=2,
+/// get_owner_request=3, get_owner_response=4 (User, v2.5.3),
 /// get_config_request=5 (ConfigType), get_config_response=6,
-/// set_channel=33, set_config=34, begin_edit_settings=64,
-/// commit_edit_settings=65, session_passkey=101 (from any get reply, valid
-/// 300 s, sent back with every set).
+/// set_owner=32 (User), set_channel=33, set_config=34,
+/// begin_edit_settings=64, commit_edit_settings=65, session_passkey=101
+/// (from any get reply, valid 300 s, sent back with every set).
 class AdminPb {
   AdminPb._();
 
+  static const configPosition = 1; // POSITION_CONFIG
   static const configLora = 5; // AdminMessage.ConfigType.LORA_CONFIG
   static const configSessionKey = 8; // SESSIONKEY_CONFIG
 
@@ -27,6 +29,19 @@ class AdminPb {
 
   static Uint8List getConfig(int type) =>
       _with((w) => w.uint(5, type, always: true), null);
+
+  static Uint8List getOwner() => _with((w) => w.boolean(3, true), null);
+
+  /// set_owner: the whole `User` (the radio only takes the names and the
+  /// licensed flag from it, so the rest is sent back as it was read).
+  static Uint8List setOwner(Uint8List user, {List<int>? passkey}) =>
+      _with((w) => w.message(32, user), passkey);
+
+  /// set_config: Config{position: [position]} (v2.5.3).
+  static Uint8List setPositionConfig(Uint8List position, {List<int>? passkey}) {
+    final cfg = (PbWriter()..message(2, position)).toBytes();
+    return _with((w) => w.message(34, cfg), passkey);
+  }
 
   static Uint8List getChannel(int index) =>
       _with((w) => w.uint(1, index + 1), null);
@@ -61,16 +76,28 @@ class AdminPb {
 
 /// A decoded answer from our radio's admin module.
 class AdminReply {
-  AdminReply({this.passkey, this.loraConfig, this.channel});
+  AdminReply({
+    this.passkey,
+    this.loraConfig,
+    this.channel,
+    this.positionConfig,
+    this.owner,
+  });
   final Uint8List? passkey;
 
   /// get_config_response.lora (raw LoRaConfig).
   final Uint8List? loraConfig;
+
+  /// get_config_response.position (raw PositionConfig), v2.5.3.
+  final Uint8List? positionConfig;
+
+  /// get_owner_response (raw User), v2.5.3.
+  final Uint8List? owner;
   final ChannelPb? channel;
 
   static AdminReply? tryDecode(Uint8List b) {
     try {
-      Uint8List? key, lora;
+      Uint8List? key, lora, pos, owner;
       ChannelPb? ch;
       for (final f in pbDecode(b)) {
         if (f.number == 101 && f.wireType == 2) {
@@ -79,13 +106,23 @@ class AdminReply {
           for (final c in pbDecode(f.asBytes)) {
             if (c.number == 6 && c.wireType == 2) {
               lora = Uint8List.fromList(c.asBytes);
+            } else if (c.number == 2 && c.wireType == 2) {
+              pos = Uint8List.fromList(c.asBytes);
             }
           }
+        } else if (f.number == 4 && f.wireType == 2) {
+          owner = Uint8List.fromList(f.asBytes);
         } else if (f.number == 2 && f.wireType == 2) {
           ch = ChannelPb.decode(f.asBytes);
         }
       }
-      return AdminReply(passkey: key, loraConfig: lora, channel: ch);
+      return AdminReply(
+        passkey: key,
+        loraConfig: lora,
+        channel: ch,
+        positionConfig: pos,
+        owner: owner,
+      );
     } on PbFormatException {
       return null;
     } on RangeError {

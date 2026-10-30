@@ -100,6 +100,11 @@ class MeshtasticSession {
   int? hopLimit;
   bool? txEnabled;
 
+  /// PositionConfig (v2.5.3): how often the radio broadcasts its position
+  /// (4294967295 = never) and smart broadcast. Null until downloaded.
+  int? positionSecs;
+  bool? positionSmart;
+
   /// The radio's channels by slot (v1.9.7), keys dropped
   /// ([MeshRadioChannel] keeps only their kind and hash part).
   final Map<int, MeshRadioChannel> channels = {};
@@ -295,6 +300,10 @@ class MeshtasticSession {
         hopLimit = c.hopLimit;
         txEnabled = c.txEnabled;
       }
+      if (c.positionSecs != null) {
+        positionSecs = c.positionSecs;
+        positionSmart = c.positionSmart;
+      }
       if (c.btMode != null) {
         pairingMode = c.btMode;
         fixedPin = c.fixedPin;
@@ -419,12 +428,9 @@ class MeshtasticSession {
       id: id,
       wantAck: wantAck,
       // The radio's own hop limit (Meshtastic repeats it that many
-      // times); 3 is the firmware default.
-      hopLimit: hopLimitOverride > 0
-          ? hopLimitOverride
-          : (hopLimit ?? 0) > 0
-          ? hopLimit!
-          : 3,
+      // times; 0 = not repeated, v2.5.3); 3 is the firmware default
+      // until the radio has told us.
+      hopLimit: hopLimitOverride > 0 ? hopLimitOverride : (hopLimit ?? 3),
       priority: priority,
       decoded: MeshData(
         portnum: port,

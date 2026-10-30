@@ -52,6 +52,7 @@ import '../lora/lora_transport.dart';
 import '../lora/meshtastic_ble.dart';
 import '../lora/meshtastic_admin.dart';
 import '../lora/meshtastic_channels.dart';
+import '../lora/meshtastic_settings.dart';
 import '../lora/radio_clip.dart';
 import '../messaging/inbox.dart';
 import '../messaging/messenger.dart';
@@ -3199,6 +3200,76 @@ class WalkieController extends ChangeNotifier {
 
   MeshChannelWriter meshWriter() =>
       MeshChannelWriter(() => radioDevice.session);
+
+  // ------------------------------------------- radio settings (v2.5.3)
+
+  /// Writer for the basic radio settings; tests replace it with short
+  /// waits.
+  late RadioSettingsWriter Function() radioSettingsWriterFactory = () =>
+      RadioSettingsWriter(() => radioDevice.session);
+
+  /// A talk burst is on (ours or someone else's): the radio is busy and
+  /// restarts when settings change, so edits wait.
+  bool get radioEditBlocked =>
+      transmitting || manager.peers.any((p) => p.talking);
+
+  /// A radio settings change is being written now.
+  bool radioEditing = false;
+
+  /// The settings saved before the last change, if any (and for this
+  /// radio).
+  RadioBackup? get radioBackup {
+    final b = RadioBackup.tryDecode(settings.radioBackup);
+    final me = radioDevice.session?.myNodeNum;
+    if (b == null || (me != null && b.previous.node != me)) return null;
+    return b;
+  }
+
+  /// Put [change] on the paired radio. Null when it was saved and read
+  /// back, else the plain reason. The previous settings are stored first.
+  Future<String?> changeRadioSettings(
+    RadioChange change, {
+    void Function(MeshWriteStep step)? onStep,
+  }) async {
+    if (radioEditing) return 'Another change is still being saved.';
+    if (radioEditBlocked) {
+      return 'A talk is going on. Try again when it is over.';
+    }
+    radioEditing = true;
+    notifyListeners();
+    try {
+      await radioSettingsWriterFactory().apply(
+        change,
+        previousBackup: radioBackup,
+        saveBackup: (b) async {
+          settings.radioBackup = b.encode();
+          await settingsStore.save(settings);
+        },
+        onStep: onStep,
+      );
+      debugLog.add('radio', 'settings saved: ${change.what}');
+      return null;
+    } on MeshWriteException catch (e) {
+      debugLog.add('radio', 'settings failed: ${e.message}');
+      return e.message;
+    } catch (e) {
+      debugLog.add('radio', 'settings failed: $e');
+      return 'Your radio did not take the change.';
+    } finally {
+      radioEditing = false;
+      notifyListeners();
+    }
+  }
+
+  /// "Restore previous settings": writes back what was saved before the
+  /// last change.
+  Future<String?> restoreRadioSettings({
+    void Function(MeshWriteStep step)? onStep,
+  }) async {
+    final b = radioBackup;
+    if (b == null) return 'There is nothing saved to restore.';
+    return changeRadioSettings(RadioChange.restore(b.previous), onStep: onStep);
+  }
 
   /// Link open Walkie channel [ch] to [ref]; [name] names a new channel
   /// ("Shared with Meshtastic" when the user made one). Null when done,

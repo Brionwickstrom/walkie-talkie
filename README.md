@@ -1525,6 +1525,41 @@ Tests: `test/v195_gateway_test.dart`, `test/v195_quiet_test.dart`.
 Tests: `test/v197_meshtastic_import_test.dart` (vectors from the official
 apps and the Python library), `test/v195_quiet_test.dart`.
 
+## v2.5.3: Radio settings page
+
+Settings > Long-range radio > **Radio settings** (above Meshtastic channels)
+opens a page on phones and a dialog on wide screens. A read-only summary at
+the top shows the radio, its names, region, speed, hop limit and location
+sharing. With no radio connected the page is disabled with one plain line.
+
+- **Name:** long name and short name (up to 4 characters, validated).
+- **Hop limit:** 0-7, with a note that more hops use more airtime for everyone.
+  The app's own sends now honour hop 0.
+- **Location sharing:** the radio's own position broadcast, on or off. Off sets
+  the timed interval to "never" and turns smart broadcast off; on puts back the
+  interval it had. The app does not send this phone's GPS to the radio. A radio
+  can still send one position when it starts.
+- **Region and speed:** the full region list and the speed presets. Each change
+  asks first: "All radios in your group must use the same region and speed, or
+  they can't hear each other. Region must match where you are by law."
+- **Safety:** before any write the radio's LoRa config (and owner, hop and
+  position values) is saved in app storage (`radio_backup`). The LoRa config is
+  copied byte for byte and only the chosen fields change. After the write the
+  app waits for the radio to restart, reconnects, reads it back and shows
+  "Saved" or a plain failure with **Restore previous settings** (same confirm).
+  Restore writes back only this page's fields, so changes made elsewhere stay.
+- Writes are batched (begin/commit edit settings) with the session passkey.
+  Edits are blocked while anyone is talking. No background traffic or timers;
+  the page reads nothing from the radio when it opens.
+- Stays in the Meshtastic app: factory reset, reboot, firmware, security keys,
+  the main channel name/key, Wi-Fi/MQTT, modules, display, role, position
+  precision and intervals, transmit power, custom speed.
+- The "Region is not set" warning now links to this page. The short region
+  names now cover all firmware codes (0-26).
+
+Not tested on a real RAK radio: tests use a fake firmware that checks the
+admin messages. Tests: `test/v253_radio_settings_test.dart`.
+
 ## v2.5.2: weather alerts stage 2 (relay push + LoRa backup)
 
 Stage 1 (v2.5.0) reads the National Weather Service. Stage 2 lets a phone or PC

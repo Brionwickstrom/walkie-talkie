@@ -66,6 +66,7 @@ class AppSettings {
     this.wxExtremeSound = false,
     this.wxShare = true,
     Map<String, String>? wxTrusted,
+    this.radioBackup,
     this.joinAlertPrivate = true,
     this.joinAlertPublic = false,
     this.shareRadio = true,
@@ -251,6 +252,11 @@ class AppSettings {
   /// Devices whose weather alerts are trusted anywhere (v2.5.2): the key
   /// id (what the friend's phone shows) -> the name it had when trusted.
   final Map<String, String> wxTrusted;
+
+  /// The paired radio's settings as they were before the last change on
+  /// Radio settings (v2.5.3), for "Restore previous settings". JSON, see
+  /// RadioBackup; null = nothing saved.
+  String? radioBackup;
 
   /// Paired Meshtastic LoRa radio (Bluetooth id / name), v1.7.0.
   String? radioId;
@@ -468,6 +474,7 @@ class SharedPrefsSettingsStore implements SettingsStore {
   static const _kWxExtreme = 'wx_extreme_sound';
   static const _kWxShare = 'wx_share';
   static const _kWxTrusted = 'wx_trusted';
+  static const _kRadioBackup = 'radio_backup';
   static const _kJoinPrivate = 'join_alert_private';
   static const _kJoinPublic = 'join_alert_public';
   static const _kShareRadio = 'share_radio';
@@ -553,6 +560,7 @@ class SharedPrefsSettingsStore implements SettingsStore {
       wxExtremeSound: prefs?.getBool(_kWxExtreme) ?? false,
       wxShare: prefs?.getBool(_kWxShare) ?? true,
       wxTrusted: _decodeTrusted(prefs?.getString(_kWxTrusted)),
+      radioBackup: prefs?.getString(_kRadioBackup),
       joinAlertPrivate: prefs?.getBool(_kJoinPrivate) ?? true,
       joinAlertPublic: prefs?.getBool(_kJoinPublic) ?? false,
       shareRadio: prefs?.getBool(_kShareRadio) ?? true,
@@ -607,6 +615,11 @@ class SharedPrefsSettingsStore implements SettingsStore {
       await prefs.setBool(_kWxExtreme, s.wxExtremeSound);
       await prefs.setBool(_kWxShare, s.wxShare);
       await prefs.setString(_kWxTrusted, jsonEncode(s.wxTrusted));
+      if (s.radioBackup == null) {
+        await prefs.remove(_kRadioBackup);
+      } else {
+        await prefs.setString(_kRadioBackup, s.radioBackup!);
+      }
       await prefs.setBool(_kJoinPrivate, s.joinAlertPrivate);
       await prefs.setBool(_kJoinPublic, s.joinAlertPublic);
       await prefs.setBool(_kShareRadio, s.shareRadio);

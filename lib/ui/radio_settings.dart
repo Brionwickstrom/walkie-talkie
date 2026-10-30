@@ -8,6 +8,7 @@ import '../lora/meshtastic_session.dart';
 import '../lora/stream_radio.dart';
 import '../platform/platform_caps.dart';
 import 'mesh_channels.dart';
+import 'radio_settings_page.dart';
 import 'radios_nearby_page.dart';
 
 /// How to pair, shown before and while pairing.
@@ -55,7 +56,7 @@ List<String> radioDetailLines(MeshtasticSession s, {int appPhones = 0}) {
   if (r != null) {
     out.add(
       'Region ${regionName(r)} · ${presetName(s.modemPreset ?? 0)}'
-      ' · hop limit ${(s.hopLimit ?? 0) > 0 ? s.hopLimit : 3}',
+      ' · hop limit ${s.hopLimit ?? 3}',
     );
   }
   final ch = s.primaryChannelName;
@@ -68,8 +69,8 @@ List<String> radioDetailLines(MeshtasticSession s, {int appPhones = 0}) {
 /// Problems the user should fix in the official Meshtastic app.
 List<String> radioWarnings(MeshtasticSession s) => [
   if (s.region == 0)
-    'Region is not set: the radio will not transmit. Set it to US in the '
-        'Meshtastic app (Radio config > LoRa).',
+    'Region is not set: the radio will not transmit. Set it in Radio '
+        'settings (below), or in the Meshtastic app (Radio config > LoRa).',
   if (s.txEnabled == false && s.region != null && s.region != 0)
     'Transmit is turned off on this radio (LoRa > Transmit enabled).',
   if (s.primaryUsesDefaultKey == true)
@@ -289,6 +290,19 @@ class _RadioSettingsState extends State<RadioSettings> {
                   ),
                 ),
               );
+              // v2.5.3: the region fix lives here now.
+              if (w.startsWith('Region is not set')) {
+                children.add(
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton(
+                      key: const Key('radioFixRegion'),
+                      onPressed: () => openRadioSettings(context, c),
+                      child: const Text('Set the region in Radio settings'),
+                    ),
+                  ),
+                );
+              }
             }
           }
           if (!c.radioVoiceSupported) {
@@ -364,6 +378,25 @@ class _RadioSettingsState extends State<RadioSettings> {
             ),
           );
         }
+        // v2.5.3: the basics of the radio, without the Meshtastic app.
+        final rsBlocked = !c.radioPaired || s == null || !dev.ready;
+        children.addAll([
+          const SizedBox(height: 8),
+          ListTile(
+            key: const Key('radioSettingsRow'),
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.tune),
+            title: const Text('Radio settings'),
+            subtitle: Text(
+              rsBlocked
+                  ? 'Connect your radio first.'
+                  : 'Name, hop limit, location sharing, region and speed.',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            enabled: !rsBlocked,
+            onTap: rsBlocked ? null : () => openRadioSettings(context, c),
+          ),
+        ]);
         // v1.9.7: Meshtastic channels shared with Walkie channels.
         children.add(MeshChannelsSection(controller: c));
         return Column(
