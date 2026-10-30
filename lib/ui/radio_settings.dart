@@ -8,6 +8,7 @@ import '../lora/meshtastic_session.dart';
 import '../lora/stream_radio.dart';
 import '../platform/platform_caps.dart';
 import 'mesh_channels.dart';
+import 'radios_nearby_page.dart';
 
 /// How to pair, shown before and while pairing.
 const radioPinHelp =
@@ -242,7 +243,32 @@ class _RadioSettingsState extends State<RadioSettings> {
           }
           if (s != null) {
             for (final l in radioDetailLines(s, appPhones: c.radioPeers)) {
-              children.add(Text(l, style: theme.textTheme.bodySmall));
+              if (l.startsWith('Meshtastic nodes heard')) {
+                // v2.4.2: opens Radios nearby.
+                children.add(
+                  InkWell(
+                    key: const Key('radiosNearbyLine'),
+                    onTap: () => openRadiosNearby(context, c),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(l, style: theme.textTheme.bodySmall),
+                          ),
+                          Icon(
+                            Icons.chevron_right,
+                            size: 18,
+                            color: cs.outline,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              } else {
+                children.add(Text(l, style: theme.textTheme.bodySmall));
+              }
             }
             final q = c.loraTransport.queued;
             if (q > 0) {

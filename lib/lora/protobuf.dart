@@ -101,6 +101,7 @@ class PbField {
   int get asInt32 => _int.toSigned(32);
   bool get asBool => _int != 0;
   int get asFixed32 => _int & 0xFFFFFFFF;
+  int get asSFixed32 => (_int & 0xFFFFFFFF).toSigned(32);
   double get asFloat {
     final d = ByteData(4)..setUint32(0, _int & 0xFFFFFFFF, Endian.little);
     return d.getFloat32(0, Endian.little);

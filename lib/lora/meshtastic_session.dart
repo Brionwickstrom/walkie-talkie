@@ -28,6 +28,27 @@ class RadioNode {
   int? hopsAway;
   int? battery;
   DateTime? lastHeard;
+
+  /// RSSI (dBm) of the last packet heard from it, 0 = unknown.
+  int rssi = 0;
+
+  /// Where it shares its position (v2.4.2), null if it does not.
+  double? lat, lng;
+
+  /// The radio's channel slot it was heard on (decoded traffic only).
+  int? channel;
+  int hwModel = 0;
+  int role = 0;
+
+  /// The radio knows who it is (a decoded NodeInfo).
+  bool hasInfo = false;
+
+  /// We have read at least one packet from it (so its channel is one we
+  /// have the key for).
+  bool decodedHeard = false;
+
+  /// Readable: named by a NodeInfo or heard on a channel we can decode.
+  bool get readable => hasInfo || decodedHeard;
 }
 
 /// What a received LoRa packet looked like on air.
@@ -161,6 +182,11 @@ class MeshtasticSession {
     return 0;
   }
 
+  /// Other nodes we only know as a number and a signal (heard on a channel
+  /// we cannot decode, no NodeInfo).
+  int get unreadableCount =>
+      nodes.values.where((n) => n.num != myNodeNum && !n.readable).length;
+
   /// Other nodes in the radio's DB.
   int get nodeCount => nodes.keys.where((n) => n != myNodeNum).length;
 
@@ -235,6 +261,17 @@ class MeshtasticSession {
       if (n.shortName.isNotEmpty) node.shortName = n.shortName;
       node.snr = n.snr;
       node.hopsAway = n.hopsAway;
+      if (n.hasUser) {
+        node.hasInfo = true;
+        node.hwModel = n.hwModel;
+        node.role = n.role;
+        if (n.channel != null) node.channel = n.channel;
+      }
+      final pos = n.position;
+      if (pos != null) {
+        node.lat = pos.lat;
+        node.lng = pos.lng;
+      }
       if (n.lastHeard > 0) {
         node.lastHeard = DateTime.fromMillisecondsSinceEpoch(
           n.lastHeard * 1000,
@@ -336,8 +373,25 @@ class MeshtasticSession {
     final node = nodes.putIfAbsent(p.from, () => RadioNode(p.from));
     node.lastHeard = now;
     if (p.rxSnr != 0) node.snr = p.rxSnr;
+    if (p.rxRssi != 0) node.rssi = p.rxRssi;
     if (p.hopsAway != null) node.hopsAway = p.hopsAway;
     if (d == null) return true; // not for our channel key
+    node.decodedHeard = true;
+    node.channel = p.channel;
+    // Position and battery the node itself sent on a channel we read: free
+    // information, nothing is asked for.
+    try {
+      if (d.portnum == PortNum.position) {
+        final pos = PositionPb.decode(d.payload);
+        if (pos != null) {
+          node.lat = pos.lat;
+          node.lng = pos.lng;
+        }
+      } else if (d.portnum == PortNum.telemetry) {
+        final dm = decodeTelemetryDeviceMetrics(d.payload);
+        if (dm?.batteryLevel != null) node.battery = dm!.batteryLevel;
+      }
+    } catch (_) {}
     received++;
     if (!_packets.isClosed) _packets.add(p);
     return true;

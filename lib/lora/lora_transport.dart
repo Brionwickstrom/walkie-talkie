@@ -102,7 +102,22 @@ class _Queued {
 
 /// Signal of the last LoRa packet heard from an app phone.
 class LoraPeerSignal {
-  LoraPeerSignal(this.node, this.snr, this.rssi, this.hopsAway, this.at);
+  LoraPeerSignal(
+    this.node,
+    this.snr,
+    this.rssi,
+    this.hopsAway,
+    this.at, {
+    this.slot = 0,
+    this.frameChannel = 0,
+    this.sealed = false,
+  });
+
+  /// The radio's channel slot it came in on, the frame's channel field
+  /// (an open channel number, or a key tag when [sealed]) (v2.4.2).
+  final int slot;
+  final int frameChannel;
+  final bool sealed;
 
   /// Meshtastic node number of that phone's radio.
   final int node;
@@ -252,6 +267,9 @@ class LoraTransport extends Transport {
       p.rxRssi,
       p.hopsAway,
       _clock(),
+      slot: p.channel,
+      frameChannel: f.channel,
+      sealed: f.type == FrameType.sealed,
     );
     if (!_frames.isClosed) {
       _frames.add(

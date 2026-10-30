@@ -1525,6 +1525,38 @@ Tests: `test/v195_gateway_test.dart`, `test/v195_quiet_test.dart`.
 Tests: `test/v197_meshtastic_import_test.dart` (vectors from the official
 apps and the Python library), `test/v195_quiet_test.dart`.
 
+## v2.4.2: Radios nearby
+
+Settings > Long-range radio (Meshtastic): the "Meshtastic nodes heard: N" line
+now has a chevron and opens **Radios nearby**, a page on phones and a dialog on
+wide screens (like Messages). Nothing else changes.
+
+- **Each radio the paired radio has heard**, newest first: long name (and short
+  name), last heard, SNR and RSSI where known, "direct" or N hops, battery,
+  hardware model and role if the radio told us, and the distance (from our own
+  radio's position, else the phone's last Trip fix; GPS is never started for
+  this). No position shared, no distance.
+- **Walkie people are marked.** A radio whose node number matches a phone seen
+  over the radio (`LoraTransport.peerSignals`) shows the Walkie name with a
+  small "Walkie" tag.
+- **Channel heard on**, in the app's wording: amber open lock "Open channel",
+  group-coloured lock "Private group <name>", or the radio channel's name for
+  other readable channels (for example "LongFast (Meshtastic default)").
+- **Radios we cannot read** (a number and a signal but no NodeInfo, no readable
+  packet) are not listed: one line "Other channel, can't read: N".
+- "This radio" header with our own name and battery. Plain empty state.
+- **Decoding:** `NodeInfoPb` now reads position, channel index, hardware model
+  and role; `RadioNode` keeps RSSI, position, channel and whether anything was
+  readable from it (decoded position and telemetry packets update it for free).
+  `LoraPeerSignal` also records the radio slot and sealed key tag so a private
+  group is told apart from the open channel.
+- **Zero extra battery:** no pings, NodeInfo/position requests, traceroute or
+  public channel; no timers or polling. The page redraws only while open, when
+  the radio already sent something.
+
+Tests: `test/v242_radios_test.dart` (decoding, Walkie match, channel labels,
+unreadable count, distance, sorting, Settings line, page, dialog, no writes).
+
 ## v2.4.1: Gentle routes: trails count for real, better steepness math
 
 Two accuracy fixes to the Gentle compass route (the terrain-only line over the

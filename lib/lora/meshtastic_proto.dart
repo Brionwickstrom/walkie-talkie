@@ -291,8 +291,28 @@ DeviceMetricsPb? decodeTelemetryDeviceMetrics(Uint8List b) {
   return null;
 }
 
+/// `Position` (mesh.proto): latitude_i=1, longitude_i=2 (sfixed32, degrees
+/// x 1e7), altitude=3. A (0, 0) fix means "no position".
+class PositionPb {
+  PositionPb(this.lat, this.lng);
+  final double lat, lng;
+
+  static PositionPb? decode(Uint8List b) {
+    var la = 0, lo = 0;
+    for (final f in pbDecode(b)) {
+      if (f.wireType != 5) continue;
+      if (f.number == 1) la = f.asSFixed32;
+      if (f.number == 2) lo = f.asSFixed32;
+    }
+    if (la == 0 && lo == 0) return null;
+    if (la.abs() > 900000000 || lo.abs() > 1800000000) return null;
+    return PositionPb(la / 1e7, lo / 1e7);
+  }
+}
+
 /// `NodeInfo`: num=1, user=2 (User: id=1, long_name=2, short_name=3,
-/// hw_model=5), snr=4, last_heard=5, device_metrics=6, hops_away=9.
+/// hw_model=5, role=7), position=3, snr=4, last_heard=5, device_metrics=6,
+/// channel=7, hops_away=9.
 class NodeInfoPb {
   NodeInfoPb({
     required this.num,
@@ -300,32 +320,51 @@ class NodeInfoPb {
     this.longName = '',
     this.shortName = '',
     this.hwModel = 0,
+    this.role = 0,
+    this.hasUser = false,
     this.snr = 0,
     this.lastHeard = 0,
     this.metrics,
     this.hopsAway,
+    this.position,
+    this.channel,
   });
   final int num;
   final String userId;
   final String longName;
   final String shortName;
   final int hwModel;
+
+  /// Config.DeviceConfig.Role of the node (0 = plain client).
+  final int role;
+
+  /// The radio knew who this is (a decoded NodeInfo), not just a number.
+  final bool hasUser;
   final double snr;
   final int lastHeard;
   final DeviceMetricsPb? metrics;
   final int? hopsAway;
 
+  /// Where the node shares its position, null if it does not.
+  final PositionPb? position;
+
+  /// Channel slot the node was heard on (NodeInfo.channel).
+  final int? channel;
+
   static NodeInfoPb decode(Uint8List b) {
-    var num = 0, hw = 0, last = 0;
-    int? hops;
+    var num = 0, hw = 0, last = 0, role = 0;
+    int? hops, channel;
     var snr = 0.0;
     var id = '', long = '', short = '';
+    var user = false;
     DeviceMetricsPb? m;
+    PositionPb? pos;
     for (final f in pbDecode(b)) {
       switch (f.number) {
         case 1:
           num = f.asInt & 0xFFFFFFFF;
         case 2:
+          user = true;
           for (final u in pbDecode(f.asBytes)) {
             switch (u.number) {
               case 1:
@@ -336,14 +375,20 @@ class NodeInfoPb {
                 short = u.asString;
               case 5:
                 hw = u.asInt;
+              case 7:
+                role = u.asInt;
             }
           }
+        case 3:
+          if (f.wireType == 2) pos = PositionPb.decode(f.asBytes);
         case 4:
           snr = f.asFloat;
         case 5:
           last = f.asFixed32;
         case 6:
           m = DeviceMetricsPb.decode(f.asBytes);
+        case 7:
+          channel = f.asInt;
         case 9:
           hops = f.asInt;
       }
@@ -354,13 +399,52 @@ class NodeInfoPb {
       longName: long,
       shortName: short,
       hwModel: hw,
+      role: role,
+      hasUser: user,
       snr: snr,
       lastHeard: last,
       metrics: m,
       hopsAway: hops,
+      position: pos,
+      channel: channel,
     );
   }
 }
+
+/// Hardware names the Radios nearby page shows (`HardwareModel`); anything
+/// else is left out rather than shown as a number.
+String? meshHardwareName(int code) => switch (code) {
+  4 => 'T-Beam',
+  7 => 'T-Echo',
+  9 => 'RAK4631',
+  12 => 'T-Beam S3',
+  43 => 'Heltec V3',
+  48 => 'Heltec Wireless Tracker',
+  50 => 'T-Deck',
+  69 => 'Heltec T114',
+  71 => 'SenseCAP T1000-E',
+  81 => 'XIAO S3',
+  84 => 'WisMesh Tap',
+  94 => 'Heltec Mesh Pocket',
+  _ => null,
+};
+
+/// Role names for the Radios nearby page; null for a plain client (not
+/// worth a word).
+String? meshRoleName(int code) => switch (code) {
+  1 => 'Muted client',
+  2 => 'Router',
+  3 => 'Router client',
+  4 => 'Repeater',
+  5 => 'Tracker',
+  6 => 'Sensor',
+  7 => 'TAK',
+  9 => 'Lost and found',
+  10 => 'TAK tracker',
+  11 => 'Router (late)',
+  12 => 'Base client',
+  _ => null,
+};
 
 /// `QueueStatus`: res=1, free=2, maxlen=3, mesh_packet_id=4.
 class QueueStatusPb {
