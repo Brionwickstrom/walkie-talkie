@@ -1525,6 +1525,42 @@ Tests: `test/v195_gateway_test.dart`, `test/v195_quiet_test.dart`.
 Tests: `test/v197_meshtastic_import_test.dart` (vectors from the official
 apps and the Python library), `test/v195_quiet_test.dart`.
 
+## v2.5.5: newer satellite imagery everywhere
+
+The **Satellite** and **Satellite + roads and names** map styles now show the
+newest free aerial photos, picked by place. Still one Satellite choice (same
+style ids, so saved settings and old offline areas keep working).
+
+- **Oregon:** Oregon Statewide Imagery Program 2024 (1 ft, summer 2024) from
+  `imagery.oregonexplorer.info` (`OSIP_2024_WM` ImageServer `exportImage`, one
+  Web Mercator 256 px tile per request with `{bbox}`).
+- **Rest of the US:** live USGS NAIP (`USGSNAIPImagery` ImageServer
+  `exportImage`, public domain, about 2022 in most places).
+- **Fallback:** the old USGS cache tiles. A tile outside coverage comes back
+  as a tiny transparent PNG; anything that is not a JPEG counts as "no photos
+  here" and the next source is tried (OSIP, then NAIP, then the old tile).
+  A failing service is left alone for 2 minutes after 3 failures. The old
+  tiles end at zoom 16, so zoom 17 and 18 are the zoom 16 tile enlarged.
+- **Zoom:** viewing goes to 17 (new photos from zoom 13 up; below that the old
+  fast cached USGS photos). Zoom 18 is allowed inside downloaded areas (and
+  is the zoom 17 tile enlarged elsewhere, no extra request).
+- **Hybrid:** the same photos plus a separate transparent layer of USGS
+  roads, trails and names (`tnm_roads`), saved with the area and the route.
+- **Photo date line** (bottom left of the map, Satellite styles):
+  `Photos: summer 2024 (Oregon)`, `Photos: <year> (NAIP)` (one identify
+  request per half-degree cell, `about 2022` until known),
+  `Photos: as saved on this phone` offline, `Zoom in for the newest photos`
+  below zoom 13.
+- **Offline:** the area page goes up to zoom 18 for the Satellite styles. Size
+  estimates use the photo tile size, a photo area is capped at 2000 tiles and
+  photo downloads wait 3 times the usual pause between requests. Old saved
+  satellite areas still work (old tiles, upgraded when online). Deleting or
+  trimming an area handles the new photo folders (`osip_2024`, `naip_live`).
+- No background work: tiles load only when the map shows them.
+
+New: `lib/trip/imagery.dart` (Oregon outline, JPEG check, tile enlarge, photo
+date text, NAIP year lookup). Tests: `test/v255_photos_test.dart`.
+
 ## v2.5.4: saved radios
 
 Settings > Long-range radio now keeps a list of **Saved radios** instead of one.

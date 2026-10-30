@@ -535,6 +535,22 @@ RouteSaveJobs routeSaveJobs(SavedRoute r, MapSource base) {
           routeBounds([r.destination], 1500),
         ];
 
+  // Hybrid photos: the roads and names layer over the same tiles.
+  for (final j in List.of(tiles)) {
+    final l = j.src.labels;
+    if (l == null) continue;
+    tiles.add(
+      RouteTileJob(
+        label: '${j.label} (roads and names)',
+        src: l,
+        tiles: j.tiles,
+        bounds: j.bounds,
+        z0: j.z0,
+        z1: min(j.z1, l.maxZoom),
+      ),
+    );
+  }
+
   return RouteSaveJobs(
     tiles: tiles,
     roadWindows: roads,

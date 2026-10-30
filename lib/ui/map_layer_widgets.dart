@@ -9,6 +9,7 @@ import '../trip/fires.dart';
 import '../trip/geo.dart';
 import '../trip/imports/georef.dart';
 import '../trip/imports/map_layers.dart';
+import '../trip/imagery.dart';
 import '../trip/imports/mbtiles_provider.dart';
 import '../trip/tile_cache.dart';
 import '../trip/tile_provider.dart';
@@ -33,6 +34,8 @@ List<Widget> baseTileLayers(TripController trip) {
       userAgentPackageName: 'com.walkie.walkie_talkie',
       tileProvider: CachedTileProvider(trip.tiles, src),
     ),
+    // Hybrid photos: roads, trails and names on top (v2.5.5).
+    if (src.labels != null) ?overlayLayer(trip, src.labels!),
     if (mb != null)
       TileLayer(
         key: ValueKey('mbtiles:${base!.id}'),
@@ -249,4 +252,73 @@ List<Widget> importedLayers(
         ],
       ),
   ];
+}
+
+/// "Photos: summer 2024 (Oregon)" on the satellite map (v2.5.5): where the
+/// photos on screen come from and when they are from. Outside Oregon it asks
+/// the USGS image service for the NAIP year once per half degree of map
+/// (after the map has been still for a moment); until then it says "about
+/// 2022". No request when offline or zoomed out.
+class PhotoDateLine extends StatefulWidget {
+  const PhotoDateLine({super.key, required this.trip});
+  final TripController trip;
+  @override
+  State<PhotoDateLine> createState() => _PhotoDateLineState();
+}
+
+class _PhotoDateLineState extends State<PhotoDateLine> {
+  Timer? _wait;
+  String _asked = '';
+
+  @override
+  void dispose() {
+    _wait?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final trip = widget.trip;
+    if (!trip.mapSource.photos) return const SizedBox.shrink();
+    final cam = MapCamera.of(context);
+    final lat = cam.center.latitude, lng = cam.center.longitude;
+    final newPhotos = cam.zoom >= TileCache.photoMinZoom;
+    final offline = !trip.tiles.online || !trip.tiles.net;
+    final oregon = inOregon(lat, lng);
+    final year = oregon ? null : trip.photoYears.known(lat, lng);
+    if (newPhotos && !offline && !oregon && year == null) {
+      final key = NaipYears.cellKey(lat, lng);
+      if (key != _asked) {
+        _wait?.cancel();
+        _wait = Timer(const Duration(milliseconds: 1500), () async {
+          _asked = key;
+          await trip.photoYears.year(lat, lng);
+          if (mounted) setState(() {});
+        });
+      }
+    }
+    final text = !newPhotos
+        ? 'Zoom in for the newest photos'
+        : photoDateText(oregon: oregon, naipYear: year, offline: offline);
+    return Align(
+      alignment: Alignment.bottomLeft,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(6, 0, 0, 6),
+        child: DecoratedBox(
+          key: const Key('photoDate'),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.55),
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            child: Text(
+              text,
+              style: const TextStyle(color: Colors.white, fontSize: 11),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }

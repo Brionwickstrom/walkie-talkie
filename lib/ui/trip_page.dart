@@ -489,6 +489,7 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
             ),
             PolylineLayer(polylines: lines),
             MarkerLayer(markers: markers),
+            PhotoDateLine(trip: trip),
             SimpleAttributionWidget(
               source: Text(
                 {

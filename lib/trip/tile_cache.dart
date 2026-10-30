@@ -5,6 +5,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'geo.dart';
+import 'imagery.dart';
 
 /// A raster map source.
 class MapSource {
@@ -22,7 +23,22 @@ class MapSource {
     this.opacity = 1,
     this.minZoom = 0,
     this.onlineOnly = false,
+    this.photos = false,
+    this.labels,
+    this.downloadTileCap,
   });
+
+  /// Satellite photos with the newest photos for the place (v2.5.5): the
+  /// cache asks Oregon's 2024 photos inside Oregon, the USGS NAIP photos
+  /// elsewhere, and falls back to this source's own (older) tiles.
+  final bool photos;
+
+  /// Roads, trails and names drawn on top of the photos (hybrid).
+  final MapSource? labels;
+
+  /// Most tiles one download of this source may fetch (below the cache's
+  /// own limit), for the big photo services.
+  final int? downloadTileCap;
 
   /// One line for the style picker ("Satellite photos").
   final String about;
@@ -100,26 +116,91 @@ class MapSource {
     about: 'Official US topo map: contours, trails, forest roads.',
   );
 
+  /// Oregon Statewide Imagery Program, summer 2024, 1 foot. The service
+  /// has no standard tile grid, so a tile is a bbox export (like the EDW
+  /// overlays); outside Oregon it answers with an empty PNG.
+  static const osip2024 = MapSource(
+    id: 'osip_2024',
+    name: 'Oregon photos 2024',
+    urlTemplate:
+        'https://imagery.oregonexplorer.info/arcgis/rest/services/'
+        'OSIP_2024/OSIP_2024_WM/ImageServer/exportImage?bbox={bbox}'
+        '&bboxSR=3857&imageSR=3857&size=256,256&format=jpgpng&f=image',
+    attribution:
+        'Oregon Statewide Imagery Program (OSIP) – Oregon Imagery '
+        'Framework Implementation Team',
+    maxZoom: 18,
+    allowsOffline: true,
+    avgTileBytes: 17000,
+  );
+
+  /// USGS NAIP photos, live (mostly 2019 to 2023, 0.6 m), US only.
+  static const naipLive = MapSource(
+    id: 'naip_live',
+    name: 'US photos (NAIP)',
+    urlTemplate:
+        'https://imagery.nationalmap.gov/arcgis/rest/services/'
+        'USGSNAIPImagery/ImageServer/exportImage?bbox={bbox}'
+        '&bboxSR=3857&imageSR=3857&size=256,256&format=jpgpng&f=image',
+    attribution: 'USGS The National Map: Orthoimagery (USDA NAIP)',
+    maxZoom: 18,
+    allowsOffline: true,
+    avgTileBytes: 17000,
+  );
+
+  /// Roads, trails and their names (USGS The National Map, TIGER and
+  /// Forest Service data), transparent, drawn over the photos of the
+  /// hybrid.
+  static const photoLabels = MapSource(
+    id: 'tnm_roads',
+    name: 'Roads and names',
+    urlTemplate:
+        'https://carto.nationalmap.gov/arcgis/rest/services/transportation/'
+        'MapServer/export?bbox={bbox}&bboxSR=3857&imageSR=3857&size=256,256'
+        '&format=png32&transparent=true&layers=show:1,2,3,5,7,8,9,11,13,14,'
+        '15,16,17,18,19,20,21,22,24,26,29,30,31,32,33,35,37&f=image',
+    attribution: 'Roads and trails: USGS The National Map',
+    maxZoom: 18,
+    minZoom: 9,
+    allowsOffline: true,
+    avgTileBytes: 5000,
+    overlay: true,
+  );
+
+  /// The single Satellite choice (id kept from the old USGS satellite, so
+  /// saved settings and offline areas carry on): the newest photos for
+  /// the place, zoom up to 18 inside saved areas.
   static const usgsImagery = MapSource(
     id: 'usgs_imagery',
-    name: 'USGS Satellite',
+    name: 'Satellite',
     urlTemplate: '$_tnm/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}',
-    attribution: 'USGS The National Map: Orthoimagery (USDA NAIP)',
-    maxZoom: 16,
+    attribution:
+        'Photos: Oregon Statewide Imagery Program (OSIP) – Oregon Imagery '
+        'Framework Implementation Team (Oregon); USGS The National Map: '
+        'Orthoimagery (USDA NAIP)',
+    maxZoom: 18,
     allowsOffline: true,
-    avgTileBytes: 25000,
-    about: 'Aerial photos (US).',
+    avgTileBytes: 17000,
+    about: 'Newest aerial photos: Oregon 2024 (1 ft), US NAIP elsewhere.',
+    photos: true,
+    downloadTileCap: 2000,
   );
 
   static const usgsHybrid = MapSource(
     id: 'usgs_hybrid',
-    name: 'USGS Satellite + Topo',
-    urlTemplate: '$_tnm/USGSImageryTopo/MapServer/tile/{z}/{y}/{x}',
-    attribution: 'USGS The National Map: Orthoimagery and US Topo',
-    maxZoom: 16,
+    name: 'Satellite + roads and names',
+    urlTemplate: '$_tnm/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}',
+    attribution:
+        'Photos: Oregon Statewide Imagery Program (OSIP) – Oregon Imagery '
+        'Framework Implementation Team (Oregon); USGS The National Map: '
+        'Orthoimagery (USDA NAIP). Roads and trails: USGS The National Map',
+    maxZoom: 18,
     allowsOffline: true,
-    avgTileBytes: 30000,
-    about: 'Aerial photos with contours, roads and names (US).',
+    avgTileBytes: 17000,
+    about: 'The same photos with roads, trails and their names on top.',
+    photos: true,
+    labels: photoLabels,
+    downloadTileCap: 2000,
   );
 
   static const usgsRelief = MapSource(
@@ -250,8 +331,27 @@ class MapSource {
     fires,
   ];
 
-  static MapSource? byId(String id) =>
-      [...bases, ...overlays, terrarium].where((s) => s.id == id).firstOrNull;
+  static MapSource? byId(String id) => [
+    ...bases,
+    ...overlays,
+    terrarium,
+    photoLabels,
+    osip2024,
+    naipLive,
+  ].where((s) => s.id == id).firstOrNull;
+
+  /// Folders of the cache a saved area of this source id keeps its tiles
+  /// in: the newer photos live next to the old USGS tiles (v2.5.5).
+  static List<String> cacheDirsOf(String id) => switch (id) {
+    'usgs_imagery' => const ['usgs_imagery', 'osip_2024', 'naip_live'],
+    'usgs_hybrid' => const [
+      'usgs_hybrid',
+      'usgs_imagery',
+      'osip_2024',
+      'naip_live',
+    ],
+    _ => [id],
+  };
 
   /// Your own tile server (e.g. on a Synology), any {z}/{x}/{y} URL.
   static MapSource custom(String url) => MapSource(
@@ -379,7 +479,11 @@ class OfflineRegion {
   final DateTime at;
 
   bool covers(String source, int z, int x, int y) {
-    if (source != sourceId || z < minZoom || z > maxZoom) return false;
+    if (z < minZoom || z > maxZoom) return false;
+    if (source != sourceId &&
+        !MapSource.cacheDirsOf(sourceId).contains(source)) {
+      return false;
+    }
     return x >= tileX(bounds.west, z) &&
         x <= tileX(bounds.east, z) &&
         y >= tileY(bounds.north, z) &&
@@ -445,7 +549,39 @@ class TileCache {
     this.maxBytes = 500 * 1024 * 1024,
     this.minFresh = const Duration(days: 7),
     this.maxDownloadTiles = 3000,
+    this.photoFresh = const Duration(days: 60),
   });
+
+  /// How long a photo tile is kept before it is fetched again (v2.5.5);
+  /// the photos change once a year.
+  final Duration photoFresh;
+
+  /// The photo services (tests point these at a local server).
+  MapSource oregonPhotos = MapSource.osip2024;
+  MapSource usPhotos = MapSource.naipLive;
+
+  /// The older USGS photos behind them.
+  MapSource oldPhotos = MapSource.usgsImagery;
+
+  /// Zoom the photos are fetched at when looking around; zoom 18 comes
+  /// from saved areas, or from the zoom 17 tile enlarged (no extra request).
+  static const photoViewMaxZoom = 17;
+
+  /// The zoom the old USGS photos end at.
+  static const oldPhotoMaxZoom = 16;
+
+  /// Below this zoom the (fast, cached) USGS photos are used: the live
+  /// services are slow for wide views and the difference is not visible.
+  static const photoMinZoom = 13;
+
+  /// Cuts a part out of a tile and enlarges it (tests replace it).
+  Future<Uint8List> Function(Uint8List parent, int shift, int dx, int dy)
+  cropper = cropTileUp;
+
+  /// Tile keys the photo service answered "no photos here" for (this run).
+  final Set<String> _noPhotos = {};
+  final Map<String, int> _photoFails = {};
+  final Map<String, DateTime> _photoPause = {};
 
   final Directory dir;
   final String userAgent;
@@ -506,6 +642,7 @@ class TileCache {
 
   /// Tile bytes: from the phone if fresh (or if offline), else downloaded.
   Future<Uint8List?> get(MapSource s, int z, int x, int y) async {
+    if (s.photos) return _getPhoto(s, z, x, y);
     final f = _file(s.id, z, x, y);
     Uint8List? cached;
     DateTime? mtime;
@@ -530,6 +667,227 @@ class TileCache {
     }
     return got.isEmpty ? cached : got;
   }
+
+  // ------------------------------------------- newer photos (v2.5.5)
+
+  /// The photo service for tile [z]/[x]/[y]: Oregon's own 2024 photos
+  /// inside Oregon, the nationwide NAIP photos elsewhere.
+  MapSource photoSourceFor(int z, int x, int y) {
+    final (lat, lng) = tileCenterLatLng(z, x, y);
+    return inOregon(lat, lng) ? oregonPhotos : usPhotos;
+  }
+
+  /// Photo services to try for a tile, best first: a tile of Oregon that
+  /// Oregon's service has no photos for (the edge of the state) comes from
+  /// the nationwide photos.
+  List<MapSource> _photoChain(int z, int x, int y) {
+    final c = photoSourceFor(z, x, y);
+    return identical(c, oregonPhotos) ? [oregonPhotos, usPhotos] : [c];
+  }
+
+  HttpClient? _photoClient;
+  HttpClient get _photoHttp => _photoClient ??= (HttpClient()
+    ..connectionTimeout = const Duration(seconds: 10)
+    ..maxConnectionsPerHost = 4
+    ..userAgent = userAgent);
+
+  bool _photoPaused(MapSource c) {
+    final t = _photoPause[c.id];
+    if (t == null) return false;
+    if (DateTime.now().isAfter(t)) {
+      _photoPause.remove(c.id);
+      _photoFails[c.id] = 0;
+      return false;
+    }
+    return true;
+  }
+
+  /// One photo tile from [c]: the JPEG bytes, stored; null when the
+  /// service has no photos there (remembered for this run) or did not
+  /// answer. Three failures in a row pause that service for two minutes,
+  /// so a slow or down service costs no more battery.
+  Future<Uint8List?> _fetchPhoto(MapSource c, int z, int x, int y) async {
+    final key = '${c.id}/$z/$x/$y';
+    if (_noPhotos.contains(key) || _photoPaused(c)) return null;
+    try {
+      final req = await _photoHttp.getUrl(Uri.parse(c.urlFor(z, x, y)));
+      final res = await req.close().timeout(const Duration(seconds: 15));
+      onNet?.call(true);
+      if (res.statusCode != 200) {
+        await res.drain<void>();
+        throw StateError('status ${res.statusCode}');
+      }
+      final b = BytesBuilder(copy: false);
+      await for (final chunk in res) {
+        b.add(chunk);
+      }
+      final bytes = b.takeBytes();
+      _photoFails[c.id] = 0;
+      if (!isJpeg(bytes)) {
+        if (_noPhotos.length > 4000) _noPhotos.clear();
+        _noPhotos.add(key);
+        return null;
+      }
+      final f = _file(c.id, z, x, y);
+      await f.parent.create(recursive: true);
+      await f.writeAsBytes(bytes, flush: false);
+      return bytes;
+    } catch (_) {
+      onNet?.call(false);
+      final n = (_photoFails[c.id] ?? 0) + 1;
+      _photoFails[c.id] = n;
+      if (n >= 3) {
+        _photoPause[c.id] = DateTime.now().add(const Duration(minutes: 2));
+      }
+      return null;
+    }
+  }
+
+  Future<Uint8List?> _read(File f) async {
+    try {
+      if (await f.exists()) return await f.readAsBytes();
+    } catch (_) {}
+    return null;
+  }
+
+  Future<bool> _isFresh(File f, Duration d) async {
+    try {
+      return DateTime.now().difference(await f.lastModified()) < d;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// A photo tile for the Satellite styles: the newest photos on the
+  /// phone or from the service, else the older USGS photos.
+  Future<Uint8List?> _getPhoto(MapSource s, int z, int x, int y) async {
+    final off = !online || !net;
+    if (z < photoMinZoom) return _oldPhoto(s, z, x, y, off);
+    final chain = _photoChain(z, x, y);
+    Uint8List? cached;
+    for (final c in chain) {
+      final f = _file(c.id, z, x, y);
+      final b = await _read(f);
+      if (b == null) continue;
+      if (off || await _isFresh(f, photoFresh)) return b;
+      cached ??= b;
+    }
+    if (z > photoViewMaxZoom && cached == null) {
+      // Zoom 18 only exists inside saved areas: otherwise the zoom 17
+      // tile, enlarged.
+      final shift = z - photoViewMaxZoom;
+      final parent = await _getPhoto(
+        s,
+        photoViewMaxZoom,
+        x >> shift,
+        y >> shift,
+      );
+      if (parent == null) return null;
+      return cropper(
+        parent,
+        shift,
+        x & ((1 << shift) - 1),
+        y & ((1 << shift) - 1),
+      );
+    }
+    if (!off && z <= photoViewMaxZoom) {
+      for (final c in chain) {
+        final got = await _fetchPhoto(c, z, x, y);
+        if (got != null) return got;
+      }
+    }
+    if (cached != null) return cached;
+    return _oldPhoto(s, z, x, y, off);
+  }
+
+  /// The older USGS photos (zoom 16 and below; enlarged above). Offline
+  /// this also finds what saved areas of the old hybrid hold.
+  Future<Uint8List?> _oldPhoto(
+    MapSource s,
+    int z,
+    int x,
+    int y,
+    bool off,
+  ) async {
+    if (z > oldPhotoMaxZoom) {
+      final shift = z - oldPhotoMaxZoom;
+      final parent = await _oldPhoto(
+        s,
+        oldPhotoMaxZoom,
+        x >> shift,
+        y >> shift,
+        off,
+      );
+      if (parent == null) return null;
+      return cropper(
+        parent,
+        shift,
+        x & ((1 << shift) - 1),
+        y & ((1 << shift) - 1),
+      );
+    }
+    if (off && s.id == MapSource.usgsHybrid.id) {
+      final composite = await _read(_file(s.id, z, x, y));
+      if (composite != null) return composite;
+    }
+    final old = oldPhotos;
+    final f = _file(old.id, z, x, y);
+    final cached = await _read(f);
+    final fresh = cached != null && await _isFresh(f, minFresh);
+    if (cached != null && (fresh || off)) return cached;
+    if (off) return null;
+    final got = await _fetch(old, z, x, y, conditional: cached != null);
+    if (got == null) return cached;
+    if (got.isEmpty) {
+      try {
+        await f.setLastModified(DateTime.now());
+      } catch (_) {}
+      return cached;
+    }
+    return got;
+  }
+
+  /// Saves one tile of a photo style for offline use ([refresh]: ask again
+  /// when the saved one is older than [photoFresh]). Returns its size, or
+  /// null when it could not be saved.
+  Future<int?> _savePhoto(MapSource s, TileId t, {bool refresh = false}) async {
+    if (t.z >= photoMinZoom) {
+      final chain = _photoChain(t.z, t.x, t.y);
+      int? stale;
+      for (final c in chain) {
+        final f = _file(c.id, t.z, t.x, t.y);
+        try {
+          if (await f.exists()) {
+            if (!refresh || await _isFresh(f, photoFresh)) {
+              return await f.length();
+            }
+            stale ??= await f.length();
+          }
+        } catch (_) {}
+      }
+      for (final c in chain) {
+        final got = await _fetchPhoto(c, t.z, t.x, t.y);
+        if (got != null) return got.length;
+      }
+      if (stale != null) return stale;
+    }
+    // No newer photos there: keep the old USGS tile (zoom 16 and below).
+    if (t.z <= oldPhotoMaxZoom) {
+      final old = oldPhotos;
+      final of = _file(old.id, t.z, t.x, t.y);
+      try {
+        if (await of.exists()) return await of.length();
+      } catch (_) {}
+      final b = await _fetch(old, t.z, t.x, t.y);
+      if (b != null && b.isNotEmpty) return b.length;
+    }
+    return null;
+  }
+
+  /// Most tiles one download of [s] may fetch.
+  int limitFor(MapSource s) => s.downloadTileCap == null
+      ? maxDownloadTiles
+      : min(maxDownloadTiles, s.downloadTileCap!);
 
   /// Downloads one tile and stores it. Empty list = not modified, null =
   /// failed.
@@ -623,12 +981,14 @@ class TileCache {
     }
     final maxZ = min(maxZoom, s.maxZoom);
     final n = countTiles(b, minZoom, maxZ);
-    if (n > maxDownloadTiles) {
+    if (n > limitFor(s)) {
       throw StateError(
-        'Area too big: $n tiles (limit $maxDownloadTiles). Zoom in or '
+        'Area too big: $n tiles (limit ${limitFor(s)}). Zoom in or '
         'lower the detail.',
       );
     }
+    // The big photo services get a longer pause between requests.
+    if (s.photos && pause > Duration.zero) pause = pause * 3;
     final p = progress ?? DownloadProgress(n);
     final region = OfflineRegion(
       name: name,
@@ -647,6 +1007,18 @@ class TileCache {
         TileId t;
         if (!it.moveNext()) return;
         t = it.current;
+        if (s.photos) {
+          final got = await _savePhoto(s, t, refresh: refresh);
+          if (got != null) {
+            p.bytes += got;
+            p.done++;
+          } else {
+            p.failed++;
+          }
+          await Future<void>.delayed(pause);
+          onProgress?.call(p);
+          continue;
+        }
         final f = _file(s.id, t.z, t.x, t.y);
         var ok = false;
         var have = false;
@@ -747,6 +1119,25 @@ class TileCache {
     var failsInRow = 0;
     for (final t in list) {
       if (p.cancelled) break;
+      if (s.photos) {
+        final got = await _savePhoto(s, t, refresh: refresh);
+        if (got != null) {
+          p.bytes += got;
+          p.done++;
+          failsInRow = 0;
+        } else {
+          p.failed++;
+          if (++failsInRow >= giveUpAfter) {
+            p.stalled = true;
+            p.cancelled = true;
+          }
+        }
+        onProgress?.call(p);
+        if (!p.cancelled && pause > Duration.zero) {
+          await Future<void>.delayed(pause);
+        }
+        continue;
+      }
       final f = _file(s.id, t.z, t.x, t.y);
       var ok = false;
       var asked = false;
@@ -812,10 +1203,12 @@ class TileCache {
     await _saveRegions();
     // Remove its tiles unless another region still covers them.
     for (final t in tilesIn(r.bounds, r.minZoom, r.maxZoom)) {
-      if (inRegion(r.sourceId, t.z, t.x, t.y)) continue;
-      try {
-        await _file(r.sourceId, t.z, t.x, t.y).delete();
-      } catch (_) {}
+      for (final dir in MapSource.cacheDirsOf(r.sourceId)) {
+        if (inRegion(dir, t.z, t.x, t.y)) continue;
+        try {
+          await _file(dir, t.z, t.x, t.y).delete();
+        } catch (_) {}
+      }
     }
   }
 
@@ -879,5 +1272,7 @@ class TileCache {
   void close() {
     _client?.close(force: true);
     _client = null;
+    _photoClient?.close(force: true);
+    _photoClient = null;
   }
 }

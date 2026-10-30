@@ -883,8 +883,8 @@ class _SaveAreaPageState extends State<SaveAreaPage> {
                       key: const Key('areaZoom'),
                       values: _zoom,
                       min: 6,
-                      max: 17,
-                      divisions: 11,
+                      max: 18,
+                      divisions: 12,
                       labels: RangeLabels(
                         '${_zoom.start.round()}',
                         '${_zoom.end.round()}',
@@ -894,6 +894,12 @@ class _SaveAreaPageState extends State<SaveAreaPage> {
                           : (v) => setState(() => _zoom = v),
                       onChangeEnd: (_) => _changed(),
                     ),
+                    if (_zoom.end.round() >= 18)
+                      Text(
+                        'Zoom 18 is only saved for the Satellite styles; '
+                        'it is the biggest download.',
+                        style: theme.textTheme.bodySmall,
+                      ),
                     SwitchListTile(
                       key: const Key('areaRoads'),
                       contentPadding: EdgeInsets.zero,

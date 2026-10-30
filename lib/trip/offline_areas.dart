@@ -237,6 +237,7 @@ class OfflineAreas extends ChangeNotifier {
         made++;
       }
       if (r.sourceId != MapSource.terrarium.id &&
+          r.sourceId != MapSource.photoLabels.id &&
           !a.styles.contains(r.sourceId)) {
         a.styles = [...a.styles, r.sourceId];
       }
@@ -431,6 +432,12 @@ List<({MapSource src, int z0, int z1})> areaTileJobs(AreaSaveOptions o) {
     final a = max(z0, s.minZoom), b = min(z1, s.maxZoom);
     if (a <= b && !out.any((j) => j.src.id == s.id)) {
       out.add((src: s, z0: a, z1: b));
+    }
+    // Hybrid: the roads and names on top of the photos (v2.5.5).
+    final l = s.labels;
+    if (l != null && !out.any((j) => j.src.id == l.id)) {
+      final la = max(z0, l.minZoom), lb = min(z1, l.maxZoom);
+      if (la <= lb) out.add((src: l, z0: la, z1: lb));
     }
   }
   if (o.elevation || slope) {

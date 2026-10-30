@@ -12,6 +12,7 @@ import '../app/power_plan.dart';
 import '../core/transport.dart';
 import '../core/transport_manager.dart' show InboundTrip;
 import 'geo.dart';
+import 'imagery.dart';
 import 'imports/geo_import.dart' show ImportedData, ImportedLine;
 import 'imports/map_layers.dart';
 import 'imports/route_share.dart';
@@ -281,6 +282,10 @@ class TripController extends ChangeNotifier {
   bool _bgLoc = false;
   int _ticks = 0;
   DateTime? _weatherTried;
+
+  /// Year of the NAIP photos at a place (asked rarely, see PhotoDateLine).
+  /// Photo year of the Satellite style (not final so tests can swap it).
+  NaipYears photoYears = NaipYears();
 
   List<MapPin> get pins =>
       _pins.values.toList()..sort((a, b) => a.at.compareTo(b.at));
@@ -1662,9 +1667,9 @@ class TripController extends ChangeNotifier {
       final e = tiles.estimate(j.src, o.bounds, j.z0, j.z1);
       n += e.tiles;
       bytes += e.bytes;
-      if (e.tiles > tiles.maxDownloadTiles) {
+      if (e.tiles > tiles.limitFor(j.src)) {
         tooBig =
-            '${j.src.name}: ${e.tiles} tiles (up to ${tiles.maxDownloadTiles} '
+            '${j.src.name}: ${e.tiles} tiles (up to ${tiles.limitFor(j.src)} '
             'per style). Make the box smaller or lower the detail.';
       }
     }
@@ -1710,10 +1715,10 @@ class TripController extends ChangeNotifier {
     final jobs = areaTileJobs(o);
     for (final j in jobs) {
       final n = countTiles(o.bounds, j.z0, j.z1);
-      if (n > tiles.maxDownloadTiles) {
+      if (n > tiles.limitFor(j.src)) {
         throw StateError(
           'Area too big for ${j.src.name}: $n tiles (up to '
-          '${tiles.maxDownloadTiles}). Make the box smaller or lower the '
+          '${tiles.limitFor(j.src)}). Make the box smaller or lower the '
           'detail.',
         );
       }
