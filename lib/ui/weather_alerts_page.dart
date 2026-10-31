@@ -6,6 +6,7 @@ import '../weather/wx_alert.dart';
 import '../weather/wx_keys.dart';
 import '../weather/wx_notice.dart';
 import 'adaptive_layout.dart';
+import 'settings_search.dart';
 
 /// Weather alerts (v2.5.0): what the National Weather Service warns about
 /// for where you are and the places you saved. A page on phones, a dialog
@@ -282,45 +283,54 @@ class WeatherAlertsSettings extends StatelessWidget {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            SwitchListTile(
-              key: const Key('wx-on'),
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Weather alerts'),
-              subtitle: Text(
-                'Warnings from the National Weather Service for where you '
-                'are and the places you saved (US only). Checked every 10 '
-                'minutes while the app is listening or open; only a few '
-                'KB each time.'
-                '${c.bridge.supported ? '' : ' On this computer they show in the app while it is running.'}',
+            SettingAnchor(
+              id: 'weather',
+              child: SwitchListTile(
+                key: const Key('wx-on'),
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Weather alerts'),
+                subtitle: Text(
+                  'Warnings from the National Weather Service for where you '
+                  'are and the places you saved (US only). Checked every 10 '
+                  'minutes while the app is listening or open; only a few '
+                  'KB each time.'
+                  '${c.bridge.supported ? '' : ' On this computer they show in the app while it is running.'}',
+                ),
+                value: c.settings.wxAlerts,
+                onChanged: c.setWxAlerts,
               ),
-              value: c.settings.wxAlerts,
-              onChanged: c.setWxAlerts,
             ),
             if (c.settings.wxAlerts) ...[
-              SwitchListTile(
-                key: const Key('wx-wifi'),
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Wi-Fi only'),
-                subtitle: const Text(
-                  'Do not check on mobile data. Alerts can arrive late '
-                  'while you are away from Wi-Fi.',
+              SettingAnchor(
+                id: 'wx-wifi',
+                child: SwitchListTile(
+                  key: const Key('wx-wifi'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Wi-Fi only'),
+                  subtitle: const Text(
+                    'Do not check on mobile data. Alerts can arrive late '
+                    'while you are away from Wi-Fi.',
+                  ),
+                  value: c.settings.wxWifiOnly,
+                  onChanged: c.setWxWifiOnly,
                 ),
-                value: c.settings.wxWifiOnly,
-                onChanged: c.setWxWifiOnly,
               ),
-              SwitchListTile(
-                key: const Key('wx-extreme'),
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Extreme alerts can sound anytime'),
-                subtitle: Text(
-                  'Tornado Warnings and other Extreme alerts sound an alarm '
-                  'even in quiet hours and Do Not Disturb. Off: they still '
-                  'show on the lock screen, but stay quiet in quiet hours '
-                  'and Do Not Disturb.'
-                  '${c.settings.wxExtremeSound && c.bridge.supported ? ' Android also needs Do Not Disturb access for this app.' : ''}',
+              SettingAnchor(
+                id: 'wx-extreme',
+                child: SwitchListTile(
+                  key: const Key('wx-extreme'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Extreme alerts can sound anytime'),
+                  subtitle: Text(
+                    'Tornado Warnings and other Extreme alerts sound an alarm '
+                    'even in quiet hours and Do Not Disturb. Off: they still '
+                    'show on the lock screen, but stay quiet in quiet hours '
+                    'and Do Not Disturb.'
+                    '${c.settings.wxExtremeSound && c.bridge.supported ? ' Android also needs Do Not Disturb access for this app.' : ''}',
+                  ),
+                  value: c.settings.wxExtremeSound,
+                  onChanged: c.setWxExtremeSound,
                 ),
-                value: c.settings.wxExtremeSound,
-                onChanged: c.setWxExtremeSound,
               ),
               if (c.settings.wxExtremeSound && c.bridge.supported)
                 Align(
@@ -331,19 +341,22 @@ class WeatherAlertsSettings extends StatelessWidget {
                     child: const Text('Allow Do Not Disturb access'),
                   ),
                 ),
-              SwitchListTile(
-                key: const Key('wx-share'),
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Share alerts with other phones'),
-                subtitle: const Text(
-                  'When this phone reads a warning from the National Weather '
-                  'Service it passes it on, signed with this device\'s own '
-                  'key, to phones in radio range and through the relay (the '
-                  'relay only learns the state). A few small packets per '
-                  'warning.',
+              SettingAnchor(
+                id: 'wx-share',
+                child: SwitchListTile(
+                  key: const Key('wx-share'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Share alerts with other phones'),
+                  subtitle: const Text(
+                    'When this phone reads a warning from the National Weather '
+                    'Service it passes it on, signed with this device\'s own '
+                    'key, to phones in radio range and through the relay (the '
+                    'relay only learns the state). A few small packets per '
+                    'warning.',
+                  ),
+                  value: c.settings.wxShare,
+                  onChanged: c.setWxShare,
                 ),
-                value: c.settings.wxShare,
-                onChanged: c.setWxShare,
               ),
               if (c.wxKeyId != null)
                 Padding(

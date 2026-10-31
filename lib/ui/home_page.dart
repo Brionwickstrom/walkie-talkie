@@ -28,6 +28,9 @@ import 'messages_page.dart';
 import 'quiet_widgets.dart';
 import 'weather_alerts_page.dart';
 import 'radio_settings.dart';
+import 'radio_settings_page.dart';
+import 'settings_index.dart';
+import 'settings_search.dart';
 import 'sheets.dart';
 import 'who_can_hear.dart';
 import 'trip_page.dart';
@@ -1220,6 +1223,29 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  /// What the Settings search may offer right now (v2.6.2).
+  SettingsEnv _settingsEnv() => SettingsEnv(
+    phone: c.bridge.supported,
+    wifiDirect: c.wifiDirectSupported,
+    weatherOn: c.settings.wxAlerts,
+    hasBlocked: c.settings.blocked.isNotEmpty,
+    hasTrip: c.trip != null,
+    radioBackup: c.radioBackup != null,
+    savedRadios: c.savedRadios.isNotEmpty,
+    radioPaired: c.radioPaired,
+    radioReady: c.radioPaired && c.radioDevice.ready,
+  );
+
+  /// A search result on the Trip map: close Settings, show the Trip map
+  /// and open its Range test page.
+  void _openTripSetting(BuildContext sheet, String id) {
+    Navigator.pop(sheet);
+    setState(() => _tab = _tripTab);
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _tripKey.currentState?.openRangeTest(),
+    );
+  }
+
   Future<void> _openSettings(BuildContext context) async {
     final nameCtl = TextEditingController(text: c.settings.customName ?? '');
     final relayCtl = TextEditingController(text: c.relayOverride);
@@ -1235,54 +1261,71 @@ class _HomePageState extends State<HomePage> {
             16,
             MediaQuery.of(ctx).viewInsets.bottom + 16,
           ),
-          child: SingleChildScrollView(
-            child: Column(
+          child: SettingsSearchLayout(
+            env: _settingsEnv(),
+            fillWhileSearching: true,
+            actions: SettingsSearchActions(
+              openRadio: (id) => openRadioSettings(context, c, jumpTo: id),
+              openTrip: (id) => _openTripSetting(ctx, id),
+            ),
+            body: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                SettingAnchor(
+                  id: 'name',
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
                         children: [
-                          Text(
-                            'Your call sign',
-                            style: Theme.of(ctx).textTheme.labelMedium,
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Your call sign',
+                                  style: Theme.of(ctx).textTheme.labelMedium,
+                                ),
+                                Text(
+                                  c.settings.defaultName,
+                                  style: Theme.of(ctx).textTheme.titleLarge,
+                                ),
+                              ],
+                            ),
                           ),
-                          Text(
-                            c.settings.defaultName,
-                            style: Theme.of(ctx).textTheme.titleLarge,
+                          IconButton.filledTonal(
+                            tooltip: 'Pick another call sign',
+                            icon: const Icon(Icons.casino),
+                            onPressed: c.rerollCallSign,
                           ),
                         ],
                       ),
-                    ),
-                    IconButton.filledTonal(
-                      tooltip: 'Pick another call sign',
-                      icon: const Icon(Icons.casino),
-                      onPressed: c.rerollCallSign,
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: nameCtl,
-                  decoration: InputDecoration(
-                    labelText: 'Custom name (optional)',
-                    hintText: c.settings.defaultName,
-                    helperText: 'Leave empty to use your call sign',
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: nameCtl,
+                        decoration: InputDecoration(
+                          labelText: 'Custom name (optional)',
+                          hintText: c.settings.defaultName,
+                          helperText: 'Leave empty to use your call sign',
+                        ),
+                      ),
+                    ],
                   ),
                 ),
                 const SizedBox(height: 12),
-                TextField(
-                  controller: relayCtl,
-                  decoration: InputDecoration(
-                    labelText: 'Internet relays (optional)',
-                    hintText: AppConfig.relayUrl,
-                    helperText:
-                        'Empty = default. Several: comma separated, first '
-                        'is preferred. "off" = no internet relay.',
-                    helperMaxLines: 3,
+                SettingAnchor(
+                  id: 'relay-url',
+                  child: TextField(
+                    controller: relayCtl,
+                    decoration: InputDecoration(
+                      labelText: 'Internet relays (optional)',
+                      hintText: AppConfig.relayUrl,
+                      helperText:
+                          'Empty = default. Several: comma separated, first '
+                          'is preferred. "off" = no internet relay.',
+                      helperMaxLines: 3,
+                    ),
                   ),
                 ),
                 const SizedBox(height: 16),
@@ -1296,165 +1339,204 @@ class _HomePageState extends State<HomePage> {
                 ),
                 if (c.bridge.supported) ...[
                   const Divider(height: 32),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Stay reachable when app is closed'),
-                    subtitle: const Text(
-                      'Rings, voice messages and live talk still come '
-                      'through. Shows a small "listening" notification. '
-                      'Uses more battery.',
-                    ),
-                    value: c.settings.stayReachable,
-                    onChanged: (v) async {
-                      await c.setStayReachable(v);
-                      if (v && ctx.mounted) await showBatteryHelp(ctx, c);
-                    },
-                  ),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Start listening after phone restarts'),
-                    value: c.settings.startOnBoot,
-                    onChanged: c.settings.stayReachable
-                        ? (v) => c.setStartOnBoot(v)
-                        : null,
-                  ),
-                  Wrap(
-                    spacing: 8,
-                    children: [
-                      OutlinedButton.icon(
-                        icon: const Icon(Icons.battery_saver),
-                        label: const Text('Battery settings'),
-                        onPressed: () => showBatteryHelp(ctx, c),
+                  SettingAnchor(
+                    id: 'stay-reachable',
+                    child: SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Stay reachable when app is closed'),
+                      subtitle: const Text(
+                        'Rings, voice messages and live talk still come '
+                        'through. Shows a small "listening" notification. '
+                        'Uses more battery.',
                       ),
-                      _FullScreenButton(controller: c),
-                    ],
+                      value: c.settings.stayReachable,
+                      onChanged: (v) async {
+                        await c.setStayReachable(v);
+                        if (v && ctx.mounted) await showBatteryHelp(ctx, c);
+                      },
+                    ),
+                  ),
+                  SettingAnchor(
+                    id: 'start-boot',
+                    child: SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Start listening after phone restarts'),
+                      value: c.settings.startOnBoot,
+                      onChanged: c.settings.stayReachable
+                          ? (v) => c.setStartOnBoot(v)
+                          : null,
+                    ),
+                  ),
+                  SettingAnchor(
+                    id: 'battery-help',
+                    child: Wrap(
+                      spacing: 8,
+                      children: [
+                        OutlinedButton.icon(
+                          icon: const Icon(Icons.battery_saver),
+                          label: const Text('Battery settings'),
+                          onPressed: () => showBatteryHelp(ctx, c),
+                        ),
+                        _FullScreenButton(controller: c),
+                      ],
+                    ),
                   ),
                 ],
                 const Divider(height: 32),
-                SwitchListTile(
-                  key: const Key('showInWhosWhere'),
-                  contentPadding: EdgeInsets.zero,
-                  secondary: const Icon(Icons.travel_explore),
-                  title: const Text("Show me in Who's where"),
-                  subtitle: const Text(
-                    'Phones on other channels (nearby or online) can see '
-                    'your name and which open channel you are on. In a '
-                    'private group they only see "Private group" and your '
-                    'call sign, never the channel number or name.',
+                SettingAnchor(
+                  id: 'whos-where',
+                  child: SwitchListTile(
+                    key: const Key('showInWhosWhere'),
+                    contentPadding: EdgeInsets.zero,
+                    secondary: const Icon(Icons.travel_explore),
+                    title: const Text("Show me in Who's where"),
+                    subtitle: const Text(
+                      'Phones on other channels (nearby or online) can see '
+                      'your name and which open channel you are on. In a '
+                      'private group they only see "Private group" and your '
+                      'call sign, never the channel number or name.',
+                    ),
+                    value: c.settings.showInWhosWhere,
+                    onChanged: c.setShowInWhosWhere,
                   ),
-                  value: c.settings.showInWhosWhere,
-                  onChanged: c.setShowInWhosWhere,
                 ),
-                SwitchListTile(
-                  key: const Key('readReceipts'),
-                  contentPadding: EdgeInsets.zero,
-                  secondary: const Icon(Icons.done_all),
-                  title: const Text('Send read receipts'),
-                  subtitle: const Text(
-                    'People see "seen" once you open their chat or play '
-                    'their voice message. Tiny, works over the radio too.',
+                SettingAnchor(
+                  id: 'read-receipts',
+                  child: SwitchListTile(
+                    key: const Key('readReceipts'),
+                    contentPadding: EdgeInsets.zero,
+                    secondary: const Icon(Icons.done_all),
+                    title: const Text('Send read receipts'),
+                    subtitle: const Text(
+                      'People see "seen" once you open their chat or play '
+                      'their voice message. Tiny, works over the radio too.',
+                    ),
+                    value: c.settings.readReceipts,
+                    onChanged: c.setReadReceipts,
                   ),
-                  value: c.settings.readReceipts,
-                  onChanged: c.setReadReceipts,
                 ),
                 const Divider(height: 32),
                 _SectionTitle('Off-grid (no internet)'),
-                SwitchListTile(
-                  key: const Key('offlineSaver'),
-                  contentPadding: EdgeInsets.zero,
-                  secondary: Icon(
-                    Icons.energy_savings_leaf,
-                    color: c.settings.offlineSaver ? Colors.green : null,
+                SettingAnchor(
+                  id: 'offline-saver',
+                  child: SwitchListTile(
+                    key: const Key('offlineSaver'),
+                    contentPadding: EdgeInsets.zero,
+                    secondary: Icon(
+                      Icons.energy_savings_leaf,
+                      color: c.settings.offlineSaver ? Colors.green : null,
+                    ),
+                    title: const Text('Offline power save'),
+                    subtitle: Text(
+                      'For when you know there is no internet (a hike) and '
+                      'want the longest battery life. Turns off the internet '
+                      'relay, network searching and live location, slows '
+                      'Bluetooth, GPS and check-ins, and makes the app dark '
+                      'and dim. Talk, receive, phone relay, the radio, SOS and '
+                      'quick messages keep working. '
+                      '${const PowerPlan(offline: true).estimate}',
+                    ),
+                    value: c.settings.offlineSaver,
+                    onChanged: c.setOfflineSaver,
                   ),
-                  title: const Text('Offline power save'),
-                  subtitle: Text(
-                    'For when you know there is no internet (a hike) and '
-                    'want the longest battery life. Turns off the internet '
-                    'relay, network searching and live location, slows '
-                    'Bluetooth, GPS and check-ins, and makes the app dark '
-                    'and dim. Talk, receive, phone relay, the radio, SOS and '
-                    'quick messages keep working. '
-                    '${const PowerPlan(offline: true).estimate}',
-                  ),
-                  value: c.settings.offlineSaver,
-                  onChanged: c.setOfflineSaver,
                 ),
-                SwitchListTile(
-                  key: const Key('relayForOthers'),
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Relay for others'),
-                  subtitle: const Text(
-                    'With no internet or cell signal, pass talk on to phones '
-                    'that are out of range of each other (up to 4 hops, '
-                    'like on a hike). Phones close together still talk '
-                    'directly with no delay. Direct chats and private groups '
-                    'stay encrypted: relays cannot hear them. Uses some '
-                    'extra battery while relaying.',
+                SettingAnchor(
+                  id: 'relay-others',
+                  child: SwitchListTile(
+                    key: const Key('relayForOthers'),
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Relay for others'),
+                    subtitle: const Text(
+                      'With no internet or cell signal, pass talk on to phones '
+                      'that are out of range of each other (up to 4 hops, '
+                      'like on a hike). Phones close together still talk '
+                      'directly with no delay. Direct chats and private groups '
+                      'stay encrypted: relays cannot hear them. Uses some '
+                      'extra battery while relaying.',
+                    ),
+                    value: c.settings.relayForOthers,
+                    onChanged: c.setRelayForOthers,
                   ),
-                  value: c.settings.relayForOthers,
-                  onChanged: c.setRelayForOthers,
                 ),
                 if (c.wifiDirectSupported)
-                  SwitchListTile(
-                    key: const Key('wifiDirect'),
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Wi-Fi Direct'),
-                    subtitle: const Text(
-                      'Link straight to nearby Android phones over Wi-Fi '
-                      'when there is no shared network: about 2-3x the '
-                      'range of Bluetooth. Android may ask the other phone '
-                      'to accept the connection. iPhones use Bluetooth or '
-                      'a hotspot instead.',
+                  SettingAnchor(
+                    id: 'wifi-direct',
+                    child: SwitchListTile(
+                      key: const Key('wifiDirect'),
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Wi-Fi Direct'),
+                      subtitle: const Text(
+                        'Link straight to nearby Android phones over Wi-Fi '
+                        'when there is no shared network: about 2-3x the '
+                        'range of Bluetooth. Android may ask the other phone '
+                        'to accept the connection. iPhones use Bluetooth or '
+                        'a hotspot instead.',
+                      ),
+                      value: c.settings.wifiDirect,
+                      onChanged: c.setWifiDirect,
                     ),
-                    value: c.settings.wifiDirect,
-                    onChanged: c.setWifiDirect,
                   ),
-                SwitchListTile(
-                  key: const Key('baseCamp'),
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Base camp mode'),
-                  subtitle: Text(
-                    'Leave this phone at camp (plugged in) as a fixed relay. '
-                    'It holds Trip messages (SOS, quick messages, pins, '
-                    'check-ins) for anyone out of range and delivers them '
-                    'when they come back, for up to 6 hours. Works through '
-                    'the paired LoRa radio too.'
-                    '${c.trip != null && c.settings.trip.baseCamp ? ' Holding ${c.trip!.store.items.length} now.' : ''}',
+                SettingAnchor(
+                  id: 'base-camp',
+                  child: SwitchListTile(
+                    key: const Key('baseCamp'),
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Base camp mode'),
+                    subtitle: Text(
+                      'Leave this phone at camp (plugged in) as a fixed relay. '
+                      'It holds Trip messages (SOS, quick messages, pins, '
+                      'check-ins) for anyone out of range and delivers them '
+                      'when they come back, for up to 6 hours. Works through '
+                      'the paired LoRa radio too.'
+                      '${c.trip != null && c.settings.trip.baseCamp ? ' Holding ${c.trip!.store.items.length} now.' : ''}',
+                    ),
+                    value: c.settings.trip.baseCamp,
+                    onChanged: c.setBaseCamp,
                   ),
-                  value: c.settings.trip.baseCamp,
-                  onChanged: c.setBaseCamp,
                 ),
                 const Divider(height: 32),
-                _SectionTitle('Long-range radio (Meshtastic)'),
+                SettingAnchor(
+                  id: 'radio-section',
+                  child: _SectionTitle('Long-range radio (Meshtastic)'),
+                ),
                 RadioSettings(controller: c),
                 const Divider(height: 32),
-                _SectionTitle('Mute & quiet hours'),
+                SettingAnchor(
+                  id: 'quiet',
+                  child: _SectionTitle('Mute & quiet hours'),
+                ),
                 QuietSettings(controller: c),
                 const Divider(height: 32),
                 _SectionTitle('Weather alerts'),
                 WeatherAlertsSettings(controller: c),
                 const Divider(height: 32),
                 _SectionTitle('Talk button'),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Tap to talk (toggle)'),
-                  subtitle: const Text(
-                    'Tap once to start talking, tap again to stop. Stops by '
-                    'itself after 2 minutes. Off = hold to talk.',
+                SettingAnchor(
+                  id: 'toggle-talk',
+                  child: SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Tap to talk (toggle)'),
+                    subtitle: const Text(
+                      'Tap once to start talking, tap again to stop. Stops by '
+                      'itself after 2 minutes. Off = hold to talk.',
+                    ),
+                    value: c.settings.toggleTalk,
+                    onChanged: c.setToggleTalk,
                   ),
-                  value: c.settings.toggleTalk,
-                  onChanged: c.setToggleTalk,
                 ),
                 if (c.bridge.supported) ...[
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Use volume-down as talk button'),
-                    subtitle: const Text(
-                      'Hold volume-down to talk while the app is open. While '
-                      'this is on, volume-down does not lower the volume.',
+                  SettingAnchor(
+                    id: 'volume-ptt',
+                    child: SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Use volume-down as talk button'),
+                      subtitle: const Text(
+                        'Hold volume-down to talk while the app is open. While '
+                        'this is on, volume-down does not lower the volume.',
+                      ),
+                      value: c.settings.volumeKeyPtt,
+                      onChanged: c.setVolumeKeyPtt,
                     ),
-                    value: c.settings.volumeKeyPtt,
-                    onChanged: c.setVolumeKeyPtt,
                   ),
                   if (c.settings.volumeKeyPtt)
                     _PermissionButton(
@@ -1465,43 +1547,52 @@ class _HomePageState extends State<HomePage> {
                       icon: Icons.accessibility_new,
                       onTap: () => _explainAccessibility(ctx, c),
                     ),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Headset button talks'),
-                    subtitle: const Text(
-                      'Bluetooth or wired headset play/pause button: press '
-                      'to start, press again to stop (or hold while you '
-                      'talk). Works while the app is listening. If you then '
-                      'play music, the button goes back to the music app '
-                      'until you reopen Stalkie Talkie.',
+                  SettingAnchor(
+                    id: 'headset-ptt',
+                    child: SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Headset button talks'),
+                      subtitle: const Text(
+                        'Bluetooth or wired headset play/pause button: press '
+                        'to start, press again to stop (or hold while you '
+                        'talk). Works while the app is listening. If you then '
+                        'play music, the button goes back to the music app '
+                        'until you reopen Stalkie Talkie.',
+                      ),
+                      value: c.settings.headsetPtt,
+                      onChanged: c.setHeadsetPtt,
                     ),
-                    value: c.settings.headsetPtt,
-                    onChanged: c.setHeadsetPtt,
                   ),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Talk button on the notification'),
-                    subtitle: const Text(
-                      'Adds "Talk" to the listening notification, also on '
-                      'the lock screen. Tap again to stop.',
+                  SettingAnchor(
+                    id: 'notif-talk',
+                    child: SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Talk button on the notification'),
+                      subtitle: const Text(
+                        'Adds "Talk" to the listening notification, also on '
+                        'the lock screen. Tap again to stop.',
+                      ),
+                      value: c.settings.notificationTalk,
+                      onChanged: c.settings.stayReachable
+                          ? c.setNotificationTalk
+                          : null,
                     ),
-                    value: c.settings.notificationTalk,
-                    onChanged: c.settings.stayReachable
-                        ? c.setNotificationTalk
-                        : null,
                   ),
                   const Divider(height: 32),
                   _SectionTitle('Urgent rings'),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Urgent rings sound in silent mode'),
-                    subtitle: const Text(
-                      'Someone can send an urgent ring (long-press a person). '
-                      'It rings for up to 1 minute at alarm volume with a '
-                      'strong vibration, even when the phone is on silent.',
+                  SettingAnchor(
+                    id: 'urgent-loud',
+                    child: SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Urgent rings sound in silent mode'),
+                      subtitle: const Text(
+                        'Someone can send an urgent ring (long-press a person). '
+                        'It rings for up to 1 minute at alarm volume with a '
+                        'strong vibration, even when the phone is on silent.',
+                      ),
+                      value: c.settings.urgentLoud,
+                      onChanged: c.setUrgentLoud,
                     ),
-                    value: c.settings.urgentLoud,
-                    onChanged: c.setUrgentLoud,
                   ),
                   if (c.settings.urgentLoud)
                     _PermissionButton(
@@ -1515,7 +1606,7 @@ class _HomePageState extends State<HomePage> {
                 ],
                 if (c.settings.blocked.isNotEmpty) ...[
                   const Divider(height: 32),
-                  _SectionTitle('Blocked'),
+                  SettingAnchor(id: 'blocked', child: _SectionTitle('Blocked')),
                   for (final e in c.settings.blocked.entries)
                     ListTile(
                       contentPadding: EdgeInsets.zero,
@@ -1529,95 +1620,117 @@ class _HomePageState extends State<HomePage> {
                 ],
                 const Divider(height: 32),
                 _SectionTitle('Privacy'),
-                SwitchListTile(
-                  key: const Key('settings-join-private'),
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Alert when someone joins a private group'),
-                  subtitle: const Text('A short tone and their name.'),
-                  value: c.settings.joinAlertPrivate,
-                  onChanged: (v) => c.setJoinAlert(private: v),
+                SettingAnchor(
+                  id: 'join-private',
+                  child: SwitchListTile(
+                    key: const Key('settings-join-private'),
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text(
+                      'Alert when someone joins a private group',
+                    ),
+                    subtitle: const Text('A short tone and their name.'),
+                    value: c.settings.joinAlertPrivate,
+                    onChanged: (v) => c.setJoinAlert(private: v),
+                  ),
                 ),
-                SwitchListTile(
-                  key: const Key('settings-join-open'),
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Alert when someone joins an open channel'),
-                  value: c.settings.joinAlertPublic,
-                  onChanged: (v) => c.setJoinAlert(public: v),
+                SettingAnchor(
+                  id: 'join-open',
+                  child: SwitchListTile(
+                    key: const Key('settings-join-open'),
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text(
+                      'Alert when someone joins an open channel',
+                    ),
+                    value: c.settings.joinAlertPublic,
+                    onChanged: (v) => c.setJoinAlert(public: v),
+                  ),
                 ),
                 const Divider(height: 32),
                 _SectionTitle('Messages'),
-                SwitchListTile(
-                  key: const Key('autoPlay'),
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Auto-play incoming talk'),
-                  subtitle: const Text(
-                    'Off: nothing plays by itself. Talk is saved in Messages '
-                    'and voice messages wait there until you tap Play.',
+                SettingAnchor(
+                  id: 'auto-play',
+                  child: SwitchListTile(
+                    key: const Key('autoPlay'),
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Auto-play incoming talk'),
+                    subtitle: const Text(
+                      'Off: nothing plays by itself. Talk is saved in Messages '
+                      'and voice messages wait there until you tap Play.',
+                    ),
+                    value: c.settings.autoPlay,
+                    onChanged: c.setAutoPlay,
                   ),
-                  value: c.settings.autoPlay,
-                  onChanged: c.setAutoPlay,
                 ),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.receipt_long),
-                  title: const Text('Playback log'),
-                  subtitle: const Text(
-                    'What played, from whom, and why. Screenshot this if '
-                    'something keeps repeating.',
+                SettingAnchor(
+                  id: 'playback-log',
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.receipt_long),
+                    title: const Text('Playback log'),
+                    subtitle: const Text(
+                      'What played, from whom, and why. Screenshot this if '
+                      'something keeps repeating.',
+                    ),
+                    onTap: () => showPlaybackLog(ctx, c),
                   ),
-                  onTap: () => showPlaybackLog(ctx, c),
                 ),
-                ListTile(
-                  key: const Key('clearAll'),
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.delete_sweep),
-                  title: const Text('Clear all messages and queues'),
-                  subtitle: const Text(
-                    'Stops all audio, deletes voice messages and missed '
-                    'talk, and cancels everything waiting to be sent.',
-                  ),
-                  onTap: () async {
-                    final ok = await showDialog<bool>(
-                      context: ctx,
-                      builder: (d) => AlertDialog(
-                        scrollable: true,
-                        title: const Text('Clear all messages and queues?'),
-                        content: const Text(
-                          'Voice messages, missed talk and anything still '
-                          'waiting to be sent are deleted. Chats are kept.',
+                SettingAnchor(
+                  id: 'clear-all',
+                  child: ListTile(
+                    key: const Key('clearAll'),
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.delete_sweep),
+                    title: const Text('Clear all messages and queues'),
+                    subtitle: const Text(
+                      'Stops all audio, deletes voice messages and missed '
+                      'talk, and cancels everything waiting to be sent.',
+                    ),
+                    onTap: () async {
+                      final ok = await showDialog<bool>(
+                        context: ctx,
+                        builder: (d) => AlertDialog(
+                          scrollable: true,
+                          title: const Text('Clear all messages and queues?'),
+                          content: const Text(
+                            'Voice messages, missed talk and anything still '
+                            'waiting to be sent are deleted. Chats are kept.',
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(d, false),
+                              child: const Text('Cancel'),
+                            ),
+                            FilledButton(
+                              onPressed: () => Navigator.pop(d, true),
+                              child: const Text('Clear'),
+                            ),
+                          ],
                         ),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(d, false),
-                            child: const Text('Cancel'),
-                          ),
-                          FilledButton(
-                            onPressed: () => Navigator.pop(d, true),
-                            child: const Text('Clear'),
-                          ),
-                        ],
-                      ),
-                    );
-                    if (ok == true) await c.clearAllMessages();
-                  },
+                      );
+                      if (ok == true) await c.clearAllMessages();
+                    },
+                  ),
                 ),
                 const Divider(height: 32),
                 _SectionTitle('Battery'),
-                SegmentedButton<bool>(
-                  segments: const [
-                    ButtonSegment(
-                      value: false,
-                      label: Text('Normal'),
-                      icon: Icon(Icons.bolt),
-                    ),
-                    ButtonSegment(
-                      value: true,
-                      label: Text('Saver'),
-                      icon: Icon(Icons.battery_saver),
-                    ),
-                  ],
-                  selected: {c.settings.powerSaver},
-                  onSelectionChanged: (v) => c.setPowerSaver(v.first),
+                SettingAnchor(
+                  id: 'power-saver',
+                  child: SegmentedButton<bool>(
+                    segments: const [
+                      ButtonSegment(
+                        value: false,
+                        label: Text('Normal'),
+                        icon: Icon(Icons.bolt),
+                      ),
+                      ButtonSegment(
+                        value: true,
+                        label: Text('Saver'),
+                        icon: Icon(Icons.battery_saver),
+                      ),
+                    ],
+                    selected: {c.settings.powerSaver},
+                    onSelectionChanged: (v) => c.setPowerSaver(v.first),
+                  ),
                 ),
                 const SizedBox(height: 6),
                 Text(
@@ -1633,29 +1746,41 @@ class _HomePageState extends State<HomePage> {
                 ),
                 const SizedBox(height: 12),
                 // v1.9.8: how hard the app works to keep the fastest link.
-                Text(
-                  'Connection speed',
-                  style: Theme.of(ctx).textTheme.titleSmall,
-                ),
-                const SizedBox(height: 6),
-                SegmentedButton<ConnectionSpeed>(
-                  key: const Key('connection-speed'),
-                  showSelectedIcon: false,
-                  segments: const [
-                    ButtonSegment(
-                      value: ConnectionSpeed.maxSpeed,
-                      label: Text(
-                        'Max speed (more battery)',
-                        textAlign: TextAlign.center,
+                SettingAnchor(
+                  id: 'connection-speed',
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        'Connection speed',
+                        style: Theme.of(ctx).textTheme.titleSmall,
                       ),
-                    ),
-                    ButtonSegment(
-                      value: ConnectionSpeed.balanced,
-                      label: Text('Balanced', textAlign: TextAlign.center),
-                    ),
-                  ],
-                  selected: {c.settings.connectionSpeed},
-                  onSelectionChanged: (v) => c.setConnectionSpeed(v.first),
+                      const SizedBox(height: 6),
+                      SegmentedButton<ConnectionSpeed>(
+                        key: const Key('connection-speed'),
+                        showSelectedIcon: false,
+                        segments: const [
+                          ButtonSegment(
+                            value: ConnectionSpeed.maxSpeed,
+                            label: Text(
+                              'Max speed (more battery)',
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                          ButtonSegment(
+                            value: ConnectionSpeed.balanced,
+                            label: Text(
+                              'Balanced',
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                        ],
+                        selected: {c.settings.connectionSpeed},
+                        onSelectionChanged: (v) =>
+                            c.setConnectionSpeed(v.first),
+                      ),
+                    ],
+                  ),
                 ),
                 const SizedBox(height: 6),
                 Text(
@@ -1663,106 +1788,127 @@ class _HomePageState extends State<HomePage> {
                   style: Theme.of(ctx).textTheme.bodySmall,
                 ),
                 const SizedBox(height: 6),
-                ListTile(
-                  key: const Key('phone-settings-tile'),
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.app_settings_alt),
-                  title: const Text(
-                    'Phone settings for this app (mobile data, battery)',
+                SettingAnchor(
+                  id: 'phone-settings',
+                  child: ListTile(
+                    key: const Key('phone-settings-tile'),
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.app_settings_alt),
+                    title: const Text(
+                      'Phone settings for this app (mobile data, battery)',
+                    ),
+                    subtitle: const Text(
+                      'Opens App info. Under Mobile data, turn on Mobile data '
+                      'and Background data (and Unrestricted data if Data '
+                      'saver is on) so the internet relay works without '
+                      'Wi-Fi. Battery: set it to Unrestricted.',
+                    ),
+                    trailing: const Icon(Icons.open_in_new),
+                    onTap: () => c.openPhoneSettings(PhoneSetting.appInfo),
                   ),
-                  subtitle: const Text(
-                    'Opens App info. Under Mobile data, turn on Mobile data '
-                    'and Background data (and Unrestricted data if Data '
-                    'saver is on) so the internet relay works without '
-                    'Wi-Fi. Battery: set it to Unrestricted.',
-                  ),
-                  trailing: const Icon(Icons.open_in_new),
-                  onTap: () => c.openPhoneSettings(PhoneSetting.appInfo),
                 ),
                 const Divider(height: 32),
                 _SectionTitle('Help & setup'),
-                ListTile(
-                  key: const Key('settings-setup'),
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.checklist),
-                  title: const Text('Setup wizard'),
-                  subtitle: const Text(
-                    'Call sign, permissions, mobile data, battery, channel, '
-                    'radio.',
+                SettingAnchor(
+                  id: 'setup-wizard',
+                  child: ListTile(
+                    key: const Key('settings-setup'),
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.checklist),
+                    title: const Text('Setup wizard'),
+                    subtitle: const Text(
+                      'Call sign, permissions, mobile data, battery, channel, '
+                      'radio.',
+                    ),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      openSetupWizard(context, c);
+                    },
                   ),
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    openSetupWizard(context, c);
-                  },
                 ),
-                ListTile(
-                  key: const Key('settings-conn-test'),
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.network_check),
-                  title: const Text('Connection test'),
-                  subtitle: const Text(
-                    'Checks Wi-Fi, Bluetooth, mobile data, internet, the '
-                    'relay, the radio, permissions and battery, with fixes.',
+                SettingAnchor(
+                  id: 'conn-test',
+                  child: ListTile(
+                    key: const Key('settings-conn-test'),
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.network_check),
+                    title: const Text('Connection test'),
+                    subtitle: const Text(
+                      'Checks Wi-Fi, Bluetooth, mobile data, internet, the '
+                      'relay, the radio, permissions and battery, with fixes.',
+                    ),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      openConnectionTest(context, c);
+                    },
                   ),
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    openConnectionTest(context, c);
-                  },
                 ),
-                ListTile(
-                  key: const Key('settings-invite'),
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.qr_code),
-                  title: const Text('Invite (QR code / link)'),
-                  subtitle: const Text(
-                    'Share this channel and / or a friend add.',
+                SettingAnchor(
+                  id: 'invite',
+                  child: ListTile(
+                    key: const Key('settings-invite'),
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.qr_code),
+                    title: const Text('Invite (QR code / link)'),
+                    subtitle: const Text(
+                      'Share this channel and / or a friend add.',
+                    ),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      showInviteSheet(context, c);
+                    },
                   ),
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    showInviteSheet(context, c);
-                  },
                 ),
-                ListTile(
-                  key: const Key('settings-join'),
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.qr_code_scanner),
-                  title: const Text('Join with a code'),
-                  subtitle: const Text('Scan or paste an invite.'),
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    scanInvite(context, c);
-                  },
-                ),
-                ListTile(
-                  key: const Key('settings-debug-log'),
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.bug_report_outlined),
-                  title: const Text('Send debug log'),
-                  subtitle: const Text(
-                    'Connection log for troubleshooting (passcodes, keys and '
-                    'precise locations removed).',
+                SettingAnchor(
+                  id: 'join-code',
+                  child: ListTile(
+                    key: const Key('settings-join'),
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.qr_code_scanner),
+                    title: const Text('Join with a code'),
+                    subtitle: const Text('Scan or paste an invite.'),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      scanInvite(context, c);
+                    },
                   ),
-                  onTap: () => sendDebugLog(ctx, c),
+                ),
+                SettingAnchor(
+                  id: 'debug-log',
+                  child: ListTile(
+                    key: const Key('settings-debug-log'),
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.bug_report_outlined),
+                    title: const Text('Send debug log'),
+                    subtitle: const Text(
+                      'Connection log for troubleshooting (passcodes, keys and '
+                      'precise locations removed).',
+                    ),
+                    onTap: () => sendDebugLog(ctx, c),
+                  ),
                 ),
                 const Divider(height: 32),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        _version.isEmpty ? 'Version' : 'Version $_version',
-                        style: Theme.of(ctx).textTheme.bodyMedium,
+                SettingAnchor(
+                  id: 'updates',
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          _version.isEmpty ? 'Version' : 'Version $_version',
+                          style: Theme.of(ctx).textTheme.bodyMedium,
+                        ),
                       ),
-                    ),
-                    OutlinedButton.icon(
-                      icon: const Icon(Icons.system_update),
-                      label: const Text('Check for updates'),
-                      onPressed: () {
-                        Navigator.pop(ctx);
-                        _lastUpdateCheck = DateTime.now();
-                        _updates.check(context, userInitiated: true);
-                      },
-                    ),
-                  ],
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.system_update),
+                        label: const Text('Check for updates'),
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          _lastUpdateCheck = DateTime.now();
+                          _updates.check(context, userInitiated: true);
+                        },
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),

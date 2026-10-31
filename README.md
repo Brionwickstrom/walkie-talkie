@@ -1525,6 +1525,50 @@ Tests: `test/v195_gateway_test.dart`, `test/v195_quiet_test.dart`.
 Tests: `test/v197_meshtastic_import_test.dart` (vectors from the official
 apps and the Python library), `test/v195_quiet_test.dart`.
 
+## v2.6.2: Search in Settings
+
+A search box at the top of **Settings**, and another at the top of **Radio
+settings**, to find a setting without scrolling.
+
+- **How it works:** type a word; the matching settings replace the long list.
+  Tap one and the list comes back scrolled to it, with a brief highlight. The
+  box stays on top while the list scrolls. "No matching settings" with a hint
+  (try battery, relay, weather, radio, precision or quiet) when nothing fits.
+- **What it looks at:** the setting's title, other words people would type
+  (synonyms), its heading and its one-line description. Every word you type
+  has to match. Plurals, capitals, apostrophes and hyphens do not matter
+  ("relays", "Who's where", "wifi" and "Wi-Fi" all work). Title matches come
+  first.
+- **Examples:** *relay* finds Relay for others, Relay through public radios
+  and Internet relays. *weather* finds Weather alerts. *precision*, *blur*
+  and *location* find Location precision. *frequency* and *slot* find Relay
+  through public radios and the Radio match check. *range* finds Range
+  logging and Range test markers. *battery* and *power* find the battery
+  settings.
+- **Settings that live on another page:** the Radio settings entries (name,
+  hop limit, location sharing, location precision, region and speed, relay
+  through public radios, match check, undo) open the Radio settings page
+  scrolled to that setting (it says "Connect your radio first" if none is
+  connected). Range logging and Range test markers close Settings and open
+  the Trip map's Range test page.
+- **Only what is on screen:** a phone-only switch is not offered on the PC,
+  Wi-Fi Direct only where it exists, the weather switches only when weather
+  alerts are on, Blocked only when someone is blocked.
+- **Phones:** works at 360 dp and at the largest text size; the sheet keeps
+  its height while the list gets shorter so the box does not jump.
+- **Battery:** nothing new in the background. The index is a small constant
+  list searched on each key press.
+
+**Adding a setting:** wrap its widget in `SettingAnchor(id: 'my-id', ...)` and
+add a `SettingEntry` with the same id in `lib/ui/settings_index.dart` (title,
+heading, one line, synonyms). `test/v262_settings_search_test.dart` fails when
+an anchor has no entry, an entry has no anchor, a section title or a Radio
+settings heading has no entry, an entry's label is no longer text in the app,
+or a switch on the Settings sheet is not in the index.
+
+Tests: `test/v262_settings_search_test.dart`. Screenshots:
+`V262_SHOTS=/workspace flutter test test/v262_settings_search_test.dart`.
+
 ## v2.6.1: Radio match check
 
 A card at the top of **Radio settings** (Settings > Long-range radio > Radio

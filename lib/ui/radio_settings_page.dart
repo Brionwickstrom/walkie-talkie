@@ -8,11 +8,20 @@ import '../lora/meshtastic_settings.dart';
 import '../lora/radio_match.dart';
 import 'adaptive_layout.dart';
 import 'radio_match_card.dart';
+import 'settings_index.dart';
+import 'settings_search.dart';
 
 /// Radio settings (v2.5.3): the basics of the paired Meshtastic radio
 /// without leaving the app. A page on phones, a dialog on wide screens.
 /// Nothing is read or sent until a button here is pressed.
-Future<void> openRadioSettings(BuildContext context, WalkieController c) {
+///
+/// [jumpTo] (v2.6.2, from the Settings search) scrolls to one setting and
+/// highlights it.
+Future<void> openRadioSettings(
+  BuildContext context,
+  WalkieController c, {
+  String? jumpTo,
+}) {
   final size = MediaQuery.sizeOf(context);
   if (isTwoPane(size.width, size.height)) {
     return showDialog<void>(
@@ -23,13 +32,15 @@ Future<void> openRadioSettings(BuildContext context, WalkieController c) {
         insetPadding: const EdgeInsets.all(24),
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 560, maxHeight: 760),
-          child: RadioSettingsPage(controller: c, dialog: true),
+          child: RadioSettingsPage(controller: c, dialog: true, jumpTo: jumpTo),
         ),
       ),
     );
   }
   return Navigator.of(context).push(
-    MaterialPageRoute<void>(builder: (_) => RadioSettingsPage(controller: c)),
+    MaterialPageRoute<void>(
+      builder: (_) => RadioSettingsPage(controller: c, jumpTo: jumpTo),
+    ),
   );
 }
 
@@ -79,9 +90,13 @@ class RadioSettingsPage extends StatefulWidget {
     super.key,
     required this.controller,
     this.dialog = false,
+    this.jumpTo,
   });
   final WalkieController controller;
   final bool dialog;
+
+  /// A `SettingAnchor` id to scroll to and highlight when opened.
+  final String? jumpTo;
 
   @override
   State<RadioSettingsPage> createState() => _RadioSettingsPageState();
@@ -605,295 +620,370 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
               padding: const EdgeInsets.only(top: 20, bottom: 4),
               child: Text(t, style: theme.textTheme.titleSmall),
             );
-            return ListView(
-              key: const Key('rs-list'),
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-              children: [
-                if (blocked != null)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Text(
-                      blocked,
-                      key: const Key('rs-blocked'),
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: cs.error,
+            return SettingsSearchLayout(
+              homes: const {SettingsHome.radio},
+              env: SettingsEnv(
+                radioBackup: backup != null,
+                radioReady: blocked == null,
+              ),
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              bottomGap: 24,
+              initialJump: widget.jumpTo,
+              body: Column(
+                key: const Key('rs-list'),
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (blocked != null)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        blocked,
+                        key: const Key('rs-blocked'),
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: cs.error,
+                        ),
                       ),
                     ),
-                  ),
-                if (s != null)
-                  Card(
-                    key: const Key('rs-summary'),
-                    child: Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                  if (s != null)
+                    Card(
+                      key: const Key('rs-summary'),
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              c.activeRadio?.title ??
+                                  c.radioDevice.deviceName ??
+                                  'Your radio',
+                              style: theme.textTheme.titleSmall,
+                            ),
+                            const SizedBox(height: 4),
+                            for (final l in radioSummaryLines(s)) Text(l),
+                          ],
+                        ),
+                      ),
+                    ),
+                  if (_step != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 12),
+                      child: Row(
+                        key: const Key('rs-progress'),
                         children: [
-                          Text(
-                            c.activeRadio?.title ??
-                                c.radioDevice.deviceName ??
-                                'Your radio',
-                            style: theme.textTheme.titleSmall,
+                          const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
                           ),
-                          const SizedBox(height: 4),
-                          for (final l in radioSummaryLines(s)) Text(l),
+                          const SizedBox(width: 12),
+                          Expanded(child: Text(meshWriteStepText(_step!))),
                         ],
                       ),
                     ),
-                  ),
-                if (_step != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 12),
-                    child: Row(
-                      key: const Key('rs-progress'),
-                      children: [
-                        const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(child: Text(meshWriteStepText(_step!))),
-                      ],
+                  if (_saved != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 12),
+                      child: Row(
+                        key: const Key('rs-saved'),
+                        children: [
+                          Icon(Icons.check_circle, color: cs.primary),
+                          const SizedBox(width: 8),
+                          Expanded(child: Text('Saved. $_saved')),
+                        ],
+                      ),
                     ),
-                  ),
-                if (_saved != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 12),
-                    child: Row(
-                      key: const Key('rs-saved'),
-                      children: [
-                        Icon(Icons.check_circle, color: cs.primary),
-                        const SizedBox(width: 8),
-                        Expanded(child: Text('Saved. $_saved')),
-                      ],
-                    ),
-                  ),
-                if (_failed != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 12),
-                    child: Column(
-                      key: const Key('rs-failed'),
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Not saved: $_failed',
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            color: cs.error,
-                          ),
-                        ),
-                        if (backup != null)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 6),
-                            child: FilledButton.tonalIcon(
-                              key: const Key('rs-restore-failed'),
-                              icon: const Icon(Icons.restore),
-                              label: const Text('Restore previous settings'),
-                              onPressed: busy ? null : _restore,
+                  if (_failed != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 12),
+                      child: Column(
+                        key: const Key('rs-failed'),
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Not saved: $_failed',
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: cs.error,
                             ),
                           ),
+                          if (backup != null)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 6),
+                              child: FilledButton.tonalIcon(
+                                key: const Key('rs-restore-failed'),
+                                icon: const Icon(Icons.restore),
+                                label: const Text('Restore previous settings'),
+                                onPressed: busy ? null : _restore,
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  SettingAnchor(
+                    id: 'radio-match',
+                    child: RadioMatchCard(
+                      controller: c,
+                      canEdit: canEdit,
+                      onFix: _fixMatch,
+                      targetId: _matchTarget,
+                      onTarget: (v) => setState(() => _matchTarget = v),
+                    ),
+                  ),
+                  SettingAnchor(
+                    id: 'radio-name',
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        head('Name'),
+                        TextField(
+                          key: const Key('rs-long'),
+                          controller: _long,
+                          enabled: canEdit,
+                          maxLength: 39,
+                          decoration: InputDecoration(
+                            labelText: 'Long name',
+                            errorText: _longError,
+                            counterText: '',
+                          ),
+                          onChanged: (_) => setState(() => _longError = null),
+                        ),
+                        TextField(
+                          key: const Key('rs-short'),
+                          controller: _short,
+                          enabled: canEdit,
+                          maxLength: 4,
+                          decoration: InputDecoration(
+                            labelText: 'Short name (up to 4 characters)',
+                            errorText: _shortError,
+                            counterText: '',
+                          ),
+                          onChanged: (_) => setState(() => _shortError = null),
+                        ),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton(
+                            key: const Key('rs-name-save'),
+                            onPressed: canEdit ? _saveNames : null,
+                            child: const Text('Save name'),
+                          ),
+                        ),
                       ],
                     ),
                   ),
-                RadioMatchCard(
-                  controller: c,
-                  canEdit: canEdit,
-                  onFix: _fixMatch,
-                  targetId: _matchTarget,
-                  onTarget: (v) => setState(() => _matchTarget = v),
-                ),
-                head('Name'),
-                TextField(
-                  key: const Key('rs-long'),
-                  controller: _long,
-                  enabled: canEdit,
-                  maxLength: 39,
-                  decoration: InputDecoration(
-                    labelText: 'Long name',
-                    errorText: _longError,
-                    counterText: '',
+                  SettingAnchor(
+                    id: 'radio-hop',
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        head('Hop limit'),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Slider(
+                                key: const Key('rs-hop'),
+                                value: _hop.toDouble(),
+                                min: 0,
+                                max: 7,
+                                divisions: 7,
+                                label: '$_hop',
+                                onChanged: canEdit
+                                    ? (v) => setState(() => _hop = v.round())
+                                    : null,
+                              ),
+                            ),
+                            SizedBox(
+                              width: 28,
+                              child: Text(
+                                '$_hop',
+                                key: const Key('rs-hop-value'),
+                              ),
+                            ),
+                          ],
+                        ),
+                        Text(
+                          'How many times a message is repeated by other radios. More '
+                          'hops reach farther but use more airtime for everyone. 3 is '
+                          'the usual; 0 means not repeated at all.',
+                          style: small,
+                        ),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton(
+                            key: const Key('rs-hop-save'),
+                            onPressed: canEdit && s.hopLimit != _hop
+                                ? _saveHop
+                                : null,
+                            child: const Text('Save hop limit'),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                  onChanged: (_) => setState(() => _longError = null),
-                ),
-                TextField(
-                  key: const Key('rs-short'),
-                  controller: _short,
-                  enabled: canEdit,
-                  maxLength: 4,
-                  decoration: InputDecoration(
-                    labelText: 'Short name (up to 4 characters)',
-                    errorText: _shortError,
-                    counterText: '',
+                  SettingAnchor(
+                    id: 'radio-location',
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        head('Location sharing'),
+                        SwitchListTile(
+                          key: const Key('rs-location'),
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('Radio shares its position'),
+                          subtitle: const Text(
+                            'Turns the radio\'s own position broadcast on or off. '
+                            'Off stops the timed broadcasts (a radio can still send '
+                            'one when it starts). The app does not send this phone\'s '
+                            'GPS to the radio. Turning it on puts back the interval '
+                            'it had.',
+                          ),
+                          value:
+                              s != null &&
+                              s.positionSecs != null &&
+                              locationSharingOn(
+                                s.positionSecs,
+                                s.positionSmart,
+                              ),
+                          onChanged: canEdit && s.positionSecs != null
+                              ? _toggleLocation
+                              : null,
+                        ),
+                      ],
+                    ),
                   ),
-                  onChanged: (_) => setState(() => _shortError = null),
-                ),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: TextButton(
-                    key: const Key('rs-name-save'),
-                    onPressed: canEdit ? _saveNames : null,
-                    child: const Text('Save name'),
+                  SettingAnchor(
+                    id: 'radio-precision',
+                    child: _precisionSection(theme, s, canEdit, head),
                   ),
-                ),
-                head('Hop limit'),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Slider(
-                        key: const Key('rs-hop'),
-                        value: _hop.toDouble(),
-                        min: 0,
-                        max: 7,
-                        divisions: 7,
-                        label: '$_hop',
-                        onChanged: canEdit
-                            ? (v) => setState(() => _hop = v.round())
-                            : null,
+                  SettingAnchor(
+                    id: 'radio-region',
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        head('Region and speed'),
+                        DropdownButtonFormField<int>(
+                          key: const Key('rs-region'),
+                          initialValue:
+                              radioRegions.any((r) => r.code == _region)
+                              ? _region
+                              : null,
+                          isExpanded: true,
+                          decoration: InputDecoration(
+                            labelText: 'Region',
+                            helperText: _region == 0 || s?.region == 0
+                                ? 'Not set: the radio will not transmit.'
+                                : null,
+                          ),
+                          items: [
+                            for (final r in radioRegions)
+                              DropdownMenuItem(
+                                value: r.code,
+                                child: Text(
+                                  r.hint.isEmpty
+                                      ? r.label
+                                      : '${r.label} · ${r.hint}',
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                          ],
+                          onChanged: canEdit
+                              ? (v) => setState(() => _region = v ?? _region)
+                              : null,
+                        ),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton(
+                            key: const Key('rs-region-change'),
+                            onPressed:
+                                canEdit &&
+                                    _region != 0 &&
+                                    _region != (s.region ?? 0)
+                                ? () => _changeRegion(s)
+                                : null,
+                            child: const Text('Change region...'),
+                          ),
+                        ),
+                        DropdownButtonFormField<int>(
+                          key: const Key('rs-preset'),
+                          initialValue:
+                              radioPresets.any((p) => p.code == _preset)
+                              ? _preset
+                              : null,
+                          isExpanded: true,
+                          decoration: const InputDecoration(labelText: 'Speed'),
+                          items: [
+                            for (final p in radioPresets)
+                              DropdownMenuItem(
+                                value: p.code,
+                                child: Text(
+                                  p.hint.isEmpty
+                                      ? p.label
+                                      : '${p.label} · ${p.hint}',
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                          ],
+                          onChanged: canEdit
+                              ? (v) => setState(() => _preset = v ?? _preset)
+                              : null,
+                        ),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton(
+                            key: const Key('rs-preset-change'),
+                            onPressed:
+                                canEdit &&
+                                    (_preset != (s.modemPreset ?? 0) ||
+                                        s.usePreset == false)
+                                ? () => _changePreset(s)
+                                : null,
+                            child: const Text('Change speed...'),
+                          ),
+                        ),
+                        Text(
+                          'Slower speeds reach farther but carry less. Every radio in '
+                          'your group needs the same region and speed.',
+                          style: small,
+                        ),
+                      ],
+                    ),
+                  ),
+                  SettingAnchor(
+                    id: 'radio-relay',
+                    child: _relaySection(theme, s, canEdit, head),
+                  ),
+                  if (backup != null) ...[
+                    SettingAnchor(
+                      id: 'radio-undo',
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          head('Undo'),
+                          Text(
+                            'Before the last change your radio had: '
+                            '${backup.previous.summary}.',
+                            key: const Key('rs-backup-line'),
+                            style: small,
+                          ),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: OutlinedButton.icon(
+                              key: const Key('rs-restore'),
+                              icon: const Icon(Icons.restore),
+                              label: const Text('Restore previous settings'),
+                              onPressed: canEdit ? _restore : null,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    SizedBox(
-                      width: 28,
-                      child: Text('$_hop', key: const Key('rs-hop-value')),
-                    ),
                   ],
-                ),
-                Text(
-                  'How many times a message is repeated by other radios. More '
-                  'hops reach farther but use more airtime for everyone. 3 is '
-                  'the usual; 0 means not repeated at all.',
-                  style: small,
-                ),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: TextButton(
-                    key: const Key('rs-hop-save'),
-                    onPressed: canEdit && s.hopLimit != _hop ? _saveHop : null,
-                    child: const Text('Save hop limit'),
-                  ),
-                ),
-                head('Location sharing'),
-                SwitchListTile(
-                  key: const Key('rs-location'),
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Radio shares its position'),
-                  subtitle: const Text(
-                    'Turns the radio\'s own position broadcast on or off. '
-                    'Off stops the timed broadcasts (a radio can still send '
-                    'one when it starts). The app does not send this phone\'s '
-                    'GPS to the radio. Turning it on puts back the interval '
-                    'it had.',
-                  ),
-                  value:
-                      s != null &&
-                      s.positionSecs != null &&
-                      locationSharingOn(s.positionSecs, s.positionSmart),
-                  onChanged: canEdit && s.positionSecs != null
-                      ? _toggleLocation
-                      : null,
-                ),
-                _precisionSection(theme, s, canEdit, head),
-                head('Region and speed'),
-                DropdownButtonFormField<int>(
-                  key: const Key('rs-region'),
-                  initialValue: radioRegions.any((r) => r.code == _region)
-                      ? _region
-                      : null,
-                  isExpanded: true,
-                  decoration: InputDecoration(
-                    labelText: 'Region',
-                    helperText: _region == 0 || s?.region == 0
-                        ? 'Not set: the radio will not transmit.'
-                        : null,
-                  ),
-                  items: [
-                    for (final r in radioRegions)
-                      DropdownMenuItem(
-                        value: r.code,
-                        child: Text(
-                          r.hint.isEmpty ? r.label : '${r.label} · ${r.hint}',
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                  ],
-                  onChanged: canEdit
-                      ? (v) => setState(() => _region = v ?? _region)
-                      : null,
-                ),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: TextButton(
-                    key: const Key('rs-region-change'),
-                    onPressed:
-                        canEdit && _region != 0 && _region != (s.region ?? 0)
-                        ? () => _changeRegion(s)
-                        : null,
-                    child: const Text('Change region...'),
-                  ),
-                ),
-                DropdownButtonFormField<int>(
-                  key: const Key('rs-preset'),
-                  initialValue: radioPresets.any((p) => p.code == _preset)
-                      ? _preset
-                      : null,
-                  isExpanded: true,
-                  decoration: const InputDecoration(labelText: 'Speed'),
-                  items: [
-                    for (final p in radioPresets)
-                      DropdownMenuItem(
-                        value: p.code,
-                        child: Text(
-                          p.hint.isEmpty ? p.label : '${p.label} · ${p.hint}',
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                  ],
-                  onChanged: canEdit
-                      ? (v) => setState(() => _preset = v ?? _preset)
-                      : null,
-                ),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: TextButton(
-                    key: const Key('rs-preset-change'),
-                    onPressed:
-                        canEdit &&
-                            (_preset != (s.modemPreset ?? 0) ||
-                                s.usePreset == false)
-                        ? () => _changePreset(s)
-                        : null,
-                    child: const Text('Change speed...'),
-                  ),
-                ),
-                Text(
-                  'Slower speeds reach farther but carry less. Every radio in '
-                  'your group needs the same region and speed.',
-                  style: small,
-                ),
-                _relaySection(theme, s, canEdit, head),
-                if (backup != null) ...[
-                  head('Undo'),
+                  const SizedBox(height: 20),
                   Text(
-                    'Before the last change your radio had: '
-                    '${backup.previous.summary}.',
-                    key: const Key('rs-backup-line'),
-                    style: small,
-                  ),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: OutlinedButton.icon(
-                      key: const Key('rs-restore'),
-                      icon: const Icon(Icons.restore),
-                      label: const Text('Restore previous settings'),
-                      onPressed: canEdit ? _restore : null,
-                    ),
+                    radioNotHereText,
+                    key: const Key('rs-not-here'),
+                    style: small?.copyWith(color: cs.onSurfaceVariant),
                   ),
                 ],
-                const SizedBox(height: 20),
-                Text(
-                  radioNotHereText,
-                  key: const Key('rs-not-here'),
-                  style: small?.copyWith(color: cs.onSurfaceVariant),
-                ),
-              ],
+              ),
             );
           },
         ),

@@ -11,6 +11,7 @@ import 'mesh_channels.dart';
 import 'radio_settings_page.dart';
 import 'radios_nearby_page.dart';
 import 'saved_radios.dart';
+import 'settings_search.dart';
 
 export 'saved_radios.dart' show radioStateText;
 
@@ -154,7 +155,12 @@ class _RadioSettingsState extends State<RadioSettings> {
           children.add(const SizedBox(height: 8));
         }
         // v2.5.4: every radio connected so far; tap one to switch.
-        children.add(SavedRadiosList(controller: c));
+        children.add(
+          SettingAnchor(
+            id: 'radio-saved',
+            child: SavedRadiosList(controller: c),
+          ),
+        );
         if (c.radioPaired) {
           if (!dev.isStream &&
               (dev.state == RadioState.pairing ||
@@ -247,36 +253,39 @@ class _RadioSettingsState extends State<RadioSettings> {
               padding: const EdgeInsets.only(top: 8),
               child: Text('Add a radio', style: theme.textTheme.titleSmall),
             ),
-          Wrap(
-            spacing: 8,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              FilledButton.icon(
-                key: const Key('radioScan'),
-                icon: const Icon(Icons.settings_input_antenna),
-                label: Text(
-                  _scanning
-                      ? 'Looking...'
-                      : desktop
-                      ? 'Find USB radio'
-                      : 'Find my radio',
+          SettingAnchor(
+            id: 'radio-add',
+            child: Wrap(
+              spacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                FilledButton.icon(
+                  key: const Key('radioScan'),
+                  icon: const Icon(Icons.settings_input_antenna),
+                  label: Text(
+                    _scanning
+                        ? 'Looking...'
+                        : desktop
+                        ? 'Find USB radio'
+                        : 'Find my radio',
+                  ),
+                  onPressed: _scanning ? null : _scan,
                 ),
-                onPressed: _scanning ? null : _scan,
-              ),
-              if (desktop)
-                OutlinedButton.icon(
-                  key: const Key('radioWifi'),
-                  icon: const Icon(Icons.wifi),
-                  label: const Text('Wi-Fi radio'),
-                  onPressed: () => _addWifiRadio(context),
-                ),
-              if (_scanning)
-                const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-            ],
+                if (desktop)
+                  OutlinedButton.icon(
+                    key: const Key('radioWifi'),
+                    icon: const Icon(Icons.wifi),
+                    label: const Text('Wi-Fi radio'),
+                    onPressed: () => _addWifiRadio(context),
+                  ),
+                if (_scanning)
+                  const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+              ],
+            ),
           ),
           if (_found != null && fresh.isEmpty)
             Padding(
@@ -316,26 +325,32 @@ class _RadioSettingsState extends State<RadioSettings> {
         // sharing their radio) in this channel's relay room.
         if (c.radioPaired) {
           children.add(
-            SwitchListTile(
-              key: const Key('shareRadio'),
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Share my radio with phones on the internet'),
-              subtitle: const Text(
-                'While you have signal, phones on this channel that are on '
-                'the internet can reach radio-only people through your '
-                'radio, and the other way round. Private groups stay '
-                'encrypted. Never live talk.',
+            SettingAnchor(
+              id: 'radio-share',
+              child: SwitchListTile(
+                key: const Key('shareRadio'),
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Share my radio with phones on the internet'),
+                subtitle: const Text(
+                  'While you have signal, phones on this channel that are on '
+                  'the internet can reach radio-only people through your '
+                  'radio, and the other way round. Private groups stay '
+                  'encrypted. Never live talk.',
+                ),
+                value: c.settings.shareRadio,
+                onChanged: c.setShareRadio,
               ),
-              value: c.settings.shareRadio,
-              onChanged: c.setShareRadio,
             ),
           );
         }
         final gws = c.gateways;
         children.add(
-          Padding(
-            padding: const EdgeInsets.only(top: 8),
-            child: Text('LoRa gateways', style: theme.textTheme.titleSmall),
+          SettingAnchor(
+            id: 'radio-gateways',
+            child: Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text('LoRa gateways', style: theme.textTheme.titleSmall),
+            ),
           ),
         );
         if (gws.isEmpty) {
@@ -368,23 +383,31 @@ class _RadioSettingsState extends State<RadioSettings> {
         final rsBlocked = !c.radioPaired || s == null || !dev.ready;
         children.addAll([
           const SizedBox(height: 8),
-          ListTile(
-            key: const Key('radioSettingsRow'),
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.tune),
-            title: const Text('Radio settings'),
-            subtitle: Text(
-              rsBlocked
-                  ? 'Connect your radio first.'
-                  : 'Name, hop limit, location sharing, region and speed.',
+          SettingAnchor(
+            id: 'radio-settings-row',
+            child: ListTile(
+              key: const Key('radioSettingsRow'),
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.tune),
+              title: const Text('Radio settings'),
+              subtitle: Text(
+                rsBlocked
+                    ? 'Connect your radio first.'
+                    : 'Name, hop limit, location sharing, region and speed.',
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              enabled: !rsBlocked,
+              onTap: rsBlocked ? null : () => openRadioSettings(context, c),
             ),
-            trailing: const Icon(Icons.chevron_right),
-            enabled: !rsBlocked,
-            onTap: rsBlocked ? null : () => openRadioSettings(context, c),
           ),
         ]);
         // v1.9.7: Meshtastic channels shared with Walkie channels.
-        children.add(MeshChannelsSection(controller: c));
+        children.add(
+          SettingAnchor(
+            id: 'radio-channels',
+            child: MeshChannelsSection(controller: c),
+          ),
+        );
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: children,

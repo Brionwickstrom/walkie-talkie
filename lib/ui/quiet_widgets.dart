@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../app/quiet.dart';
 import '../app/walkie_controller.dart';
 import 'home_view.dart' show ActionTile;
+import 'settings_search.dart';
 import 'sheets.dart';
 
 /// Mute button on the talk screen: a plain on/off switch, no time limit.
@@ -448,27 +449,33 @@ class QuietSettings extends StatelessWidget {
                   ],
                 ),
               ),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton.icon(
-                key: const Key('addQuietHours'),
-                icon: const Icon(Icons.add),
-                label: const Text('Add quiet hours'),
-                onPressed: () => editQuietSchedule(context, c),
+            SettingAnchor(
+              id: 'quiet-add',
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  key: const Key('addQuietHours'),
+                  icon: const Icon(Icons.add),
+                  label: const Text('Add quiet hours'),
+                  onPressed: () => editQuietSchedule(context, c),
+                ),
               ),
             ),
-            SwitchListTile(
-              key: const Key('letUrgent'),
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Let urgent rings through'),
-              subtitle: const Text(
-                'While muted or in quiet hours, still ring for an urgent '
-                'ring or SOS, a second ring from the same person within 2 '
-                'minutes, and people you marked "Always allow" (tap a '
-                'person on the Talk screen).',
+            SettingAnchor(
+              id: 'quiet-urgent',
+              child: SwitchListTile(
+                key: const Key('letUrgent'),
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Let urgent rings through'),
+                subtitle: const Text(
+                  'While muted or in quiet hours, still ring for an urgent '
+                  'ring or SOS, a second ring from the same person within 2 '
+                  'minutes, and people you marked "Always allow" (tap a '
+                  'person on the Talk screen).',
+                ),
+                value: q.letUrgentThrough,
+                onChanged: c.setLetUrgentThrough,
               ),
-              value: q.letUrgentThrough,
-              onChanged: c.setLetUrgentThrough,
             ),
           ],
         );

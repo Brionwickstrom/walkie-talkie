@@ -735,6 +735,13 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
     ),
   );
 
+  /// Opens the Range test page (from the Settings search, v2.6.2).
+  void openRangeTest() {
+    final tc = t;
+    if (tc == null || !mounted) return;
+    _openRange(context, tc);
+  }
+
   void _openRange(BuildContext context, TripController trip) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
