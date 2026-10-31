@@ -2,6 +2,7 @@
 // no-reply points, connect / drop markers, export, storage cap, GPS).
 // RANGE_LOG_PNG=path renders a screenshot; RANGE_TILES=dir real tiles.
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -25,6 +26,15 @@ import 'package:walkie_talkie/ui/range_test_ui.dart';
 import 'home_layout_test.dart' show loadFonts;
 import 'trip_integration_test.dart' as ti;
 
+final at0 = RangeSample(
+  at: DateTime.fromMillisecondsSinceEpoch(1793407474000),
+  pos: const GeoPoint(45.5868416, -122.290176),
+  kind: SampleKind.ok,
+  snr: -7.0,
+  rssi: -104,
+  hops: 0,
+  from: 0x0b4f84fb,
+);
 const home = defaultRangeHomeNode; // Skunk Ape !0b4f84fb
 const homePos = GeoPoint(45.5790, -122.3000);
 
@@ -446,35 +456,53 @@ void main() {
   });
 
   group('storage, export', () {
-    test('rotates at 5000 points, oldest first, and reloads trimmed', () async {
+    test('rotates at the cap, oldest first, and reloads trimmed', () async {
       final d = tmp('rl');
-      final s = RangeTest(File('${d.path}/r.json'));
-      for (var i = 0; i < maxRangeSamples + 300; i++) {
-        await s.addSample(
-          RangeSample(
-            at: DateTime.fromMillisecondsSinceEpoch(1793400000000 + i * 1000),
-            pos: GeoPoint(45.5 + i * 1e-6, -122.2),
-            kind: SampleKind.heard,
-            snr: 1,
-            rssi: -90,
-            hops: 0,
-            from: home,
-          ),
-        );
+      const cap = 100; // the app keeps 5000 with the same rules
+      final s = RangeTest(File('${d.path}/r.json'), maxSamples: cap);
+      RangeSample at(int i) => RangeSample(
+        at: DateTime.fromMillisecondsSinceEpoch(1793400000000 + i * 1000),
+        pos: GeoPoint(45.5 + i * 1e-6, -122.2),
+        kind: SampleKind.heard,
+        snr: 1,
+        rssi: -90,
+        hops: 0,
+        from: home,
+      );
+      for (var i = 0; i < cap + 30; i++) {
+        await s.addSample(at(i));
       }
-      expect(s.samples.length, maxRangeSamples);
+      expect(s.samples.length, cap);
       expect(
         s.samples.first.at.millisecondsSinceEpoch,
-        1793400000000 + 300 * 1000,
+        1793400000000 + 30 * 1000,
       );
-      final size = File('${d.path}/range_samples.jsonl').lengthSync();
-      expect(size, lessThan(900 * 1024), reason: 'bounded on disk');
-      final t = RangeTest(File('${d.path}/r.json'));
+      final lines = File('${d.path}/range_samples.jsonl').readAsLinesSync();
+      expect(
+        lines.length,
+        lessThanOrEqualTo(cap + 5),
+        reason: 'bounded on disk',
+      );
+      final t = RangeTest(File('${d.path}/r.json'), maxSamples: cap);
       await t.load();
-      expect(t.samples.length, maxRangeSamples);
+      expect(t.samples.length, cap);
       expect(t.samples.last.at, s.samples.last.at);
-      // One sample is about 80 bytes.
-      expect(size / (maxRangeSamples + 250), lessThan(120));
+      expect(t.samples.first.at, s.samples.first.at);
+      // A shorter cap on the next start trims what is on disk.
+      final u = RangeTest(File('${d.path}/r.json'), maxSamples: 40);
+      await u.load();
+      expect(u.samples.length, 40);
+      expect(
+        File('${d.path}/range_samples.jsonl').readAsLinesSync().length,
+        40,
+      );
+    });
+
+    test('the real cap is 5000 points of about 80 bytes (about 400 KB)', () {
+      expect(maxRangeSamples, 5000);
+      final line = '${jsonEncode(at0.toJson())}\n';
+      expect(line.length, inInclusiveRange(60, 120));
+      expect(line.length * maxRangeSamples, lessThan(600 * 1024));
     });
 
     test('clear points keeps markers; clear markers keeps points', () async {

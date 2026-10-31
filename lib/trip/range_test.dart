@@ -318,9 +318,14 @@ RangeImport parseRangeState(
 
 /// The markers, saved in `range_test.json`. Local to this device.
 class RangeTest extends ChangeNotifier {
-  /// [file] null = keep in memory only (tests).
-  RangeTest(this.file);
+  /// [file] null = keep in memory only (tests). [maxSamples]: logged points
+  /// kept.
+  RangeTest(this.file, {this.maxSamples = maxRangeSamples});
   final File? file;
+  final int maxSamples;
+
+  /// The points file is rewritten (compacted) after this many extra lines.
+  int get _compactSlack => (maxSamples ~/ 20).clamp(5, 250);
 
   final Map<String, RangeEvent> _events = {};
 
@@ -378,8 +383,8 @@ class RangeTest extends ChangeNotifier {
         } catch (_) {}
       }
       _samplesOnDisk = _samples.length;
-      if (_samples.length > maxRangeSamples) {
-        _samples.removeRange(0, _samples.length - maxRangeSamples);
+      if (_samples.length > maxSamples) {
+        _samples.removeRange(0, _samples.length - maxSamples);
         await _rewriteSamples();
       }
     } catch (_) {}
@@ -407,15 +412,15 @@ class RangeTest extends ChangeNotifier {
   }
 
   /// One logged point: appended to the file (no rewrite), the oldest drop
-  /// off at [maxRangeSamples].
+  /// off at [maxSamples].
   Future<void> addSample(RangeSample x) async {
     _samples.add(x);
-    final over = _samples.length > maxRangeSamples;
+    final over = _samples.length > maxSamples;
     if (over) _samples.removeAt(0);
     notifyListeners();
     final f = _samplesFile;
     if (f == null) return;
-    if (over && _samplesOnDisk >= maxRangeSamples + 250) {
+    if (over && _samplesOnDisk >= maxSamples + _compactSlack) {
       await _rewriteSamples(); // compact once per 250 points
       return;
     }
