@@ -476,7 +476,9 @@ void main() {
       );
       expect(find.text('Range test markers'), findsOneWidget);
       expect(
-        find.text('Green and red markers from a range test.'),
+        find.text(
+          'Green and red markers from a range test, and range logging.',
+        ),
         findsOneWidget,
       );
       await t.tap(find.byKey(const Key('rangeLayerTile')));

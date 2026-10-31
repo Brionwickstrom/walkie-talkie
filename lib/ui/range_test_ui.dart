@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show File;
+import 'dart:io' show Directory, File;
 import 'dart:typed_data' show BytesBuilder;
 
 import 'package:file_picker/file_picker.dart';
@@ -10,7 +10,11 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../trip/geo.dart';
+import '../trip/range_logger.dart';
 import '../trip/range_test.dart';
+
+import 'package:path_provider/path_provider.dart';
+
 import 'sheets.dart';
 
 const Color rangeGreen = Color(0xFF2E7D32);
@@ -133,6 +137,92 @@ List<CircleMarker> rangeCircles(RangeTest rt, RangeEvent? selected) {
   ];
 }
 
+/// "!0b4f84fb" or "0b4f84fb" as a node number, null if it is not one.
+int? parseNodeId(String s) {
+  final t = s.trim().replaceFirst(
+    RegExp(r'^[!#]|^0x', caseSensitive: false),
+    '',
+  );
+  if (!RegExp(r'^[0-9a-fA-F]{1,8}$').hasMatch(t)) return null;
+  final v = int.parse(t, radix: 16);
+  return v == 0 || v == 0xFFFFFFFF ? null : v;
+}
+
+/// Red (weak, -15 dB or worse) through amber to green (0 dB or better).
+Color snrColor(double? snr) {
+  if (snr == null) return const Color(0xFF9E9E9E);
+  final t = ((snr + 15) / 15).clamp(0.0, 1.0);
+  return HSVColor.fromAHSV(1, 120 * t, 0.85, 0.75).toColor();
+}
+
+const Color noReplyFill = Color(0xFF757575);
+
+/// The logged points of range logging (v2.5.9): answered pings graded by
+/// SNR, packets heard (smaller), no-reply pings grey with a red ring. The
+/// newest [max] are drawn.
+List<CircleMarker> rangeSampleCircles(RangeTest rt, {int max = 1500}) {
+  if (!rt.visible || rt.samples.isEmpty) return const [];
+  final all = rt.samples;
+  final list = all.length > max ? all.sublist(all.length - max) : all;
+  return [
+    for (final x in list)
+      CircleMarker(
+        point: LatLng(x.pos.lat, x.pos.lng),
+        radius: switch (x.kind) {
+          SampleKind.ok => 6,
+          SampleKind.fail => 5,
+          SampleKind.heard => 3.5,
+        },
+        useRadiusInMeter: false,
+        color: x.kind == SampleKind.fail
+            ? noReplyFill.withValues(alpha: 0.9)
+            : snrColor(x.snr)
+                  .withValues(alpha: x.kind == SampleKind.heard ? 0.75 : 0.95),
+        borderColor: x.kind == SampleKind.fail
+            ? rangeRed
+            : x.kind == SampleKind.ok
+            ? Colors.white
+            : Colors.transparent,
+        borderStrokeWidth: x.kind == SampleKind.heard ? 0 : 1.5,
+      ),
+  ];
+}
+
+/// The small legend (colour = SNR).
+class RangeLegend extends StatelessWidget {
+  const RangeLegend({super.key});
+  @override
+  Widget build(BuildContext context) {
+    Widget dot(Color c, String t, {Color? ring}) => Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 12,
+          height: 12,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: c,
+            border: Border.all(color: ring ?? Colors.white, width: 1.5),
+          ),
+        ),
+        const SizedBox(width: 4),
+        Text(t, style: const TextStyle(fontSize: 12)),
+      ],
+    );
+    return Wrap(
+      key: const Key('rangeLegend'),
+      spacing: 12,
+      runSpacing: 4,
+      children: [
+        dot(snrColor(5), 'strong (0 dB+)'),
+        dot(snrColor(-7), 'medium'),
+        dot(snrColor(-15), 'weak (-15 dB)'),
+        dot(noReplyFill, 'no reply', ring: rangeRed),
+      ],
+    );
+  }
+}
+
 /// What the tap on a marker shows.
 Future<void> showRangeEventSheet(
   BuildContext context,
@@ -239,8 +329,24 @@ class RangeTestPage extends StatefulWidget {
     this.onShow,
     this.imperial = true,
     this.pcFile,
+    this.logger,
+    this.homeChoices,
+    this.share,
+    this.exportDir,
   });
   final RangeTest range;
+
+  /// Range logging on this phone (null = not offered, tests).
+  final RangeLogger? logger;
+
+  /// Radios the connected radio knows (for "Home radio").
+  final List<({int num, String name})> Function()? homeChoices;
+
+  /// Share a file (CSV / JSON export); false = could not, copy instead.
+  final Future<bool> Function(String path, String mime, String title)? share;
+
+  /// Tests: where exports are written.
+  final Directory? exportDir;
 
   /// Centre the Trip map on a marker.
   final void Function(RangeEvent e)? onShow;
@@ -349,18 +455,244 @@ class _RangeTestPageState extends State<RangeTestPage> {
     if (ok == true) await rt.clear();
   }
 
+  Future<void> _export(bool csv) async {
+    await rt.flush();
+    final text = csv ? rt.samplesCsv() : rt.exportJson();
+    var shared = false;
+    try {
+      final dir = widget.exportDir ?? await getTemporaryDirectory();
+      await dir.create(recursive: true);
+      final stamp = DateTime.now()
+          .toIso8601String()
+          .substring(0, 19)
+          .replaceAll(':', '-');
+      final f = File('${dir.path}/range-log-$stamp.${csv ? 'csv' : 'json'}');
+      await f.writeAsString(text);
+      final share = widget.share;
+      if (share != null) {
+        shared = await share(
+          f.path,
+          csv ? 'text/csv' : 'application/json',
+          'Stalkie Talkie range log',
+        );
+      }
+    } catch (_) {}
+    if (shared) return;
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) return;
+    _say('Could not open the share sheet. Copied the log instead.');
+  }
+
+  String _homeName() {
+    final n = rt.homeNode;
+    for (final c in widget.homeChoices?.call() ?? const []) {
+      if (c.num == n) return '${c.name} (${radioNodeLabel(n)})';
+    }
+    return n == defaultRangeHomeNode
+        ? 'Skunk Ape (${radioNodeLabel(n)})'
+        : radioNodeLabel(n);
+  }
+
+  Future<void> _pickHome() async {
+    final choices = [
+      (num: defaultRangeHomeNode, name: 'Skunk Ape'),
+      for (final c in widget.homeChoices?.call() ?? const [])
+        if (c.num != defaultRangeHomeNode) c,
+    ];
+    final ctl = TextEditingController();
+    final n = await showDialog<int>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Home radio'),
+        content: SizedBox(
+          width: 360,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final c in choices)
+                ListTile(
+                  key: Key('rangeHome-${c.num}'),
+                  dense: true,
+                  title: Text(c.name),
+                  subtitle: Text(radioNodeLabel(c.num)),
+                  trailing: c.num == rt.homeNode
+                      ? const Icon(Icons.check)
+                      : null,
+                  onTap: () => Navigator.pop(ctx, c.num),
+                ),
+              TextField(
+                key: const Key('rangeHomeId'),
+                controller: ctl,
+                decoration: const InputDecoration(
+                  labelText: 'Or type a radio id, like !0b4f84fb',
+                ),
+                onSubmitted: (v) => Navigator.pop(ctx, parseNodeId(v)),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            key: const Key('rangeHomeUse'),
+            onPressed: () {
+              final v = parseNodeId(ctl.text);
+              if (v != null) Navigator.pop(ctx, v);
+            },
+            child: const Text('Use typed id'),
+          ),
+        ],
+      ),
+    );
+    if (n != null) await rt.setHomeNode(n);
+  }
+
+  List<Widget> _loggingSection(BuildContext context) {
+    final lg = widget.logger!;
+    final plugged = lg.plugged();
+    final every = lg.interval.inSeconds;
+    final cs = Theme.of(context).colorScheme;
+    return [
+      SwitchListTile(
+        key: const Key('rangeLogging'),
+        title: const Text('Range logging'),
+        subtitle: Text(
+          rt.logging
+              ? lg.status
+              : 'Off. Turn on to log where your radio hears the home radio '
+                    'while you drive.',
+        ),
+        value: rt.logging,
+        onChanged: (v) => rt.setLogging(v),
+      ),
+      if (rt.logging) ...[
+        ListTile(
+          key: const Key('rangeHome'),
+          leading: const Icon(Icons.home),
+          title: const Text('Home radio'),
+          subtitle: Text(_homeName()),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: _pickHome,
+        ),
+        ListTile(
+          title: Text(
+            plugged
+                ? 'Ping every $every s (plugged in)'
+                : 'Ping every ${rt.pingSecs} s (on battery)',
+          ),
+          subtitle: Slider(
+            key: const Key('rangePing'),
+            min: 60,
+            max: 120,
+            divisions: 12,
+            label: '${rt.pingSecs} s',
+            value: rt.pingSecs.toDouble(),
+            onChanged: (v) => rt.setPingSecs(v.round()),
+          ),
+        ),
+        Container(
+          margin: const EdgeInsets.symmetric(horizontal: 16),
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: Colors.amber.withValues(alpha: 0.15),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Text(
+            key: const Key('rangeBatteryNote'),
+            'Battery: each ping is a radio transmit (and up to 3 retries when '
+            'nobody answers), so your radio and the phone use more power '
+            'while this is on, and the phone checks GPS every 10 s. Plugged '
+            'in it pings every 30 s; never faster, to spare the shared '
+            'public frequency. Turn it off when you are done.',
+            style: TextStyle(color: cs.onSurface, fontSize: 13),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: Text(
+            key: const Key('rangeCounts'),
+            '${rt.samples.length} points logged: '
+            '${rt.samples.where((x) => x.kind == SampleKind.ok).length} '
+            'replies, '
+            '${rt.samples.where((x) => x.kind == SampleKind.fail).length} '
+            'no reply, '
+            '${rt.samples.where((x) => x.kind == SampleKind.heard).length} '
+            'heard.',
+          ),
+        ),
+      ],
+      const Padding(
+        padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
+        child: RangeLegend(),
+      ),
+      ListTile(
+        key: const Key('rangeExportCsv'),
+        leading: const Icon(Icons.table_chart),
+        title: const Text('Export log (CSV)'),
+        subtitle: const Text('Every logged point: time, place, result, SNR.'),
+        enabled: rt.samples.isNotEmpty,
+        onTap: rt.samples.isEmpty ? null : () => _export(true),
+      ),
+      ListTile(
+        key: const Key('rangeExportJson'),
+        leading: const Icon(Icons.data_object),
+        title: const Text('Export log (JSON)'),
+        subtitle: const Text('Points and connect / drop markers.'),
+        enabled: !rt.isEmpty || rt.samples.isNotEmpty,
+        onTap: rt.isEmpty && rt.samples.isEmpty ? null : () => _export(false),
+      ),
+      ListTile(
+        key: const Key('rangeClearPoints'),
+        leading: const Icon(Icons.layers_clear),
+        title: const Text('Clear logged points'),
+        enabled: rt.samples.isNotEmpty,
+        onTap: rt.samples.isEmpty
+            ? null
+            : () async {
+                final ok = await showDialog<bool>(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    title: const Text('Clear all logged points?'),
+                    content: const Text(
+                      'Removes the colored points from this device. The '
+                      'connect / drop markers stay.',
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(ctx, false),
+                        child: const Text('Keep'),
+                      ),
+                      FilledButton(
+                        key: const Key('rangeClearPointsYes'),
+                        onPressed: () => Navigator.pop(ctx, true),
+                        child: const Text('Clear'),
+                      ),
+                    ],
+                  ),
+                );
+                if (ok == true) await rt.clearSamples();
+              },
+      ),
+      const Divider(),
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
     final showPc = widget.pcFile != null || RangeTest.pcRangeFile() != null;
     return Scaffold(
       appBar: AppBar(title: const Text('Range test markers')),
       body: ListenableBuilder(
-        listenable: rt,
+        listenable: Listenable.merge([rt, ?widget.logger]),
         builder: (context, _) {
           final list = rt.events.reversed.toList();
           return ListView(
             padding: const EdgeInsets.only(bottom: 24),
             children: [
+              if (widget.logger != null) ..._loggingSection(context),
               SwitchListTile(
                 key: const Key('rangeVisible'),
                 title: const Text('Show on the map'),

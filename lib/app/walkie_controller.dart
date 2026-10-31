@@ -74,6 +74,7 @@ import '../transports/relay_socket.dart';
 import '../transports/relay_transport.dart';
 import '../transports/wifi_direct_transport.dart';
 import '../trip/geo.dart';
+import '../trip/range_logger.dart';
 import '../trip/sos.dart';
 import '../trip/trip_controller.dart';
 import '../trip/trip_route.dart';
@@ -165,7 +166,12 @@ class WalkieController extends ChangeNotifier {
     ];
     radioDevice.onMoved = _radioMoved;
     // v2.5.4: remember the connected radio's names and node number.
-    _subs.add(radioDevice.changes.listen((_) => _noteRadio()));
+    _subs.add(
+      radioDevice.changes.listen((_) {
+        _noteRadio();
+        _bindRangeLog();
+      }),
+    );
     if (settings.radioId != null) ble?.ignoreDevices.add(settings.radioId!);
     radioDevice.onDevice = (id) {
       ble?.ignoreDevices.clear();
@@ -1647,6 +1653,7 @@ class WalkieController extends ChangeNotifier {
       await t.start();
       await t.setOfflineSaver(settings.offlineSaver);
       trip = t;
+      _bindRangeLog();
       // v2.5.6: Driving mode follows plug / unplug (event driven).
       await t.setPluggedIn(charging);
       unawaited(bridge.watchPower());
@@ -3203,6 +3210,20 @@ class WalkieController extends ChangeNotifier {
   /// Remember the radio that is connected now: its names, node number and
   /// time. Runs on the radio's own change events, writes only on a real
   /// change. No traffic.
+  /// Range logging (v2.5.9) listens to the connected radio's session.
+  void _bindRangeLog() {
+    final t = trip;
+    if (t == null) return;
+    final s = radioDevice.ready ? radioDevice.session : null;
+    if (s == null) {
+      t.rangeLog.bind(null);
+      return;
+    }
+    final cur = t.rangeLog.radio;
+    if (cur is SessionRangeRadio && identical(cur.s, s)) return;
+    t.rangeLog.bind(SessionRangeRadio(s));
+  }
+
   void _noteRadio() {
     final d = radioDevice;
     final s = d.session;

@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 
 import '../app/walkie_controller.dart';
+import '../lora/meshtastic_session.dart' show RadioNode;
 import '../trip/friend_motion.dart';
 import '../trip/geo.dart';
 import '../trip/imports/map_layers.dart';
@@ -211,7 +212,12 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
       return const Center(child: CircularProgressIndicator());
     }
     return ListenableBuilder(
-      listenable: Listenable.merge([trip, trip.layers, trip.range]),
+      listenable: Listenable.merge([
+        trip,
+        trip.layers,
+        trip.range,
+        trip.rangeLog,
+      ]),
       builder: (context, _) {
         final me = trip.myFix;
         if (_follow && me != null && _mapReady) {
@@ -508,6 +514,7 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
             PolylineLayer(polylines: lines),
             CircleLayer(circles: friendCircles(trip)),
             CircleLayer(circles: rangeCircles(trip.range, _rangeSel)),
+            CircleLayer(circles: rangeSampleCircles(trip.range)),
             MarkerLayer(markers: markers),
             PhotoDateLine(trip: trip),
             SimpleAttributionWidget(
@@ -527,6 +534,45 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
             ),
           ],
         ),
+        if (trip.range.logging)
+          Positioned(
+            top: trip.drivingMode ? 36 : 8,
+            left: 8,
+            child: GestureDetector(
+              onTap: () => _openRange(context, trip),
+              child: DecoratedBox(
+                key: const Key('rangeChip'),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.6),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.cell_tower,
+                        size: 14,
+                        color: Colors.white,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Range logging · ${trip.rangeLog.status}',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
         if (trip.drivingMode)
           Positioned(
             top: 8,
@@ -588,7 +634,7 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
         tip: 'Imported trails and maps',
         onTap: () => _openLayers(context, trip),
       ),
-      if (!trip.range.isEmpty)
+      if (trip.range.hasAny)
         RoundMapButton(
           key: const Key('mapRange'),
           icon: Icons.cell_tower,
@@ -695,6 +741,16 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
         builder: (_) => RangeTestPage(
           range: trip.range,
           imperial: trip.settings.imperial,
+          logger: trip.rangeLog,
+          homeChoices: () => [
+            for (final n
+                in c.radioDevice.session?.nodes.values ?? const <RadioNode>[])
+              if (n.num != c.radioDevice.session?.myNodeNum &&
+                  n.readable &&
+                  n.longName.isNotEmpty)
+                (num: n.num, name: n.longName),
+          ],
+          share: trip.host.shareFile,
           onShow: (e) {
             Navigator.of(context).popUntil((r) => r.isFirst);
             setState(() {

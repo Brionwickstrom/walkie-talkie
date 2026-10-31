@@ -51,6 +51,34 @@ class RadioNode {
   bool get readable => hasInfo || decodedHeard;
 }
 
+/// A packet from another node, as heard on air (v2.5.9, range logging):
+/// who, when, how strong, how many hops, and what kind. Fired for every
+/// packet, even one in a channel we cannot read ([port] null then).
+class RadioHeard {
+  const RadioHeard({
+    required this.from,
+    required this.at,
+    required this.snr,
+    required this.rssi,
+    this.hops,
+    this.port,
+    this.requestId = 0,
+    this.id = 0,
+  });
+  final int from;
+  final DateTime at;
+
+  /// 0 = not reported.
+  final double snr;
+  final int rssi;
+  final int? hops;
+  final int? port;
+
+  /// The packet this one answers (a routing ack), 0 = none.
+  final int requestId;
+  final int id;
+}
+
 /// What a received LoRa packet looked like on air.
 class RadioSignal {
   RadioSignal(this.snr, this.rssi, this.hopsAway, this.at);
@@ -136,6 +164,7 @@ class MeshtasticSession {
 
   final _packets = StreamController<MeshPacketPb>.broadcast();
   final _admin = StreamController<MeshPacketPb>.broadcast();
+  final _heard = StreamController<RadioHeard>.broadcast(sync: true);
   final _changes = StreamController<void>.broadcast();
   final List<StreamSubscription<dynamic>> _subs = [];
   Timer? _poll;
@@ -147,6 +176,10 @@ class MeshtasticSession {
 
   /// Packets from other nodes (any port).
   Stream<MeshPacketPb> get packets => _packets.stream;
+
+  /// Every packet heard from another node with its signal (v2.5.9). No
+  /// listener = no work.
+  Stream<RadioHeard> get heard => _heard.stream;
   Stream<void> get changes => _changes.stream;
 
   /// Admin (and routing) answers from our own radio (v1.9.7).
@@ -385,6 +418,20 @@ class MeshtasticSession {
     if (p.rxSnr != 0) node.snr = p.rxSnr;
     if (p.rxRssi != 0) node.rssi = p.rxRssi;
     if (p.hopsAway != null) node.hopsAway = p.hopsAway;
+    if (_heard.hasListener) {
+      _heard.add(
+        RadioHeard(
+          from: p.from,
+          at: now,
+          snr: p.rxSnr,
+          rssi: p.rxRssi,
+          hops: p.hopsAway,
+          port: d?.portnum,
+          requestId: d?.requestId ?? 0,
+          id: p.id,
+        ),
+      );
+    }
     if (d == null) return true; // not for our channel key
     node.decodedHeard = true;
     node.channel = p.channel;
@@ -493,6 +540,7 @@ class MeshtasticSession {
     if (done != null && !done.isCompleted) done.complete();
     await _packets.close();
     await _admin.close();
+    await _heard.close();
     await _changes.close();
   }
 }

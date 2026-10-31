@@ -81,8 +81,9 @@ class MapLayersPage extends StatelessWidget {
                   leading: const Icon(Icons.cell_tower, size: 28),
                   title: const Text('Range test markers'),
                   subtitle: Text(
-                    trip.range.isEmpty
-                        ? 'Green and red markers from a range test.'
+                    !trip.range.hasAny
+                        ? 'Green and red markers from a range test, and '
+                              'range logging.'
                         : '${trip.range.length} marker'
                               '${trip.range.length == 1 ? '' : 's'} · '
                               '${trip.range.visible ? 'shown' : 'hidden'}',

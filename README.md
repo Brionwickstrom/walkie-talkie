@@ -1528,7 +1528,8 @@ apps and the Python library), `test/v195_quiet_test.dart`.
 ## v2.5.9: Range test markers on the map
 
 Green "connected" and red "dropped" markers on the Trip map for a range test
-(driving away from the home radio to see where the link starts and stops).
+(driving away from the home radio to see where the link starts and stops),
+from the PC range test, pasted text, or this phone's own range logging.
 
 - **Where:** Trip map > the file icon (Imported trails and maps) > **Range
   test markers**. Once there are markers, a tower button also appears among
@@ -1551,14 +1552,55 @@ Green "connected" and red "dropped" markers on the Trip map for a range test
     device.
 - **Local only:** markers are saved on the device (`range_test.json`) and are
   never sent over the air or the relays. Same event twice = one marker.
-- **Not built:** automatic range logging from the phone while connected to a
-  radio. The node list only knows "last heard", and the home radio sends its
-  position about every 15 minutes, so a drop could only be noticed 15 minutes
-  or more late; a quicker check would need extra radio traffic and battery.
-- **Battery:** no new background work on Android. Windows only: one file-time
-  check every 30 s while the map is open.
+- **Battery (markers only):** no new background work on Android. Windows
+  only: one file-time check every 30 s while the map is open.
 
-Tests: `test/v259_range_test.dart`.
+### Range logging on the phone
+
+Same page, switch **Range logging** (OFF by default: nothing runs, nothing is
+sent, no GPS is asked for). Plain taps: Trip map > file icon (Imported trails
+and maps) > Range test markers > Range logging.
+
+- **Home radio:** Skunk Ape (!0b4f84fb) by default; tap "Home radio" to pick
+  another radio the connected radio knows, or type an id like `!0b4f84fb`.
+- **Passive log:** every packet the connected radio hears from the home radio
+  (even one in a channel we cannot read) becomes a point: time, the phone's
+  own GPS fix (not the radio's blurred one), RSSI, SNR, hops, from-node. At
+  most one point per 2 s. Costs nothing extra: the radio hears it anyway.
+- **Active ping:** a one byte want-ack packet to the home radio (private
+  port, hop limit 1, reliable). The home radio answers with an ack: that is a
+  reply point with the ack's SNR / RSSI / hops. **Every 30 s while the phone
+  is plugged in or charging** (same detection as Driving mode), else **every
+  60 to 120 s, default 90, slider on the page**. Never faster than 30 s (LoRa
+  airtime on the shared public slot 20). No ping is sent without a GPS fix
+  younger than 30 s, nor while the radio's queue is nearly full. Waits 20 s
+  for the ack (or sooner if the radio reports the send failed).
+- **No reply:** an unanswered ping is a grey point with a red ring at the
+  phone's GPS position.
+- **Markers:** first answered ping (after start or a drop) = green CONNECT;
+  two unanswered pings in a row after a connect = red DROP at the first one.
+  Positions are exact (phone GPS), so no blur circle.
+- **On the map:** answered pings graded by SNR (green 0 dB+ through amber to
+  red -15 dB), packets heard smaller, no-reply grey/red, plus the markers; a
+  "Range logging" chip while it is on; legend on the page. The newest 1500
+  points are drawn.
+- **Storage:** `range_samples.jsonl`, one line per point (about 80 bytes),
+  appended; the newest 5000 are kept (about 400 KB), compacted every 250
+  points. **Clear logged points** (confirm), **Export log (CSV)** and
+  **(JSON)** share a file (CSV columns: time_utc, unix_s, lat, lon, result,
+  snr_db, rssi_dbm, hops, from); the log is local only, never sent anywhere.
+- **GPS:** uses the fixes Trip / Driving mode already take. While range
+  logging is on and nothing asks for faster, it asks for one high-accuracy fix
+  every 10 s (and background location, so it keeps working with the screen
+  off). Off again = back to what Trip needs.
+- **Battery, honestly:** each ping is a radio transmit (plus up to 3 retries
+  when nobody answers) on the radio, plus the phone's GPS every 10 s and a
+  timer: noticeably more than idle. The page says so. Turn it off when done.
+- **Untested on hardware:** the ack from a stock Skunk Ape for a private-port
+  want-ack packet (the firmware acks any packet addressed to it that it can
+  decrypt, so it should work) and the exact retry timing of the radio.
+
+Tests: `test/v259_range_test.dart`, `test/v259_range_log_test.dart`.
 
 ## v2.5.8: Relay through public radios
 

@@ -28,6 +28,7 @@ import 'drive/road_service.dart';
 import 'drive/speech.dart';
 import 'map_net.dart';
 import 'nav/foot_router.dart';
+import 'range_logger.dart';
 import 'range_test.dart';
 import 'nav/gentle_route.dart';
 import 'search/trailhead_finder.dart';
@@ -255,6 +256,24 @@ class TripController extends ChangeNotifier {
   /// Range test connect / drop markers (v2.5.9), local to this device.
   late final RangeTest range = RangeTest(File('${dir.path}/range_test.json'));
 
+  /// Range logging on this phone (v2.5.9): off until switched on.
+  late final RangeLogger rangeLog = RangeLogger(
+    store: range,
+    fix: () => myFix,
+    plugged: () => _pluggedIn,
+  );
+  bool _rangeLoggingSeen = false;
+
+  void _rangeChanged() {
+    if (range.logging == _rangeLoggingSeen) return;
+    _rangeLoggingSeen = range.logging;
+    unawaited(_updateLocationNeed());
+  }
+
+  /// GPS interval while range logging is on and nothing else asks for a
+  /// faster one (one fix every 10 s, high accuracy).
+  static const rangeGpsInterval = Duration(seconds: 10);
+
   /// Saved offline areas (v1.9.3): map tiles, trails and roads together.
   late final OfflineAreas areas;
 
@@ -363,6 +382,8 @@ class TripController extends ChangeNotifier {
       layers.load(),
       range.load(),
     ]);
+    _rangeLoggingSeen = range.logging;
+    range.addListener(_rangeChanged);
     await routes.load();
     await areas.load();
     await routes.prune({for (final a in areas.areas) a.id});
@@ -389,6 +410,8 @@ class TripController extends ChangeNotifier {
     mapNet.dispose();
     tiles.close();
     layers.close();
+    range.removeListener(_rangeChanged);
+    rangeLog.dispose();
     range.dispose();
     super.dispose();
   }
@@ -447,10 +470,12 @@ class TripController extends ChangeNotifier {
       sos.active != null ||
       _onScreen ||
       nav != null ||
-      drive != null;
+      drive != null ||
+      range.logging;
 
   Duration get _wantedInterval {
-    final base = _baseInterval;
+    var base = _baseInterval;
+    if (range.logging && base > rangeGpsInterval) base = rangeGpsInterval;
     return drivingMode && base > drivingGpsInterval ? drivingGpsInterval : base;
   }
 
@@ -479,6 +504,7 @@ class TripController extends ChangeNotifier {
       nav != null ||
       drive != null ||
       recorder.recording ||
+      range.logging ||
       sos.active != null;
 
   /// What the location was last started with (tests / debug).
@@ -513,7 +539,8 @@ class TripController extends ChangeNotifier {
         recorder.recording ||
         sos.active != null ||
         nav != null ||
-        drive != null;
+        drive != null ||
+        range.logging;
     if (bg != _bgLoc) {
       _bgLoc = bg;
       await host.backgroundLocation(bg);
@@ -576,6 +603,7 @@ class TripController extends ChangeNotifier {
   Future<void> setPluggedIn(bool on) async {
     if (on == _pluggedIn) return;
     _pluggedIn = on;
+    rangeLog.powerChanged();
     await _updateLocationNeed();
     notifyListeners();
   }
