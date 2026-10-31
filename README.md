@@ -1525,6 +1525,45 @@ Tests: `test/v195_gateway_test.dart`, `test/v195_quiet_test.dart`.
 Tests: `test/v197_meshtastic_import_test.dart` (vectors from the official
 apps and the Python library), `test/v195_quiet_test.dart`.
 
+## v2.6.1: Radio match check
+
+A card at the top of **Radio settings** (Settings > Long-range radio > Radio
+settings) that compares your saved radios (Skunk Ape, Yowie, Yeti, Sasquatch)
+on the three things that make them hear each other, and offers to fix the one
+you are connected to.
+
+- **What is compared:** the LoRa frequency slot (`channel_num`, 0 = automatic
+  from the channel name), the hop limit, and the location precision of each
+  channel (matched by channel name, for example BigfootNet).
+- **In plain words:** "Yowie is on slot 0 (automatic), the others are on
+  slot 20." / "Location precision of BigfootNet: Yowie is set to ~2.9 km (13),
+  the others are set to Full (exact)." Each radio has a row with its values,
+  what differs, and "Connected now, read just now" or "Not checked: not
+  connected. Last read 5 h ago." A radio that was never connected since this
+  version says "Never read".
+- **What can be read:** only the radio connected to this phone (Bluetooth on
+  phones, USB or Wi-Fi on the Windows app) is read for real, from the settings
+  it sends when it connects (no extra traffic). Its values are remembered per
+  saved radio (numbers and channel names only, never a key) every time it
+  connects, so the card can compare the others as they were the last time.
+  **Remote admin over the mesh is not used:** the app only talks to its own
+  radio's admin channel and has no safe key setup for other radios, so other
+  radios are shown as not checked.
+- **Match to:** the reference defaults to the home base (Skunk Ape) when it
+  has been read, else the radio most others agree with; change it with the
+  drop-down.
+- **Fix:** "Fix Yowie to match Skunk Ape" changes only what differs on the
+  connected radio (slot, hop limit, channel precisions) in one save, after a
+  confirm. A slot change shows the same "all radios must switch together"
+  warning as Relay through public radios. Uses the existing safe write (previous
+  settings saved first, read-back check, Restore previous settings). Channel
+  names and keys do not change. Waits while a talk is going on.
+- **Battery:** nothing new in the background: no pings, no polling, no remote
+  reads. Values are noted when a radio connects.
+
+Tests: `test/v261_radio_match_test.dart`. Screenshots:
+`V261_SHOTS=/workspace flutter test test/v261_radio_match_test.dart`.
+
 ## v2.6.0: One connection chip on the Talk screen
 
 A small chip on the Talk status line (next to the weather, messages, volume and

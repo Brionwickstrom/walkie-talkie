@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'radio_match.dart';
 import 'stream_radio.dart';
 
 /// A radio the app remembers (v2.5.4): Settings > Long-range radio >
@@ -12,6 +13,7 @@ class SavedRadio {
     this.nodeId,
     this.label,
     this.lastConnected,
+    this.reading,
   });
 
   /// Bluetooth id, "serial:COM7" or "tcp:host:port".
@@ -28,6 +30,11 @@ class SavedRadio {
   /// A name the user gave it here; empty / null = use [name].
   String? label;
   DateTime? lastConnected;
+
+  /// What this radio had the last time it was connected (v2.6.1, for the
+  /// radio match check): slot, hop limit and channel precisions. Numbers
+  /// and channel names only.
+  RadioReading? reading;
 
   bool get isSerial => StreamRadioId.serialPort(id) != null;
   bool get isWifi => StreamRadioId.tcpTarget(id) != null;
@@ -59,6 +66,7 @@ class SavedRadio {
     if (nodeId != null) 'node': nodeId,
     if (label != null && label!.isNotEmpty) 'label': label,
     if (lastConnected != null) 'last': lastConnected!.millisecondsSinceEpoch,
+    if (reading != null) 'read': reading!.toJson(),
   };
 
   static SavedRadio? fromJson(Object? j) {
@@ -75,6 +83,7 @@ class SavedRadio {
       lastConnected: last is int
           ? DateTime.fromMillisecondsSinceEpoch(last)
           : null,
+      reading: RadioReading.fromJson(j['read']),
     );
   }
 

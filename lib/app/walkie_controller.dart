@@ -54,6 +54,7 @@ import '../lora/meshtastic_admin.dart';
 import '../lora/meshtastic_channels.dart';
 import '../lora/meshtastic_settings.dart';
 import '../lora/radio_clip.dart';
+import '../lora/radio_match.dart';
 import '../lora/saved_radios.dart';
 import '../lora/stream_radio.dart';
 import '../messaging/inbox.dart';
@@ -3224,6 +3225,10 @@ class WalkieController extends ChangeNotifier {
     t.rangeLog.bind(SessionRangeRadio(s));
   }
 
+  /// Tests: run the "remember the connected radio" step now.
+  @visibleForTesting
+  void noteRadioNow() => _noteRadio();
+
   void _noteRadio() {
     final d = radioDevice;
     final s = d.session;
@@ -3234,9 +3239,19 @@ class WalkieController extends ChangeNotifier {
     }
     final r = _savedRadio(d.deviceId) ?? _addSaved(d.deviceId!, d.deviceName);
     var dirty = false;
-    if (!_radioNoted) {
+    final firstNote = !_radioNoted;
+    if (firstNote) {
       _radioNoted = true;
       r.lastConnected = DateTime.now();
+      dirty = true;
+    }
+    // v2.6.1: what the radio sent when it connected (slot, hop limit,
+    // channel precisions), kept for the radio match check. Read from the
+    // settings download the app already does; no traffic. Written only
+    // when the values changed or on the first note after connecting.
+    final rd = readingFromSession(s, DateTime.now());
+    if (rd != null && (firstNote || !rd.sameValues(r.reading))) {
+      r.reading = rd;
       dirty = true;
     }
     if (r.nodeId != me) {

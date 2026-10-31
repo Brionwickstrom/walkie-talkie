@@ -5,7 +5,9 @@ import '../lora/meshtastic_admin.dart';
 import '../lora/meshtastic_channels.dart';
 import '../lora/meshtastic_session.dart';
 import '../lora/meshtastic_settings.dart';
+import '../lora/radio_match.dart';
 import 'adaptive_layout.dart';
+import 'radio_match_card.dart';
 
 /// Radio settings (v2.5.3): the basics of the paired Meshtastic radio
 /// without leaving the app. A page on phones, a dialog on wide screens.
@@ -98,6 +100,9 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
   MeshWriteStep? _step;
   String? _failed;
   String? _saved;
+
+  /// The radio the match check compares with (null = home base / best).
+  String? _matchTarget;
 
   WalkieController get c => widget.controller;
 
@@ -223,6 +228,26 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
       ],
     ),
   );
+
+  /// Radio match check: Fix puts the differing slot / hop limit /
+  /// precisions on the connected radio, after a confirm. A slot change
+  /// gets the "all radios must switch together" warning.
+  Future<void> _fixMatch(MatchFix fix, MatchRadio target) async {
+    final ok = await _confirm(
+      title: 'Make this radio match ${target.name}?',
+      intro: fix.slot
+          ? radioRelayWarn
+          : 'Only this radio changes. Channel names and keys do not change.',
+      lines: [
+        for (final l in fix.lines) l,
+        if (fix.slot)
+          'The other radios must be switched to the same slot too, or they '
+              'will not hear this one.',
+      ],
+    );
+    if (ok != true || !mounted) return;
+    await _run(fix.change, 'This radio now matches ${target.name}.');
+  }
 
   Future<void> _saveNames() async {
     final le = validateLongName(_long.text);
@@ -669,6 +694,13 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
                       ],
                     ),
                   ),
+                RadioMatchCard(
+                  controller: c,
+                  canEdit: canEdit,
+                  onFix: _fixMatch,
+                  targetId: _matchTarget,
+                  onTarget: (v) => setState(() => _matchTarget = v),
+                ),
                 head('Name'),
                 TextField(
                   key: const Key('rs-long'),
