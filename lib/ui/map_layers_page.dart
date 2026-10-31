@@ -15,8 +15,17 @@ import 'trip_widgets.dart';
 /// share, place, set opacity, delete; shows what each one uses on the
 /// device.
 class MapLayersPage extends StatelessWidget {
-  const MapLayersPage({super.key, required this.trip, this.onShow, this.onFit});
+  const MapLayersPage({
+    super.key,
+    required this.trip,
+    this.onShow,
+    this.onFit,
+    this.onRange,
+  });
   final TripController trip;
+
+  /// Open the range test markers page (v2.5.9).
+  final VoidCallback? onRange;
 
   /// Move the Trip map to a new layer (after an import or a map pack).
   final void Function(GeoBounds b)? onFit;
@@ -40,7 +49,7 @@ class MapLayersPage extends StatelessWidget {
         label: const Text('Import'),
       ),
       body: ListenableBuilder(
-        listenable: Listenable.merge([layers, trip]),
+        listenable: Listenable.merge([layers, trip, trip.range]),
         builder: (context, _) {
           final used = layers.usedBytes;
           final frac = layers.limitBytes == 0 ? 0.0 : used / layers.limitBytes;
@@ -66,6 +75,21 @@ class MapLayersPage extends StatelessWidget {
                   ),
                 ),
               ),
+              if (onRange != null)
+                ListTile(
+                  key: const Key('rangeLayerTile'),
+                  leading: const Icon(Icons.cell_tower, size: 28),
+                  title: const Text('Range test markers'),
+                  subtitle: Text(
+                    trip.range.isEmpty
+                        ? 'Green and red markers from a range test.'
+                        : '${trip.range.length} marker'
+                              '${trip.range.length == 1 ? '' : 's'} · '
+                              '${trip.range.visible ? 'shown' : 'hidden'}',
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: onRange,
+                ),
               DuplicateMapsCard(trip: trip),
               ListTile(
                 leading: const Icon(Icons.sd_storage),

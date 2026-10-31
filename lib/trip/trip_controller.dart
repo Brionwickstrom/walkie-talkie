@@ -28,6 +28,7 @@ import 'drive/road_service.dart';
 import 'drive/speech.dart';
 import 'map_net.dart';
 import 'nav/foot_router.dart';
+import 'range_test.dart';
 import 'nav/gentle_route.dart';
 import 'search/trailhead_finder.dart';
 import 'slope.dart' show DemSampler;
@@ -251,6 +252,9 @@ class TripController extends ChangeNotifier {
   /// Imported trails, offline MBTiles maps and park map overlays (v1.8.3).
   late final MapLayers layers;
 
+  /// Range test connect / drop markers (v2.5.9), local to this device.
+  late final RangeTest range = RangeTest(File('${dir.path}/range_test.json'));
+
   /// Saved offline areas (v1.9.3): map tiles, trails and roads together.
   late final OfflineAreas areas;
 
@@ -357,6 +361,7 @@ class TripController extends ChangeNotifier {
       _loadPins(),
       _loadTracks(),
       layers.load(),
+      range.load(),
     ]);
     await routes.load();
     await areas.load();
@@ -384,6 +389,7 @@ class TripController extends ChangeNotifier {
     mapNet.dispose();
     tiles.close();
     layers.close();
+    range.dispose();
     super.dispose();
   }
 

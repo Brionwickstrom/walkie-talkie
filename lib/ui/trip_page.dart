@@ -14,6 +14,7 @@ import '../trip/imports/map_layers.dart';
 import '../trip/imports/map_packs.dart';
 import '../trip/map_net.dart';
 import '../trip/nav/gentle_route.dart';
+import '../trip/range_test.dart';
 import '../trip/nav/nav_session.dart';
 import '../trip/smart_plan.dart';
 import '../trip/search/fetch.dart';
@@ -38,6 +39,7 @@ import 'friend_marker.dart';
 import 'nav_page.dart';
 import 'network_map_page.dart';
 import 'offline_areas_page.dart';
+import 'range_test_ui.dart';
 import 'sheets.dart';
 import 'smart_sheets.dart';
 import 'trip_widgets.dart';
@@ -85,6 +87,20 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
 
   bool get fullScreen => _full;
 
+  Future<void> _importPcRange() async {
+    final tc = t;
+    if (tc == null || !_fg || !mounted) return;
+    final r = await tc.range.importFromPc();
+    if (r == null || r.added == 0 || !mounted) return;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(
+        content: Text(
+          'Range test: ${r.added} new marker${r.added == 1 ? '' : 's'} on the map.',
+        ),
+      ),
+    );
+  }
+
   void setFullScreen(bool on) {
     if (on == _full) return;
     setState(() => _full = on);
@@ -95,6 +111,13 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
   /// page is on screen and someone shares a place; stopped in the background.
   Timer? _tick;
   bool _fg = true;
+
+  /// Range test marker whose blur circle is shown (v2.5.9).
+  RangeEvent? _rangeSel;
+
+  /// Windows: look for new range test results from the PC every 30 s
+  /// while the map is open (one file-time check, nothing else).
+  Timer? _rangePc;
 
   @override
   void initState() {
@@ -107,6 +130,13 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
       }
     });
     t?.setVisible(true);
+    if (Platform.isWindows) {
+      unawaited(_importPcRange());
+      _rangePc = Timer.periodic(
+        const Duration(seconds: 30),
+        (_) => unawaited(_importPcRange()),
+      );
+    }
     _startCompass();
     if (widget.focus != null) _follow = false;
   }
@@ -116,6 +146,7 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _hlTimer?.cancel();
     _tick?.cancel();
+    _rangePc?.cancel();
     t?.setVisible(false);
     for (final s in _sensors) {
       s.cancel();
@@ -180,7 +211,7 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
       return const Center(child: CircularProgressIndicator());
     }
     return ListenableBuilder(
-      listenable: Listenable.merge([trip, trip.layers]),
+      listenable: Listenable.merge([trip, trip.layers, trip.range]),
       builder: (context, _) {
         final me = trip.myFix;
         if (_follow && me != null && _mapReady) {
@@ -394,6 +425,20 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
             ),
           ),
         ),
+      ...rangeMarkers(
+        trip.range,
+        onTap: (e) {
+          setState(() => _rangeSel = e);
+          showRangeEventSheet(
+            context,
+            trip.range,
+            e,
+            imperial: trip.settings.imperial,
+          ).whenComplete(() {
+            if (mounted) setState(() => _rangeSel = null);
+          });
+        },
+      ),
       for (final pp in trip.people.values)
         friendMarker(
           trip,
@@ -462,6 +507,7 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
             ),
             PolylineLayer(polylines: lines),
             CircleLayer(circles: friendCircles(trip)),
+            CircleLayer(circles: rangeCircles(trip.range, _rangeSel)),
             MarkerLayer(markers: markers),
             PhotoDateLine(trip: trip),
             SimpleAttributionWidget(
@@ -542,6 +588,14 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
         tip: 'Imported trails and maps',
         onTap: () => _openLayers(context, trip),
       ),
+      if (!trip.range.isEmpty)
+        RoundMapButton(
+          key: const Key('mapRange'),
+          icon: Icons.cell_tower,
+          tip: 'Range test markers',
+          onTap: () => _openRange(context, trip),
+          color: trip.range.visible ? rangeGreen : null,
+        ),
       RoundMapButton(
         key: const Key('mapDrive'),
         icon: Icons.directions_car,
@@ -635,11 +689,31 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
     ),
   );
 
+  void _openRange(BuildContext context, TripController trip) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => RangeTestPage(
+          range: trip.range,
+          imperial: trip.settings.imperial,
+          onShow: (e) {
+            Navigator.of(context).popUntil((r) => r.isFirst);
+            setState(() {
+              _follow = false;
+              _rangeSel = e;
+            });
+            if (_mapReady) _map.move(ll(e.pos), 14);
+          },
+        ),
+      ),
+    );
+  }
+
   void _openLayers(BuildContext context, TripController trip) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => MapLayersPage(
           trip: trip,
+          onRange: () => _openRange(context, trip),
           onShow: (p) {
             setState(() => _follow = false);
             if (_mapReady) {

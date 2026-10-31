@@ -1525,6 +1525,41 @@ Tests: `test/v195_gateway_test.dart`, `test/v195_quiet_test.dart`.
 Tests: `test/v197_meshtastic_import_test.dart` (vectors from the official
 apps and the Python library), `test/v195_quiet_test.dart`.
 
+## v2.5.9: Range test markers on the map
+
+Green "connected" and red "dropped" markers on the Trip map for a range test
+(driving away from the home radio to see where the link starts and stops).
+
+- **Where:** Trip map > the file icon (Imported trails and maps) > **Range
+  test markers**. Once there are markers, a tower button also appears among
+  the map buttons. The page has Show on the map, import, copy and clear.
+- **Tap a marker:** time, signal (SNR), hops (0 = direct), distance from the
+  home radio, the spot, and an honest accuracy line. A blurred position
+  (Meshtastic precision 13, about 3 km) is marked "~" on the pin, says
+  "Approximate, blurred position", and draws a 3 km circle around it while the
+  popup is open. "New positions are exact" (for Full precision) applies to new
+  imports only.
+- **Getting markers in:**
+  * Windows: `%USERPROFILE%\meshtastic_watch\range_state.json` (written by
+    the range test script) is imported by itself when the map opens and every
+    30 s while it is open (one file-time check, only when the file changed).
+    The script is only read.
+  * Any device: **Paste copied markers** (the whole `range_state.json` or lines
+    `STALKIE-RANGE-1 CONNECT <unix seconds> snr=.. hops=.. pos=lat,lon dist=..
+    approx=1`), or **Import a range test file** (file picker).
+  * **Copy markers** copies those lines, to paste into the app on another
+    device.
+- **Local only:** markers are saved on the device (`range_test.json`) and are
+  never sent over the air or the relays. Same event twice = one marker.
+- **Not built:** automatic range logging from the phone while connected to a
+  radio. The node list only knows "last heard", and the home radio sends its
+  position about every 15 minutes, so a drop could only be noticed 15 minutes
+  or more late; a quicker check would need extra radio traffic and battery.
+- **Battery:** no new background work on Android. Windows only: one file-time
+  check every 30 s while the map is open.
+
+Tests: `test/v259_range_test.dart`.
+
 ## v2.5.8: Relay through public radios
 
 **Radio settings > Relay through public radios** is a switch that moves your
