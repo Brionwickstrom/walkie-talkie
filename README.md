@@ -1525,6 +1525,44 @@ Tests: `test/v195_gateway_test.dart`, `test/v195_quiet_test.dart`.
 Tests: `test/v197_meshtastic_import_test.dart` (vectors from the official
 apps and the Python library), `test/v195_quiet_test.dart`.
 
+## v2.6.0: One connection chip on the Talk screen
+
+A small chip on the Talk status line (next to the weather, messages, volume and
+mobile-data icons) that says how you are connected right now. Tap it for the
+whole picture in plain words.
+
+- **What it shows:** the path in use (**Internet**, **Wi-Fi**, **Wi-Fi
+  Direct**, **Bluetooth** or **Radio**), then, when a radio is set up, **Home**
+  and how long ago the home radio was last heard ("Internet · Home 3m"). The
+  home radio is the same one Range logging uses (default Skunk Ape
+  `!0b4f84fb`). On a narrow phone (under 400 dp wide) it shortens to
+  "Internet · 3m".
+- **Colours:** green = working; amber = working but weak or stale (home radio
+  not heard for a while, weak signal, radio not connected, a link just missed
+  a check); red = nothing is connected; grey = still connecting.
+- **Tap it:** the headline says what is wrong in one sentence ("No internet:
+  the phone has no network", "Radio not connected over Bluetooth ...",
+  "Skunk Ape not heard for 12 min"), then one row per path (Internet relay,
+  Wi-Fi, Wi-Fi Direct, Bluetooth, Radio over Bluetooth / USB / Wi-Fi) with the
+  one in use marked, the home radio line with its signal (SNR / RSSI / hops,
+  graded Good / Fair / Weak), and **More connection details** (the old sheet).
+- **Windows desktop:** works the same; the radio row says USB and the port
+  (for example COM7).
+- **Signal grades:** SNR -7 dB or better = Good, down to -15 dB = Fair, lower
+  = Weak (a Weak reading turns the chip amber). Signal is only shown if the
+  home radio was heard in the last 15 min.
+- **How "last heard" works:** it is read from what the connected radio already
+  hears (its node list and the packets it receives); nothing is sent or polled
+  for the chip. The home radio only speaks up now and then, so a quiet spell is
+  normal: the chip goes amber after 30 min of silence, or after 10 min while
+  Range logging is on (its pings make the answer exact).
+- **Battery:** no new radio traffic, no new background work. The chip text
+  redraws once every 30 s only while the Talk screen is showing.
+
+Tests: `test/v260_connection_chip_test.dart` (logic, chip, sheet, narrow
+phone, Talk screen, radio session). Screenshots:
+`V260_SHOTS=/workspace flutter test test/v260_connection_chip_test.dart`.
+
 ## v2.5.9: Range test markers on the map
 
 Green "connected" and red "dropped" markers on the Trip map for a range test

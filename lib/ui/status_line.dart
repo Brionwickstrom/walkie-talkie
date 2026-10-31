@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../core/transport.dart';
 import '../core/transport_manager.dart';
+import 'connection_health.dart';
 import 'home_view.dart';
 import 'sheets.dart';
 import 'who_can_hear.dart';
@@ -52,6 +53,8 @@ class TalkStatusLine extends StatelessWidget {
     this.weather,
     this.weatherExtreme = false,
     this.onOpenWeather,
+    this.health,
+    this.onOpenHealth,
   });
 
   final AudienceInfo audience;
@@ -82,6 +85,11 @@ class TalkStatusLine extends StatelessWidget {
   final String? weather;
   final bool weatherExtreme;
   final VoidCallback? onOpenWeather;
+
+  /// v2.6.0: the connection chip (current path, signal, home base last
+  /// heard). Null = no chip. Read on every build and every 30 s.
+  final ConnectionHealth Function()? health;
+  final VoidCallback? onOpenHealth;
 
   String get _audienceText {
     final people = '$here ${here == 1 ? 'person' : 'people'}';
@@ -193,6 +201,8 @@ class TalkStatusLine extends StatelessWidget {
               ),
             ),
           ),
+        if (health != null && onOpenHealth != null)
+          ConnectionChip(source: health!, onTap: onOpenHealth!),
         if (weather != null && onOpenWeather != null)
           _Shortcut(
             key: const Key('talk-weather-shortcut'),

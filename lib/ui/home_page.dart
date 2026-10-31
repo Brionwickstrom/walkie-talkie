@@ -22,6 +22,7 @@ import 'link_sheet.dart';
 import 'people_tab.dart';
 import 'reach_of.dart';
 import 'person_sheet.dart';
+import 'connection_health.dart';
 import 'status_line.dart';
 import 'messages_page.dart';
 import 'quiet_widgets.dart';
@@ -378,6 +379,13 @@ class _HomePageState extends State<HomePage> {
           weather: c.settings.wxAlerts ? c.weatherAlerts?.top?.event : null,
           weatherExtreme: c.weatherAlerts?.top?.isExtreme ?? false,
           onOpenWeather: () => openWeatherAlerts(context, c),
+          health: () => connectionHealthOf(c),
+          onOpenHealth: () => showConnectionSheet(
+            context,
+            source: () => connectionHealthOf(c),
+            listenable: c,
+            onMore: () => _openStatus(context, audience, here),
+          ),
         );
         final talk = HomeBody(
           banners: [

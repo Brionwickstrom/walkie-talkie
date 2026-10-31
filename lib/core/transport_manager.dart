@@ -2118,6 +2118,7 @@ class TransportManager {
     return ConnectionSummary(
       best: best.$1,
       bestRtt: best.$3,
+      bestKind: best.$2,
       backups: paths.length - 1,
       checkEvery: probeInterval,
       failing: _peers.values.any(
@@ -2820,10 +2821,14 @@ class ConnectionSummary {
     required this.backups,
     required this.checkEvery,
     this.failing = false,
+    this.bestKind,
   });
 
   /// "Direct", "Home relay", "Wi-Fi", "Bluetooth", ... null = nothing up.
   final String? best;
+
+  /// The kind of link [best] runs on (v2.6.0, for the Talk connection chip).
+  final TransportKind? bestKind;
   final Duration? bestRtt;
 
   /// Other paths that are up and ready to take over.
