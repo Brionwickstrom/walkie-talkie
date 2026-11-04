@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../app/walkie_controller.dart';
+import '../ui/friendly_error.dart';
 import 'updater.dart';
 
 /// Dialog flow around [Updater]: "update available" -> download with
@@ -10,6 +12,10 @@ class UpdateFlow {
   UpdateFlow([Updater? updater]) : updater = updater ?? Updater();
 
   final Updater updater;
+
+  /// For the fix buttons on update problems (v2.6.3); without it the
+  /// message is shown without a button.
+  WalkieController? controller;
   bool _busy = false;
   String? _dismissedTag; // "Later" on the startup check, this session only
 
@@ -33,7 +39,11 @@ class UpdateFlow {
         rel = await updater.checkForUpdate();
       } catch (e) {
         if (userInitiated && context.mounted) {
-          _snack(context, 'Could not check for updates. Check your internet.');
+          _friendly(
+            context,
+            friendlyFromError(e, what: 'check for updates'),
+            FixCallbacks(retry: () => check(context, userInitiated: true)),
+          );
         }
         return;
       }
@@ -164,7 +174,11 @@ class UpdateFlow {
     progress.dispose();
     if (!context.mounted) return;
     if (apk == null) {
-      _snack(context, 'Update download failed: $error');
+      _friendly(
+        context,
+        friendlyFromError(error!, what: 'download the update'),
+        FixCallbacks(retry: () => _downloadAndInstall(context, rel)),
+      );
       return;
     }
     await _install(context, apk);
@@ -225,8 +239,20 @@ class UpdateFlow {
     try {
       await updater.install(apk);
     } catch (e) {
-      if (context.mounted) _snack(context, 'Could not open the installer: $e');
+      if (context.mounted) {
+        _friendly(
+          context,
+          friendlyCause(ErrorCause.installerFailed, error: e),
+          FixCallbacks(retry: () => _install(context, apk)),
+        );
+      }
     }
+  }
+
+  /// A problem in plain words with its button (Try again, Wi-Fi settings,
+  /// Open settings); the raw text is behind Details.
+  void _friendly(BuildContext context, FriendlyError fe, FixCallbacks cb) {
+    showFriendlySnack(context, fe, controller, callbacks: cb);
   }
 
   static void _snack(BuildContext context, String msg) {

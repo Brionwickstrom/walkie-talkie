@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../app/friendly_error.dart' show FixAction;
 import '../app/walkie_controller.dart';
 import '../core/transport.dart';
 import '../lora/meshtastic_ble.dart' show RadioState;
@@ -42,6 +43,7 @@ class PathHealth {
     required this.level,
     required this.text,
     this.active = false,
+    this.fixes = const [],
   });
   final String name;
   final IconData icon;
@@ -52,6 +54,9 @@ class PathHealth {
 
   /// This is the path the app is talking over right now.
   final bool active;
+
+  /// One-tap fixes shown under the row when it is down (v2.6.3).
+  final List<FixAction> fixes;
 }
 
 /// What the app knows about the connected radio (a plain value so the logic
@@ -265,6 +270,9 @@ class ConnectionHealth {
             ? 'Connecting to the relay…'
             : netReason(),
         active: active == TransportKind.internet,
+        fixes: !netUp && !netStarting
+            ? [FixAction.retry, if (phoneNet == 'none') FixAction.wifiSettings]
+            : const [],
       ),
       for (final k in const [
         TransportKind.lan,
@@ -316,6 +324,13 @@ class ConnectionHealth {
                     ' · messages and locations only, no live voice'
               : radioProblem!,
           active: active == TransportKind.lora,
+          fixes: !radio.ready && !radioConnecting
+              ? [
+                  if (radio.state == RadioState.bluetoothOff)
+                    FixAction.turnOnBluetooth,
+                  FixAction.connectRadio,
+                ]
+              : const [],
         )
       else
         const PathHealth(
@@ -610,8 +625,16 @@ class _ConnectionChipState extends State<ConnectionChip> {
 
 /// The sheet behind the chip: the whole picture in plain words.
 class ConnectionHealthSheet extends StatelessWidget {
-  const ConnectionHealthSheet({super.key, required this.health, this.onMore});
+  const ConnectionHealthSheet({
+    super.key,
+    required this.health,
+    this.onMore,
+    this.onFix,
+  });
   final ConnectionHealth health;
+
+  /// Runs a path's fix button (v2.6.3); null = no buttons.
+  final void Function(FixAction)? onFix;
 
   /// "More connection details" (the full status sheet), null = hidden.
   final VoidCallback? onMore;
@@ -650,7 +673,7 @@ class ConnectionHealthSheet extends StatelessWidget {
             child: Text('• $r', style: theme.textTheme.bodyMedium),
           ),
         const Divider(height: 16),
-        for (final p in health.paths)
+        for (final p in health.paths) ...[
           ListTile(
             key: Key('path-${p.name}'),
             dense: true,
@@ -666,6 +689,25 @@ class ConnectionHealthSheet extends StatelessWidget {
               ),
             ),
           ),
+          if (onFix != null && p.fixes.isNotEmpty)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(56, 0, 16, 4),
+                child: Wrap(
+                  spacing: 8,
+                  children: [
+                    for (final f in p.fixes)
+                      OutlinedButton(
+                        key: Key('fix-${p.name}-${f.name}'),
+                        onPressed: () => onFix!(f),
+                        child: Text(f.label),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+        ],
         if (health.homeLine != null) ...[
           const Divider(height: 16),
           ListTile(
@@ -705,12 +747,14 @@ Future<void> showConnectionSheet(
   required ConnectionHealth Function() source,
   Listenable? listenable,
   VoidCallback? onMore,
+  void Function(FixAction)? onFix,
 }) => showAppSheet<void>(
   context: context,
   builder: (ctx) => ListenableBuilder(
     listenable: listenable ?? ValueNotifier(0),
     builder: (ctx, _) => ConnectionHealthSheet(
       health: source(),
+      onFix: onFix,
       onMore: onMore == null
           ? null
           : () {

@@ -1139,7 +1139,9 @@ void main() {
       await settle(t);
       expect(find.byKey(const Key('rs-failed')), findsOneWidget);
       expect(
-        find.textContaining('Not saved: Your radio did not keep: the region'),
+        find.textContaining(
+          'Not saved because your radio did not keep the region',
+        ),
         findsOneWidget,
       );
       expect(find.byKey(const Key('rs-restore-failed')), findsOneWidget);

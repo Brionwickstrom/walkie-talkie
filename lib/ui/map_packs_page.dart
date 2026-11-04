@@ -9,6 +9,7 @@ import '../trip/imports/map_layers.dart';
 import '../trip/imports/map_packs.dart';
 import '../trip/tile_cache.dart';
 import '../trip/trip_controller.dart';
+import 'friendly_error.dart';
 
 /// The pack list for this app run (bundled + latest from GitHub).
 PackCatalog? _catalog;
@@ -266,7 +267,11 @@ class _MapPacksPageState extends State<MapPacksPage> {
       if (mounted) {
         setState(() {
           _busy.remove(p.id);
-          _errors[p.id] = '$e';
+          _errors[p.id] =
+              e is StorageLimitException ||
+                  (e is PackException && !e.message.startsWith('Could not'))
+              ? e.toString()
+              : friendlyFromError(e, what: 'add ${p.name}').message;
         });
       }
       return const [];

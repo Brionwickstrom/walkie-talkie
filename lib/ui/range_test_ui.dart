@@ -397,7 +397,8 @@ class _RangeTestPageState extends State<RangeTestPage> {
         _say('That is not a range test file (range_state.json).');
       }
     } catch (e) {
-      if (mounted) _say('Could not read the file: $e');
+      if (!mounted) return;
+      _say('That file could not be read, so nothing was imported.');
     }
   }
 

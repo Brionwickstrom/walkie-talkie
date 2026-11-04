@@ -6,6 +6,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../app/walkie_controller.dart';
 import 'channels_sheet.dart';
+import 'friendly_error.dart';
 import 'chat_view.dart';
 import '../messaging/messenger.dart';
 import 'home_view.dart';
@@ -169,7 +170,10 @@ class _ChatPageState extends State<ChatPage> {
     try {
       if (src == ImageSource.camera &&
           !(await Permission.camera.request()).isGranted) {
-        _snack('Camera permission is needed to take a photo.');
+        _friendly(
+          friendlyCause(ErrorCause.cameraDenied),
+          FixCallbacks(retry: () => _pick(src), afterFix: () => _pick(src)),
+        );
         return;
       }
       final f = await ImagePicker().pickImage(
@@ -182,8 +186,20 @@ class _ChatPageState extends State<ChatPage> {
       _snack('Preparing photo...');
       await c.sendPhoto(widget.conv, await f.readAsBytes());
     } catch (e) {
-      _snack('Could not get the photo: $e');
+      _friendly(
+        FriendlyError(
+          'The photo could not be loaded, so it was not sent.',
+          fix: FixAction.retry,
+          details: detailsOf(e),
+        ),
+        FixCallbacks(retry: () => _pick(src)),
+      );
     }
+  }
+
+  void _friendly(FriendlyError fe, FixCallbacks cb) {
+    if (!mounted) return;
+    showFriendlySnack(context, fe, c, callbacks: cb);
   }
 
   void _snack(String s) {

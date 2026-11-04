@@ -16,6 +16,7 @@ import '../trip/route_save.dart';
 import '../trip/search/overpass.dart' show boundsSizeKm;
 import '../trip/tile_cache.dart';
 import '../trip/trip_controller.dart';
+import 'friendly_error.dart';
 import 'map_layer_widgets.dart';
 import 'map_packs_page.dart';
 import 'save_route_sheet.dart';
@@ -190,7 +191,14 @@ class _OfflineAreasPageState extends State<OfflineAreasPage> {
       await inst.add(p);
       m?.showSnackBar(SnackBar(content: Text('Updated ${e.name}.')));
     } catch (err) {
-      m?.showSnackBar(SnackBar(content: Text('Update failed: $err')));
+      if (mounted) {
+        showFriendlySnack(
+          context,
+          friendlyFromError(err, what: 'update ${e.name}'),
+          null,
+          callbacks: FixCallbacks(retry: () => _updatePack(e)),
+        );
+      }
     }
   }
 
@@ -585,7 +593,9 @@ class _SaveAreaPageState extends State<SaveAreaPage> {
       if (!mounted) return;
       setState(() {
         _busy = false;
-        _error = e is StateError ? e.message : '$e';
+        _error = e is StateError
+            ? e.message
+            : friendlyFromError(e, what: 'download this area').message;
       });
     }
   }

@@ -1,0 +1,355 @@
+// v2.6.3: plain error messages with a fix button. One place maps what went
+// wrong to one plain sentence (what happened and why) and, where a fix
+// exists, the action that does it. Raw exception text is never the main
+// message: it goes under "Details", with keys and links scrubbed.
+import 'dart:async';
+import 'dart:io';
+
+/// What a fix button does. The UI runs it (lib/ui/friendly_error.dart).
+enum FixAction {
+  turnOnBluetooth('Turn on Bluetooth'),
+  allowNearby('Allow'),
+  allowLocation('Allow location'),
+  turnOnLocation('Turn on location'),
+  allowMicrophone('Allow microphone'),
+  allowNotifications('Allow notifications'),
+  allowCamera('Allow camera'),
+  openAppSettings('Open settings'),
+  allowMobileData('Allow mobile data'),
+  wifiSettings('Wi-Fi settings'),
+  allowDnd('Allow Do Not Disturb'),
+  connectRadio('Connect radio'),
+  retry('Try again'),
+  restoreBackup('Restore backup'),
+  turnOnLocationSharing('Turn it on');
+
+  const FixAction(this.label);
+  final String label;
+}
+
+/// Why something did not work, when it is one of the known causes.
+enum ErrorCause {
+  bluetoothOff,
+  bluetoothDenied,
+  locationDenied,
+  locationOff,
+  microphoneDenied,
+  microphoneFailed,
+  notificationsDenied,
+  cameraDenied,
+  noInternet,
+  mobileDataBlocked,
+  dndDenied,
+  radioNotConnected,
+  audioFailed,
+  voiceMessagesFailed,
+  installerFailed,
+  other,
+}
+
+/// One plain sentence, up to two fix buttons, and the raw text for
+/// "Details".
+class FriendlyError {
+  const FriendlyError(
+    this.message, {
+    this.cause = ErrorCause.other,
+    this.fix,
+    this.fix2,
+    this.details,
+  });
+
+  /// What happened and why, one sentence.
+  final String message;
+  final ErrorCause cause;
+
+  /// The main fix (null = nothing the user can do from here).
+  final FixAction? fix;
+
+  /// A second choice, for example Restore backup next to Try again.
+  final FixAction? fix2;
+
+  /// The technical text, shown only when the user asks for it.
+  final String? details;
+
+  List<FixAction> get fixes => [?fix, ?fix2];
+
+  FriendlyError copyWith({
+    String? message,
+    FixAction? fix,
+    FixAction? fix2,
+    String? details,
+  }) => FriendlyError(
+    message ?? this.message,
+    cause: cause,
+    fix: fix ?? this.fix,
+    fix2: fix2 ?? this.fix2,
+    details: details ?? this.details,
+  );
+
+  @override
+  String toString() => message;
+}
+
+/// Raw text safe to show: no Meshtastic links, no key-like strings, no
+/// web addresses.
+String scrubDetails(String raw) {
+  var s = raw;
+  s = s.replaceAll(
+    RegExp(r'https?://\S+|meshtastic\.org/\S+|walkietalkie://\S+'),
+    '[link removed]',
+  );
+  // Keys, passcodes and tokens: long runs of base64 / hex characters.
+  s = s.replaceAll(RegExp(r'[A-Za-z0-9_\-+/=]{24,}'), '[removed]');
+  if (s.length > 400) s = '${s.substring(0, 400)}…';
+  return s.trim();
+}
+
+/// The text under "Details" for [e].
+String detailsOf(Object? e) {
+  if (e == null) return '';
+  final t = e is StateError ? e.message : e.toString();
+  return scrubDetails(t);
+}
+
+FriendlyError _cause(ErrorCause c, {Object? error, String? details}) {
+  final d = details ?? (error == null ? null : detailsOf(error));
+  final dd = d == null || d.isEmpty ? null : d;
+  return switch (c) {
+    ErrorCause.bluetoothOff => FriendlyError(
+      'Bluetooth is off, so this phone cannot find or reach radios.',
+      cause: c,
+      fix: FixAction.turnOnBluetooth,
+      details: dd,
+    ),
+    ErrorCause.bluetoothDenied => FriendlyError(
+      'This app is not allowed to use Bluetooth, so it cannot find nearby '
+      'devices.',
+      cause: c,
+      fix: FixAction.allowNearby,
+      details: dd,
+    ),
+    ErrorCause.locationDenied => FriendlyError(
+      'Location is off for this app, so it cannot share where you are.',
+      cause: c,
+      fix: FixAction.allowLocation,
+      details: dd,
+    ),
+    ErrorCause.locationOff => FriendlyError(
+      'Your phone\'s location is turned off, so it cannot find where you '
+      'are.',
+      cause: c,
+      fix: FixAction.turnOnLocation,
+      details: dd,
+    ),
+    ErrorCause.microphoneDenied => FriendlyError(
+      'Microphone access is off, so you cannot talk.',
+      cause: c,
+      fix: FixAction.allowMicrophone,
+      details: dd,
+    ),
+    ErrorCause.microphoneFailed => FriendlyError(
+      'The microphone could not start. Another app may be using it, or '
+      'microphone access is off.',
+      cause: c,
+      fix: FixAction.allowMicrophone,
+      details: dd,
+    ),
+    ErrorCause.notificationsDenied => FriendlyError(
+      'Notifications are off, so rings and messages will not show while '
+      'the app is closed.',
+      cause: c,
+      fix: FixAction.allowNotifications,
+      details: dd,
+    ),
+    ErrorCause.cameraDenied => FriendlyError(
+      'Camera access is off, so a photo cannot be taken.',
+      cause: c,
+      fix: FixAction.allowCamera,
+      details: dd,
+    ),
+    ErrorCause.noInternet => FriendlyError(
+      'There is no internet right now, so this could not finish.',
+      cause: c,
+      fix: FixAction.retry,
+      fix2: FixAction.wifiSettings,
+      details: dd,
+    ),
+    ErrorCause.mobileDataBlocked => FriendlyError(
+      'This app is not allowed to use mobile data, so it only works on '
+      'Wi-Fi.',
+      cause: c,
+      fix: FixAction.allowMobileData,
+      fix2: FixAction.retry,
+      details: dd,
+    ),
+    ErrorCause.dndDenied => FriendlyError(
+      'Do Not Disturb is on and this app is not allowed through it, so '
+      'urgent rings and extreme alerts stay quiet.',
+      cause: c,
+      fix: FixAction.allowDnd,
+      details: dd,
+    ),
+    ErrorCause.radioNotConnected => FriendlyError(
+      'Your radio is not connected.',
+      cause: c,
+      fix: FixAction.connectRadio,
+      details: dd,
+    ),
+    ErrorCause.audioFailed => FriendlyError(
+      'Sound could not start on this phone, so you may not hear talk.',
+      cause: c,
+      fix: FixAction.retry,
+      details: dd,
+    ),
+    ErrorCause.voiceMessagesFailed => FriendlyError(
+      'Voice messages could not start, so they will not be saved or sent '
+      'until the app is restarted.',
+      cause: c,
+      details: dd,
+    ),
+    ErrorCause.installerFailed => FriendlyError(
+      'Android would not open the installer. The app may not be allowed to '
+      'install updates.',
+      cause: c,
+      fix: FixAction.openAppSettings,
+      fix2: FixAction.retry,
+      details: dd,
+    ),
+    ErrorCause.other => FriendlyError(
+      'Something went wrong, so this did not finish.',
+      fix: FixAction.retry,
+      details: dd,
+    ),
+  };
+}
+
+/// The friendly version of a known [cause]. [error] is kept under Details.
+FriendlyError friendlyCause(ErrorCause cause, {Object? error}) =>
+    _cause(cause, error: error);
+
+/// Works out the cause of [e] when it is one we know (no internet, mobile
+/// data blocked, Bluetooth off, a denied permission, the microphone in
+/// use), else a generic sentence with [e] under Details. [what] finishes
+/// "Could not ..." for the generic case ("download the forecast").
+FriendlyError friendlyFromError(Object e, {String? what}) {
+  final text = e is StateError ? e.message : e.toString();
+  final low = text.toLowerCase();
+  if (e is SocketException) {
+    final code = e.osError?.errorCode;
+    if (code == 1 || code == 13 || low.contains('operation not permitted')) {
+      return _cause(ErrorCause.mobileDataBlocked, error: e);
+    }
+    return _cause(ErrorCause.noInternet, error: e);
+  }
+  if (e is TimeoutException ||
+      e is HttpException ||
+      e.runtimeType.toString() == 'ClientException' ||
+      low.contains('failed host lookup') ||
+      low.contains('network is unreachable') ||
+      low.contains('connection refused') ||
+      low.contains('connection reset')) {
+    return _cause(ErrorCause.noInternet, error: e);
+  }
+  if (low.contains('turn bluetooth on') || low.contains('bluetooth is off')) {
+    return _cause(ErrorCause.bluetoothOff, error: e);
+  }
+  if (low.contains('bluetooth') &&
+      (low.contains('permission') || low.contains('denied'))) {
+    return _cause(ErrorCause.bluetoothDenied, error: e);
+  }
+  if (low.contains('microphone') || low.contains('record')) {
+    return _cause(
+      low.contains('permission') || low.contains('denied')
+          ? ErrorCause.microphoneDenied
+          : ErrorCause.microphoneFailed,
+      error: e,
+    );
+  }
+  if (low.contains('location') &&
+      (low.contains('permission') || low.contains('denied'))) {
+    return _cause(ErrorCause.locationDenied, error: e);
+  }
+  if (e is FileSystemException && low.contains('no space')) {
+    return FriendlyError(
+      'This phone is out of storage space, so it could not be saved.',
+      details: detailsOf(e),
+    );
+  }
+  final base = _cause(ErrorCause.other, error: e);
+  if (what == null) return base;
+  return base.copyWith(message: 'Could not $what, so it did not finish.');
+}
+
+/// The Radio settings "Not saved" text for [raw] (a MeshWriteException
+/// message, already plain), as "Not saved because ...", with the buttons
+/// that fit: Try again, Restore backup (when one exists), Connect radio.
+FriendlyError radioWriteError(String raw, {bool hasBackup = false}) {
+  final low = raw.toLowerCase();
+  FriendlyError notSaved(
+    String because, {
+    FixAction? fix = FixAction.retry,
+    FixAction? fix2,
+  }) => FriendlyError(
+    'Not saved because $because',
+    cause: ErrorCause.other,
+    fix: fix,
+    fix2:
+        fix2 ??
+        (hasBackup && fix != FixAction.restoreBackup
+            ? FixAction.restoreBackup
+            : null),
+    details: raw,
+  );
+  if (low.contains('connect your radio first')) {
+    return FriendlyError(
+      'Not saved because your radio is not connected.',
+      cause: ErrorCause.radioNotConnected,
+      fix: FixAction.connectRadio,
+      fix2: hasBackup ? FixAction.restoreBackup : null,
+      details: raw,
+    );
+  }
+  if (low.contains('did not come back')) {
+    return notSaved(
+      'your radio did not come back after restarting. Check that it is on '
+      'and in reach, connect it again, then check the settings.',
+      fix: FixAction.connectRadio,
+      fix2: hasBackup ? FixAction.restoreBackup : null,
+    );
+  }
+  if (low.contains('did not keep')) {
+    final what = RegExp(r'did not keep: ([^.]+)\.').firstMatch(raw)?.group(1);
+    return notSaved(
+      'your radio did not keep ${what ?? 'everything'}. Nothing else was '
+      'touched.',
+      fix: hasBackup ? FixAction.restoreBackup : FixAction.retry,
+      fix2: hasBackup ? FixAction.retry : null,
+    );
+  }
+  if (low.contains('did not send') ||
+      low.contains('has not sent') ||
+      low.contains('not configured')) {
+    return notSaved('your radio did not answer in time. Nothing was changed.');
+  }
+  if (low.contains('talk is going on') || low.contains('being changed')) {
+    return notSaved('a talk is going on. Try again when it is over.');
+  }
+  if (low.contains('extra channel slots')) {
+    return notSaved(
+      'all 7 extra channel slots on your radio are in use. Remove one in '
+      'the Meshtastic app, then try again.',
+    );
+  }
+  if (low.contains('nothing to change') || low.contains('pick a precision')) {
+    return FriendlyError('Not saved. $raw', details: null);
+  }
+  // A MeshWriteException message is already a plain sentence: keep it,
+  // but lead with what happened.
+  final one = raw.trim().isEmpty ? 'something went wrong.' : raw.trim();
+  return FriendlyError(
+    'Not saved. $one',
+    fix: FixAction.retry,
+    fix2: hasBackup ? FixAction.restoreBackup : null,
+    details: null,
+  );
+}

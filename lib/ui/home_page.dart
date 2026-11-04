@@ -27,6 +27,7 @@ import 'status_line.dart';
 import 'messages_page.dart';
 import 'quiet_widgets.dart';
 import 'weather_alerts_page.dart';
+import 'friendly_error.dart';
 import 'radio_settings.dart';
 import 'radio_settings_page.dart';
 import 'settings_index.dart';
@@ -91,6 +92,7 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
+    _updates.controller = c;
     if (c.setupEntry == SetupEntry.wizard && !c.started) {
       // First run (v1.8.7): the setup wizard asks for permissions and
       // starts the links itself.
@@ -133,6 +135,11 @@ class _HomePageState extends State<HomePage> {
     _subs.add(
       c.notices.listen((msg) {
         if (!mounted) return;
+        final fe = c.noticeError(msg);
+        if (fe != null) {
+          showFriendlySnack(context, fe, c);
+          return;
+        }
         ScaffoldMessenger.of(context)
           ..hideCurrentSnackBar()
           ..showSnackBar(SnackBar(content: Text(msg)));
@@ -388,6 +395,12 @@ class _HomePageState extends State<HomePage> {
             source: () => connectionHealthOf(c),
             listenable: c,
             onMore: () => _openStatus(context, audience, here),
+            onFix: (a) => runFix(
+              context,
+              c,
+              a,
+              callbacks: FixCallbacks(retry: c.retryInternet),
+            ),
           ),
         );
         final talk = HomeBody(
@@ -481,6 +494,14 @@ class _HomePageState extends State<HomePage> {
               : null,
           onEditMe: () => _openSettings(context),
           error: c.error,
+          errorInfo: c.errorInfo,
+          onErrorFix: (a) => runFix(
+            context,
+            c,
+            a,
+            callbacks: FixCallbacks(retry: c.retryAudio),
+          ),
+          onErrorDismiss: c.clearError,
           queued: c.outgoing.isNotEmpty || c.waitingForAnyone.isNotEmpty
               ? TextButton.icon(
                   icon: const Icon(Icons.schedule_send, size: 18),

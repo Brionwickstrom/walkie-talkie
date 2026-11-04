@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../app/link_settings.dart';
 import '../app/people_refresh.dart';
 import '../core/transport.dart';
+import 'friendly_error.dart';
 import 'people_refresh_view.dart';
 
 /// One row in the people list (presentation only, no controller).
@@ -223,6 +224,9 @@ class HomeBody extends StatelessWidget {
     this.notice,
     this.onEditMe,
     this.error,
+    this.errorInfo,
+    this.onErrorFix,
+    this.onErrorDismiss,
     this.queued,
     this.onRefresh,
     this.radioAvailable,
@@ -277,6 +281,11 @@ class HomeBody extends StatelessWidget {
   final Widget? notice;
   final VoidCallback? onEditMe;
   final String? error;
+
+  /// [error] in plain words with its fix button and Details (v2.6.3).
+  final FriendlyError? errorInfo;
+  final void Function(FixAction)? onErrorFix;
+  final VoidCallback? onErrorDismiss;
   final Widget? queued;
   final Widget actions;
   final Widget ptt;
@@ -292,7 +301,16 @@ class HomeBody extends StatelessWidget {
           ...banners,
           ?status,
           ?notice,
-          if (error != null)
+          if (errorInfo != null && onErrorFix != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              child: FriendlyErrorView(
+                error: errorInfo!,
+                onFix: onErrorFix!,
+                onDismiss: onErrorDismiss,
+              ),
+            )
+          else if (error != null)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
               child: Text(

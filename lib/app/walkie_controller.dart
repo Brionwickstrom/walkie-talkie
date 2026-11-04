@@ -86,6 +86,7 @@ import '../weather/wx_alert.dart';
 import '../weather/wx_keys.dart';
 import '../weather/wx_mesh.dart';
 import '../weather/wx_notice.dart';
+import 'friendly_error.dart';
 import 'call_signs.dart';
 import 'config.dart';
 import 'group_handoff.dart';
@@ -1203,6 +1204,10 @@ class WalkieController extends ChangeNotifier {
 
   bool transmitting = false;
   String? error;
+
+  /// The same problem in plain words with its fix button and Details
+  /// (v2.6.3); [error] is its one-sentence message.
+  FriendlyError? errorInfo;
   bool started = false;
   bool _starting = false;
 
@@ -1403,7 +1408,7 @@ class WalkieController extends ChangeNotifier {
     try {
       await _audio.init();
     } catch (e) {
-      error = 'Audio init failed: $e';
+      _setError(friendlyCause(ErrorCause.audioFailed, error: e));
     }
     _subs.add(manager.peerChanges.listen(_onPeers));
     _subs.add(_relay.rosters.listen(_onRoster));
@@ -1582,7 +1587,7 @@ class WalkieController extends ChangeNotifier {
       messenger = m;
       _wireMessenger(m, friend: false);
     } catch (e) {
-      error = 'Voice messages unavailable: $e';
+      _setError(friendlyCause(ErrorCause.voiceMessagesFailed, error: e));
     }
     try {
       final m = Messenger(
@@ -1959,8 +1964,12 @@ class WalkieController extends ChangeNotifier {
           );
         }
       case 'importFailed':
-        _notice(
-          'Could not open ${a['name'] ?? 'the file'}: ${a['error'] ?? ''}',
+        noticeFriendly(
+          FriendlyError(
+            'Could not open ${a['name'] ?? 'the file'}, so nothing was '
+            'imported. It may not be a trail or map file.',
+            details: detailsOf(a['error']),
+          ),
         );
     }
   }
@@ -2737,7 +2746,7 @@ class WalkieController extends ChangeNotifier {
         await manager.setTalking(false);
       }
     } catch (e) {
-      error = 'Mic error: $e';
+      _setError(_micError(e));
       transmitting = false;
       notifyListeners();
       _updateServiceText();
@@ -3055,7 +3064,7 @@ class WalkieController extends ChangeNotifier {
       await _audio.startTransmit(rec.packets.add);
     } catch (e) {
       recording = null;
-      error = 'Mic error: $e';
+      _setError(_micError(e));
       notifyListeners();
       return;
     }
@@ -3175,7 +3184,7 @@ class WalkieController extends ChangeNotifier {
     try {
       return await radioDevice.scan();
     } catch (e) {
-      _notice(e is StateError ? e.message : 'Scan failed: $e');
+      noticeFriendly(friendlyFromError(e, what: 'look for radios'));
       return const [];
     }
   }
@@ -3620,7 +3629,10 @@ class WalkieController extends ChangeNotifier {
     final body = await m.bodyOf(e);
     final clip = body == null ? null : VoiceClip.tryDecode(body);
     if (clip == null) {
-      _notice('That message could not be played.');
+      _notice(
+        'That voice message could not be played. The recording may be '
+        'damaged.',
+      );
       return;
     }
     _stopReplay();
@@ -4448,7 +4460,7 @@ class WalkieController extends ChangeNotifier {
       try {
         await _audio.startTransmit(_sendPrivate);
       } catch (e) {
-        error = 'Mic error: $e';
+        _setError(_micError(e));
         privateTalkTo = null;
         transmitting = false;
         notifyListeners();
@@ -4685,12 +4697,12 @@ class WalkieController extends ChangeNotifier {
     try {
       if (!await Permission.locationWhenInUse.isGranted &&
           !(await Permission.locationWhenInUse.request()).isGranted) {
-        _notice('Location permission is needed to share where you are.');
+        noticeFriendly(friendlyCause(ErrorCause.locationDenied));
         return null;
       }
     } catch (_) {}
     final l = await bridge.getLocation();
-    if (l == null) _notice('Could not get your location. Is location on?');
+    if (l == null) noticeFriendly(friendlyCause(ErrorCause.locationOff));
     return l;
   }
 
@@ -5171,6 +5183,113 @@ class WalkieController extends ChangeNotifier {
 
   void _notice(String s) {
     if (!_notices.isClosed) _notices.add(s);
+  }
+
+  /// Notices that came with a fix button or Details (v2.6.3), by text.
+  final Map<String, FriendlyError> _noticeErrors = {};
+
+  /// The fix button / Details for a notice the UI got, null for a plain one.
+  FriendlyError? noticeError(String text) => _noticeErrors[text];
+
+  /// A notice in plain words with a fix button the notice bar can run
+  /// (Try again and Restore backup need a screen, so they are not offered
+  /// here; the raw text stays under Details).
+  void noticeFriendly(FriendlyError fe) {
+    final fix = switch (fe.fix) {
+      FixAction.retry ||
+      FixAction.restoreBackup ||
+      FixAction.turnOnLocationSharing => null,
+      final f => f,
+    };
+    final fix2 = switch (fe.fix2) {
+      FixAction.retry ||
+      FixAction.restoreBackup ||
+      FixAction.turnOnLocationSharing => null,
+      final f => f,
+    };
+    final shown = FriendlyError(
+      fe.message,
+      cause: fe.cause,
+      fix: fix ?? fix2,
+      fix2: fix == null ? null : fix2,
+      details: fe.details,
+    );
+    if (shown.fix != null || (shown.details?.isNotEmpty ?? false)) {
+      if (_noticeErrors.length > 20) {
+        _noticeErrors.remove(_noticeErrors.keys.first);
+      }
+      _noticeErrors[shown.message] = shown;
+    }
+    _notice(shown.message);
+  }
+
+  /// Show [fe] in the banner on the Talk screen.
+  void _setError(FriendlyError fe) {
+    errorInfo = fe;
+    error = fe.message;
+  }
+
+  /// Show [fe] in the Talk screen's problem banner now.
+  void showError(FriendlyError fe) {
+    _setError(fe);
+    notifyListeners();
+  }
+
+  /// The Talk screen's problem banner was closed, or fixed.
+  void clearError() {
+    if (error == null && errorInfo == null) return;
+    error = null;
+    errorInfo = null;
+    notifyListeners();
+  }
+
+  /// "Try again" on the sound problem: start the audio again.
+  Future<void> retryAudio() async {
+    try {
+      await _audio.init();
+      error = null;
+      errorInfo = null;
+    } catch (e) {
+      _setError(friendlyCause(ErrorCause.audioFailed, error: e));
+    }
+    notifyListeners();
+  }
+
+  /// A microphone problem: a denied permission or a microphone another app
+  /// holds.
+  FriendlyError _micError(Object e) {
+    final low = e.toString().toLowerCase();
+    return friendlyCause(
+      low.contains('permission') || low.contains('denied')
+          ? ErrorCause.microphoneDenied
+          : ErrorCause.microphoneFailed,
+      error: e,
+    );
+  }
+
+  /// "Connect radio": start the radio in use again, or the first saved one.
+  /// False when no radio was ever set up (the UI opens the pairing screen).
+  Future<bool> reconnectRadio() async {
+    if (radioDevice.deviceId != null) {
+      radioDevice.start();
+      notifyListeners();
+      return true;
+    }
+    final id = settings.radioId;
+    final r =
+        _savedRadio(id) ?? (savedRadios.isEmpty ? null : savedRadios.first);
+    if (r == null) return false;
+    await _useRadio(r);
+    return true;
+  }
+
+  /// "Try again" on a missing internet: look at the phone's network again
+  /// and rebuild the relay connections.
+  Future<void> retryInternet() async {
+    await refreshPhoneNet();
+    await _relay.setServerUris(relayUrisFor(settings));
+    await restartDownLinks();
+    notifyListeners();
   }
 
   @override

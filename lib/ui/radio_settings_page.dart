@@ -7,6 +7,7 @@ import '../lora/meshtastic_session.dart';
 import '../lora/meshtastic_settings.dart';
 import '../lora/radio_match.dart';
 import 'adaptive_layout.dart';
+import 'friendly_error.dart';
 import 'radio_match_card.dart';
 import 'settings_index.dart';
 import 'settings_search.dart';
@@ -116,6 +117,9 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
   String? _failed;
   String? _saved;
 
+  /// Does the last change again ("Try again").
+  VoidCallback? _again;
+
   /// The radio the match check compares with (null = home base / best).
   String? _matchTarget;
 
@@ -153,6 +157,7 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
   }
 
   Future<void> _run(RadioChange change, String savedText) async {
+    _again = () => _run(change, savedText);
     setState(() {
       _step = MeshWriteStep.preparing;
       _failed = null;
@@ -170,6 +175,7 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
   Future<void> _restore() async {
     final b = c.radioBackup;
     if (b == null) return;
+    _again = _restore;
     final ok = await _confirm(
       title: 'Restore previous settings?',
       lines: [
@@ -425,6 +431,25 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
           key: const Key('rs-prec-note'),
           style: small,
         ),
+        if (s != null &&
+            s.positionSecs != null &&
+            !locationSharingOn(s.positionSecs, s.positionSmart))
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: KeyedSubtree(
+              key: const Key('rs-prec-sharing-off'),
+              child: FriendlyErrorView(
+                color: theme.colorScheme.onSurface,
+                error: FriendlyError(
+                  'Location sharing is off on this radio, so it is not '
+                  'sending where you are and these settings have no effect '
+                  'yet.',
+                  fix: canEdit ? FixAction.turnOnLocationSharing : null,
+                ),
+                onFix: (_) => _toggleLocation(true),
+              ),
+            ),
+          ),
         if (chans.isEmpty)
           Padding(
             padding: const EdgeInsets.only(top: 8),
@@ -644,6 +669,24 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
                         ),
                       ),
                     ),
+                  if (blocked != null &&
+                      blocked.startsWith('Connect your radio first'))
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: FilledButton.tonal(
+                          key: const Key('rs-connect-radio'),
+                          onPressed: () => runFix(
+                            context,
+                            c,
+                            FixAction.connectRadio,
+                            callbacks: FixCallbacks(afterFix: _loadFields),
+                          ),
+                          child: Text(FixAction.connectRadio.label),
+                        ),
+                      ),
+                    ),
                   if (s != null)
                     Card(
                       key: const Key('rs-summary'),
@@ -695,27 +738,26 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
                   if (_failed != null)
                     Padding(
                       padding: const EdgeInsets.only(top: 12),
-                      child: Column(
+                      child: KeyedSubtree(
                         key: const Key('rs-failed'),
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Not saved: $_failed',
-                            style: theme.textTheme.bodyMedium?.copyWith(
-                              color: cs.error,
+                        child: FriendlyErrorView(
+                          error: radioWriteError(
+                            _failed!,
+                            hasBackup: backup != null,
+                          ),
+                          keyFor: (a) => a == FixAction.restoreBackup
+                              ? const Key('rs-restore-failed')
+                              : null,
+                          onFix: (a) => runFix(
+                            context,
+                            c,
+                            a,
+                            callbacks: FixCallbacks(
+                              retry: busy ? null : _again,
+                              restoreBackup: busy ? null : _restore,
                             ),
                           ),
-                          if (backup != null)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 6),
-                              child: FilledButton.tonalIcon(
-                                key: const Key('rs-restore-failed'),
-                                icon: const Icon(Icons.restore),
-                                label: const Text('Restore previous settings'),
-                                onPressed: busy ? null : _restore,
-                              ),
-                            ),
-                        ],
+                        ),
                       ),
                     ),
                   SettingAnchor(

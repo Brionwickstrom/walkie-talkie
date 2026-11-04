@@ -1525,6 +1525,37 @@ Tests: `test/v195_gateway_test.dart`, `test/v195_quiet_test.dart`.
 Tests: `test/v197_meshtastic_import_test.dart` (vectors from the official
 apps and the Python library), `test/v195_quiet_test.dart`.
 
+## v2.6.3: Plain error messages with a fix button
+
+Common dead-end errors are now one plain sentence that says what happened
+and why, with a button for the fix where there is one. The raw exception
+text is never the message: it sits under **Details** (a closed expander, or
+the Details button on a snack bar), with links and key-like strings removed.
+
+- **One place:** `lib/app/friendly_error.dart` maps a cause (or an exception,
+  or a radio write message) to a `FriendlyError` (sentence, up to two
+  `FixAction`s, details). `lib/ui/friendly_error.dart` shows it
+  (`FriendlyErrorView`, `showFriendlySnack`) and runs the fix (`runFix`).
+* **Fixes:** Turn on Bluetooth, Allow (Nearby devices), Allow location / Turn
+  on location, Allow microphone, Allow notifications, Allow camera, Open
+  settings, Allow mobile data, Wi-Fi settings, Allow Do Not Disturb, Connect
+  radio, Try again, Restore backup, Turn it on (radio location sharing).
+* **Where:** the Talk screen's problem banner (microphone, sound), notices
+  (location off or denied, radio scan failures, file import), the Connection
+  chip sheet (Try again / Wi-Fi settings, Turn on Bluetooth / Connect radio),
+  Radio settings ("Not saved because ..." with Try again, Restore backup,
+  Connect radio; a note under Location precision with Turn it on when the
+  radio's location sharing is off; Connect radio on the "Connect your radio
+  first" line), the updater (check, download, installer), forecast, trails,
+  map pack and offline area downloads, photo and map file import.
+* **Unchanged:** every message that was already plain, and what each action
+  does. Try again and Restore backup only appear where a screen can run
+  them.
+* **Battery:** nothing new in the background.
+
+Tests: `test/v263_friendly_error_test.dart`. Screenshots:
+`V263_SHOTS=/workspace flutter test test/v263_friendly_error_test.dart`.
+
 ## v2.6.2: Search in Settings
 
 A search box at the top of **Settings**, and another at the top of **Radio

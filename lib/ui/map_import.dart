@@ -12,6 +12,7 @@ import '../trip/imports/geo_import.dart';
 import '../trip/imports/map_layers.dart';
 import '../trip/trip_controller.dart';
 import 'overlay_place_page.dart';
+import 'friendly_error.dart';
 
 /// Pick a GPX / KML / KMZ / MBTiles / image / PDF file and import it.
 Future<MapLayer?> pickAndImportMap(
@@ -22,7 +23,13 @@ Future<MapLayer?> pickAndImportMap(
   try {
     files = await FilePicker.pickFiles(dialogTitle: 'Import a map or trail');
   } catch (e) {
-    if (context.mounted) _snack(context, 'Could not open the file picker: $e');
+    if (context.mounted) {
+      _friendly(
+        context,
+        'The file picker could not be opened, so nothing was imported.',
+        e,
+      );
+    }
     return null;
   }
   if (files.isEmpty || !context.mounted) return null;
@@ -33,7 +40,13 @@ Future<MapLayer?> pickAndImportMap(
     await sink.addStream(f.readAsByteStream());
     await sink.close();
   } catch (e) {
-    if (context.mounted) _snack(context, 'Could not read ${f.name}: $e');
+    if (context.mounted) {
+      _friendly(
+        context,
+        '${f.name} could not be read, so nothing was imported.',
+        e,
+      );
+    }
     return null;
   }
   if (!context.mounted) return null;
@@ -110,7 +123,17 @@ Future<MapLayer?> importMapFile(
     }
   } catch (e) {
     busy.close();
-    if (context.mounted) _snack(context, 'Import failed: $e');
+    if (context.mounted) {
+      if (e is ImportFormatException) {
+        _snack(context, 'That file could not be imported. ${e.message}');
+      } else {
+        _friendly(
+          context,
+          'That file could not be imported, so nothing was added.',
+          e,
+        );
+      }
+    }
     return null;
   } finally {
     if (temporary && !moved) {
@@ -178,6 +201,14 @@ Future<Uint8List> renderPdfFirstPage(String path) async {
     await doc.close();
   }
 }
+
+/// A plain sentence; the raw text sits behind "Details".
+void _friendly(BuildContext context, String message, Object e) =>
+    showFriendlySnack(
+      context,
+      FriendlyError(message, details: detailsOf(e)),
+      null,
+    );
 
 void _snack(BuildContext context, String s) =>
     ScaffoldMessenger.maybeOf(context)

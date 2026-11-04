@@ -37,6 +37,7 @@ import 'map_packs_page.dart';
 import 'map_search_page.dart';
 import 'drive_page.dart';
 import 'friend_marker.dart';
+import 'friendly_error.dart';
 import 'nav_page.dart';
 import 'network_map_page.dart';
 import 'offline_areas_page.dart';
@@ -1000,7 +1001,9 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
             } on StorageLimitException catch (e) {
               set(() => error = e.message);
             } catch (e) {
-              set(() => error = 'Could not get trails: $e');
+              set(
+                () => error = friendlyFromError(e, what: 'get trails').message,
+              );
             } finally {
               if (ctx.mounted) set(() => busy = false);
             }
@@ -2467,12 +2470,23 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
             onPressed: () async {
               final ok = await trip.refreshWeather(force: true);
               if (!ok && context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      place == null ? 'Need a GPS fix first.' : 'Could not download the forecast (offline?). Showing the saved one.',
-                    ),
-                  ),
+                void again() => unawaited(
+                  trip.refreshWeather(force: true).then((ok) {
+                    if (!ok && context.mounted) {
+                      showFriendlySnack(
+                        context,
+                        _forecastError(place != null),
+                        null,
+                        callbacks: FixCallbacks(retry: again),
+                      );
+                    }
+                  }),
+                );
+                showFriendlySnack(
+                  context,
+                  _forecastError(place != null),
+                  null,
+                  callbacks: FixCallbacks(retry: again),
                 );
               }
             },
@@ -2726,3 +2740,18 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
     );
   }
 }
+
+/// The forecast could not be refreshed: no GPS fix yet, or no internet.
+FriendlyError _forecastError(bool hasPlace) => hasPlace
+    ? const FriendlyError(
+        'The forecast could not be downloaded because there is no internet. '
+        'Showing the saved one.',
+        cause: ErrorCause.noInternet,
+        fix: FixAction.retry,
+      )
+    : const FriendlyError(
+        'There is no GPS fix yet, so the forecast cannot be found for where '
+        'you are. Try again once the map shows your position.',
+        cause: ErrorCause.other,
+        fix: FixAction.retry,
+      );
