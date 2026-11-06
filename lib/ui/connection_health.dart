@@ -624,6 +624,22 @@ class _ConnectionChipState extends State<ConnectionChip> {
   }
 }
 
+/// The one-tap range test line on the connection sheet (v2.6.10).
+class RangeRunLine {
+  const RangeRunLine({
+    required this.running,
+    required this.homeName,
+    required this.onTap,
+    this.elapsed = Duration.zero,
+  });
+  final bool running;
+  final String homeName;
+  final Duration elapsed;
+
+  /// Start (asks first) or Stop (shows the summary).
+  final VoidCallback onTap;
+}
+
 /// The sheet behind the chip: the whole picture in plain words.
 class ConnectionHealthSheet extends StatelessWidget {
   const ConnectionHealthSheet({
@@ -632,8 +648,12 @@ class ConnectionHealthSheet extends StatelessWidget {
     this.onMore,
     this.onFix,
     this.location,
+    this.rangeTest,
   });
   final ConnectionHealth health;
+
+  /// Start / stop the range test (v2.6.10), null = not shown.
+  final RangeRunLine? rangeTest;
 
   /// Which GPS is "where I am" (v2.6.7), null = not shown.
   final LocationChoice? location;
@@ -730,6 +750,34 @@ class ConnectionHealthSheet extends StatelessWidget {
               child: Text(health.homeNote!, style: theme.textTheme.bodySmall),
             ),
         ],
+        if (rangeTest != null) ...[
+          const Divider(height: 16),
+          ListTile(
+            key: const Key('connection-range-test'),
+            dense: true,
+            leading: Icon(
+              rangeTest!.running ? Icons.stop_circle : Icons.radar,
+              color: rangeTest!.running ? Colors.redAccent : null,
+            ),
+            title: Text(
+              rangeTest!.running
+                  ? 'Range test running · ${rangeTest!.elapsed.inMinutes} min'
+                  : 'Range test to ${rangeTest!.homeName}',
+            ),
+            subtitle: Text(
+              rangeTest!.running
+                  ? 'Stop to see the furthest reply, signal and connected %.'
+                  : 'One tap: pings it and marks where you connect and drop '
+                        'on the Trip map.',
+            ),
+            trailing: FilledButton.tonal(
+              key: const Key('connection-range-test-go'),
+              onPressed: rangeTest!.onTap,
+              child: Text(rangeTest!.running ? 'Stop' : 'Start'),
+            ),
+            onTap: rangeTest!.onTap,
+          ),
+        ],
         if (location != null) ...[
           const Divider(height: 16),
           ListTile(
@@ -761,6 +809,20 @@ class ConnectionHealthSheet extends StatelessWidget {
   }
 }
 
+/// The range test button closes the sheet first (Talk then shows the
+/// Trip map).
+RangeRunLine? _closing(BuildContext ctx, RangeRunLine? l) => l == null
+    ? null
+    : RangeRunLine(
+        running: l.running,
+        homeName: l.homeName,
+        elapsed: l.elapsed,
+        onTap: () {
+          Navigator.pop(ctx);
+          l.onTap();
+        },
+      );
+
 Future<void> showConnectionSheet(
   BuildContext context, {
   required ConnectionHealth Function() source,
@@ -768,6 +830,7 @@ Future<void> showConnectionSheet(
   VoidCallback? onMore,
   void Function(FixAction)? onFix,
   LocationChoice? Function()? location,
+  RangeRunLine? Function()? rangeTest,
 }) => showAppSheet<void>(
   context: context,
   builder: (ctx) => ListenableBuilder(
@@ -776,6 +839,7 @@ Future<void> showConnectionSheet(
       health: source(),
       onFix: onFix,
       location: location?.call(),
+      rangeTest: _closing(ctx, rangeTest?.call()),
       onMore: onMore == null
           ? null
           : () {

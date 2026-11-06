@@ -11,10 +11,13 @@ import 'package:latlong2/latlong.dart';
 
 import '../trip/geo.dart';
 import '../trip/range_logger.dart';
+import '../trip/range_run.dart' show formatRunDuration;
 import '../trip/range_test.dart';
 
 import 'package:path_provider/path_provider.dart';
 
+import 'range_run_ui.dart';
+import 'settings_search.dart' show SettingAnchor;
 import 'sheets.dart';
 
 const Color rangeGreen = Color(0xFF2E7D32);
@@ -333,8 +336,12 @@ class RangeTestPage extends StatefulWidget {
     this.homeChoices,
     this.share,
     this.exportDir,
+    this.runActions,
   });
   final RangeTest range;
+
+  /// The one-tap range test (v2.6.10), null = not offered (tests).
+  final RangeRunActions? runActions;
 
   /// Range logging on this phone (null = not offered, tests).
   final RangeLogger? logger;
@@ -551,6 +558,55 @@ class _RangeTestPageState extends State<RangeTestPage> {
     if (n != null) await rt.setHomeNode(n);
   }
 
+  /// v2.6.10: Start / Stop the one-tap range test, its time limit and the
+  /// last test's summary.
+  List<Widget> _runSection(BuildContext context) {
+    final a = widget.runActions!;
+    final run = a.run;
+    final last = run.last;
+    return [
+      SettingAnchor(
+        id: 'range-run',
+        child: ListTile(
+          key: const Key('rangeRunTile'),
+          leading: Icon(
+            run.running ? Icons.stop_circle : Icons.radar,
+            color: run.running ? rangeRed : rangeGreen,
+          ),
+          title: const Text('One-tap range test'),
+          subtitle: Text(
+            run.running
+                ? 'Running for ${formatRunDuration(run.elapsed)}. Tap to '
+                      'stop and see the summary.'
+                : 'Pings the home radio and marks where you connect and '
+                      'drop. Stops by itself after '
+                      '${formatRunDuration(run.maxDuration)}.',
+          ),
+          trailing: FilledButton(
+            key: const Key('rangeRunTileGo'),
+            onPressed: () => rangeRunTap(context, a),
+            child: Text(run.running ? 'Stop' : 'Start'),
+          ),
+          onTap: () => rangeRunTap(context, a),
+        ),
+      ),
+      if (last != null)
+        ListTile(
+          key: const Key('rangeRunLast'),
+          leading: const Icon(Icons.summarize),
+          title: const Text('Last range test'),
+          subtitle: Text(
+            '${rangeWhen(last.startedAt)} · '
+            '${formatRunDuration(last.duration)} · '
+            '${last.connectedPct == null ? 'no pings' : '${last.connectedPct}% connected'}',
+          ),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => showRangeSummarySheet(context, a, last),
+        ),
+      const Divider(),
+    ];
+  }
+
   List<Widget> _loggingSection(BuildContext context) {
     final lg = widget.logger!;
     final plugged = lg.plugged();
@@ -687,12 +743,17 @@ class _RangeTestPageState extends State<RangeTestPage> {
     return Scaffold(
       appBar: AppBar(title: const Text('Range test markers')),
       body: ListenableBuilder(
-        listenable: Listenable.merge([rt, ?widget.logger]),
+        listenable: Listenable.merge([
+          rt,
+          ?widget.logger,
+          ?widget.runActions?.run,
+        ]),
         builder: (context, _) {
           final list = rt.events.reversed.toList();
           return ListView(
             padding: const EdgeInsets.only(bottom: 24),
             children: [
+              if (widget.runActions != null) ..._runSection(context),
               if (widget.logger != null) ..._loggingSection(context),
               SwitchListTile(
                 key: const Key('rangeVisible'),

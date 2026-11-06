@@ -43,6 +43,7 @@ import 'geofences_page.dart';
 import 'nav_page.dart';
 import 'network_map_page.dart';
 import 'offline_areas_page.dart';
+import 'range_run_ui.dart';
 import 'range_test_ui.dart';
 import 'sheets.dart';
 import 'smart_sheets.dart';
@@ -226,6 +227,7 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
         trip.layers,
         trip.range,
         trip.rangeLog,
+        trip.rangeRun,
         trip.geofences,
       ]),
       builder: (context, _) {
@@ -256,6 +258,8 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
           controls: _mapControls(context, trip),
           fullControls: _zoomControls(),
           topLeft: [
+            if (trip.rangeRun.running)
+              RangeRunStrip(actions: rangeRunActions(trip)),
             if (_drawShape != null)
               Material(
                 color: Colors.orange.shade800,
@@ -590,7 +594,7 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
             ),
           ],
         ),
-        if (trip.range.logging)
+        if (trip.range.logging && !trip.rangeRun.running)
           Positioned(
             top: trip.drivingMode ? 36 : 8,
             left: 8,
@@ -689,6 +693,13 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
         icon: Icons.file_open,
         tip: 'Imported trails and maps',
         onTap: () => _openLayers(context, trip),
+      ),
+      RoundMapButton(
+        key: const Key('mapRangeRun'),
+        icon: trip.rangeRun.running ? Icons.stop_circle : Icons.radar,
+        tip: trip.rangeRun.running ? 'Stop range test' : 'Start range test',
+        onTap: () => rangeRunTap(context, rangeRunActions(trip)),
+        color: trip.rangeRun.running ? rangeRed : null,
       ),
       if (trip.range.hasAny)
         RoundMapButton(
@@ -804,6 +815,34 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
     if (tc == null || !mounted) return;
     _openRange(context, tc);
   }
+
+  /// The one-tap range test button (v2.6.10), from Talk's connection
+  /// sheet: start (asks first) or stop and show the summary.
+  void rangeRunButton() {
+    final tc = t;
+    if (tc == null || !mounted) return;
+    unawaited(rangeRunTap(context, rangeRunActions(tc)));
+  }
+
+  /// What the range test buttons need.
+  RangeRunActions rangeRunActions(TripController trip) => RangeRunActions(
+    run: trip.rangeRun,
+    logger: trip.rangeLog,
+    radioReady: () => c.radioDevice.ready && c.radioDevice.session != null,
+    homeChoices: _rangeHomeChoices,
+    imperial: trip.settings.imperial,
+    share: trip.host.shareFile,
+    onFix: (f) => runFix(context, c, f),
+  );
+
+  List<({int num, String name})> _rangeHomeChoices() => [
+    for (final n in c.radioDevice.session?.nodes.values ?? const <RadioNode>[])
+      if (n.num != c.radioDevice.session?.myNodeNum &&
+          n.readable &&
+          n.longName.isNotEmpty &&
+          !(c.radioDevice.session?.isPublicNode(n) ?? false))
+        (num: n.num, name: n.longName),
+  ];
 
   /// Opens Geofences (from the Settings search, v2.6.8).
   void openGeofences() {
@@ -1018,15 +1057,8 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
           range: trip.range,
           imperial: trip.settings.imperial,
           logger: trip.rangeLog,
-          homeChoices: () => [
-            for (final n
-                in c.radioDevice.session?.nodes.values ?? const <RadioNode>[])
-              if (n.num != c.radioDevice.session?.myNodeNum &&
-                  n.readable &&
-                  n.longName.isNotEmpty &&
-                  !(c.radioDevice.session?.isPublicNode(n) ?? false))
-                (num: n.num, name: n.longName),
-          ],
+          runActions: rangeRunActions(trip),
+          homeChoices: _rangeHomeChoices,
           share: trip.host.shareFile,
           onShow: (e) {
             Navigator.of(context).popUntil((r) => r.isFirst);

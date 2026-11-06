@@ -14,6 +14,8 @@ import '../platform/platform_caps.dart';
 import '../update/update_ui.dart';
 import '../chat/chat_store.dart';
 import '../trip/geo.dart';
+import '../trip/range_logger.dart' show radioNodeLabel;
+import '../trip/range_test.dart' show defaultRangeHomeNode;
 import 'chat_hub.dart';
 import 'chat_page.dart';
 import 'friends_page.dart';
@@ -395,6 +397,7 @@ class _HomePageState extends State<HomePage> {
             source: () => connectionHealthOf(c),
             listenable: c,
             location: () => c.locationChoice,
+            rangeTest: () => _rangeRunLine(),
             onMore: () => _openStatus(context, audience, here),
             onFix: (a) => runFix(
               context,
@@ -1257,6 +1260,31 @@ class _HomePageState extends State<HomePage> {
     radioPaired: c.radioPaired,
     radioReady: c.radioPaired && c.radioDevice.ready,
   );
+
+  /// v2.6.10: the one-tap range test on Talk's connection sheet. The
+  /// button shows the Trip map and starts (or stops) the test there, where
+  /// the markers and the live strip are.
+  RangeRunLine? _rangeRunLine() {
+    final t = c.trip;
+    if (t == null) return null;
+    final home = t.range.homeNode;
+    final node = c.radioDevice.session?.nodes[home];
+    return RangeRunLine(
+      running: t.rangeRun.running,
+      elapsed: t.rangeRun.elapsed,
+      homeName: node != null && node.longName.isNotEmpty
+          ? node.longName
+          : home == defaultRangeHomeNode
+          ? 'Skunk Ape'
+          : radioNodeLabel(home),
+      onTap: () {
+        setState(() => _tab = _tripTab);
+        WidgetsBinding.instance.addPostFrameCallback(
+          (_) => _tripKey.currentState?.rangeRunButton(),
+        );
+      },
+    );
+  }
 
   /// A search result on the Trip map: close Settings, show the Trip map
   /// and open its Range test page.

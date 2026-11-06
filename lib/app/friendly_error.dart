@@ -130,6 +130,36 @@ FriendlyError? radioGpsError(LocationChoice c) {
   };
 }
 
+/// v2.6.10: why the one-tap range test cannot start or is not pinging, as
+/// one plain sentence with its fix. Null = nothing wrong.
+FriendlyError? rangeTestProblem({
+  required bool radioReady,
+  bool running = false,
+  bool waitingForGps = false,
+}) {
+  if (!radioReady) {
+    return FriendlyError(
+      running
+          ? 'Your radio is not connected, so the range test cannot ping the '
+                'home radio. It carries on when the radio is back.'
+          : 'The range test needs your radio connected, so it can ping the '
+                'home radio.',
+      cause: ErrorCause.radioNotConnected,
+      fix: FixAction.connectRadio,
+    );
+  }
+  if (running && waitingForGps) {
+    return const FriendlyError(
+      'No GPS fix on this phone yet, so no pings are being sent. Turn on '
+      'location or move where the sky is open.',
+      cause: ErrorCause.locationOff,
+      fix: FixAction.turnOnLocation,
+      fix2: FixAction.allowLocation,
+    );
+  }
+  return null;
+}
+
 /// v2.6.9: why "Share radio with other programs on this PC" is not
 /// running, as one plain sentence with its fix. Null when it runs (or is
 /// off).

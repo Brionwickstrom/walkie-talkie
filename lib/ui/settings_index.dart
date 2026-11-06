@@ -736,6 +736,31 @@ const settingsIndex = <SettingEntry>[
   ),
   // --- Trip map -----------------------------------------------------------
   SettingEntry(
+    id: 'range-run',
+    title: 'One-tap range test',
+    section: 'Range test',
+    about:
+        'Start a range test to the home radio; see where you connect and '
+        'drop, then a summary.',
+    words: [
+      'range test',
+      'coverage',
+      'ping test',
+      'signal test',
+      'how far',
+      'distance',
+      'snr',
+      'start test',
+      'stop test',
+      'summary',
+      'gpx',
+      'csv',
+      'skunk ape',
+    ],
+    home: SettingsHome.trip,
+    needs: SettingNeeds.trip,
+  ),
+  SettingEntry(
     id: 'range-logging',
     title: 'Range logging',
     section: 'Range test',

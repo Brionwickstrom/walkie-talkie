@@ -149,6 +149,10 @@ class RangeLogger extends ChangeNotifier {
   int replies = 0;
   int skippedNoGps = 0;
 
+  /// The last ping was skipped for want of a GPS fix (v2.6.10: the range
+  /// test shows a plain error with a fix button).
+  bool waitingForGps = false;
+
   /// The radio to use (null = none connected).
   RangeRadio? get radio => _radio;
 
@@ -252,9 +256,11 @@ class RangeLogger extends ChangeNotifier {
       final f = _freshFix();
       if (f == null) {
         skippedNoGps++;
+        waitingForGps = true;
         status = 'Waiting for a GPS fix (no ping sent)';
         return;
       }
+      waitingForGps = false;
       if (!r.canPing) {
         status = 'Radio busy or not ready (no ping sent)';
         return;
