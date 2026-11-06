@@ -117,19 +117,29 @@ class _BatteryModePickerState extends State<BatteryModePicker> {
             ],
           ),
           const SizedBox(height: 6),
-          SegmentedButton<BatteryMode>(
-            key: const Key('battery-mode'),
-            showSelectedIcon: false,
-            segments: [
-              for (final x in BatteryMode.values)
-                ButtonSegment(
-                  value: x,
-                  label: Text(x.label, key: Key('battery-mode-${x.id}')),
-                  icon: Icon(batteryModeIcon(x)),
-                ),
-            ],
-            selected: {m},
-            onSelectionChanged: _busy ? null : (v) => _pick(v.first),
+          LayoutBuilder(
+            // Narrow (a 360 dp phone, the connection sheet): words only, on
+            // one line each.
+            builder: (context, box) => SegmentedButton<BatteryMode>(
+              key: const Key('battery-mode'),
+              showSelectedIcon: false,
+              segments: [
+                for (final x in BatteryMode.values)
+                  ButtonSegment(
+                    value: x,
+                    label: Text(
+                      x.label,
+                      key: Key('battery-mode-${x.id}'),
+                      maxLines: 1,
+                      softWrap: false,
+                      overflow: TextOverflow.fade,
+                    ),
+                    icon: box.maxWidth < 380 ? null : Icon(batteryModeIcon(x)),
+                  ),
+              ],
+              selected: {m},
+              onSelectionChanged: _busy ? null : (v) => _pick(v.first),
+            ),
           ),
           const SizedBox(height: 6),
           Text(

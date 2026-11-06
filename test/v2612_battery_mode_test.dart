@@ -2,7 +2,6 @@
 // on and off, snapshot and exact restore, locked settings, the range test
 // rules, the Tracking-on-battery suggestion, plain errors, saving, Settings
 // search and the version.
-import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
