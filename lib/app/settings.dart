@@ -74,6 +74,9 @@ class AppSettings {
     this.joinAlertPrivate = true,
     this.joinAlertPublic = false,
     this.shareRadio = true,
+    this.radioShareLocal = false,
+    this.radioSharePort = 4403,
+    this.radioShareFull = false,
     QuietHours? quiet,
     this.radioId,
     this.radioName,
@@ -135,6 +138,13 @@ class AppSettings {
   /// v1.9.5: share my paired LoRa radio as a gateway with phones on the
   /// internet in my channel (default on).
   bool shareRadio;
+
+  /// v2.6.9 (desktop): share the radio link with other programs on this
+  /// PC on 127.0.0.1:[radioSharePort] (default off). [radioShareFull]:
+  /// they may change the radio's settings too (default read-only).
+  bool radioShareLocal;
+  int radioSharePort;
+  bool radioShareFull;
 
   /// v1.9.5: mute (hold to mute) and programmable quiet hours.
   final QuietHours quiet;
@@ -497,6 +507,9 @@ class SharedPrefsSettingsStore implements SettingsStore {
   static const _kJoinPrivate = 'join_alert_private';
   static const _kJoinPublic = 'join_alert_public';
   static const _kShareRadio = 'share_radio';
+  static const _kShareLocal = 'radio_share_local';
+  static const _kSharePort = 'radio_share_port';
+  static const _kShareFull = 'radio_share_full';
   static const _kQuiet = 'quiet_hours';
   static const _kFriends = 'friends';
   static const _kSocial = 'social';
@@ -587,6 +600,9 @@ class SharedPrefsSettingsStore implements SettingsStore {
       joinAlertPrivate: prefs?.getBool(_kJoinPrivate) ?? true,
       joinAlertPublic: prefs?.getBool(_kJoinPublic) ?? false,
       shareRadio: prefs?.getBool(_kShareRadio) ?? true,
+      radioShareLocal: prefs?.getBool(_kShareLocal) ?? false,
+      radioSharePort: prefs?.getInt(_kSharePort) ?? 4403,
+      radioShareFull: prefs?.getBool(_kShareFull) ?? false,
       quiet: QuietHours.decode(prefs?.getString(_kQuiet)),
       radioId: prefs?.getString(_kRadioId),
       radioName: prefs?.getString(_kRadioName),
@@ -662,6 +678,9 @@ class SharedPrefsSettingsStore implements SettingsStore {
       await prefs.setBool(_kJoinPrivate, s.joinAlertPrivate);
       await prefs.setBool(_kJoinPublic, s.joinAlertPublic);
       await prefs.setBool(_kShareRadio, s.shareRadio);
+      await prefs.setBool(_kShareLocal, s.radioShareLocal);
+      await prefs.setInt(_kSharePort, s.radioSharePort);
+      await prefs.setBool(_kShareFull, s.radioShareFull);
       await prefs.setString(_kQuiet, s.quiet.encode());
       if (s.radioId == null) {
         await prefs.remove(_kRadioId);

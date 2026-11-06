@@ -5,7 +5,9 @@
 import 'dart:async';
 import 'dart:io';
 
+import '../lora/radio_share.dart';
 import '../trip/location_source.dart';
+import 'settings.dart';
 
 /// What a fix button does. The UI runs it (lib/ui/friendly_error.dart).
 enum FixAction {
@@ -25,7 +27,9 @@ enum FixAction {
   restoreBackup('Restore backup'),
   turnOnLocationSharing('Turn it on'),
   openRadioSettings('Radio settings'),
-  usePhoneGps('Use Auto');
+  usePhoneGps('Use Auto'),
+  useFreePort('Use a free port'),
+  stopRadioShare('Turn off sharing');
 
   const FixAction(this.label);
   final String label;
@@ -123,6 +127,35 @@ FriendlyError? radioGpsError(LocationChoice c) {
       fix2: second,
     ),
     _ => FriendlyError(message, fix: second),
+  };
+}
+
+/// v2.6.9: why "Share radio with other programs on this PC" is not
+/// running, as one plain sentence with its fix. Null when it runs (or is
+/// off).
+FriendlyError? radioShareProblem(RadioShareHub hub, AppSettings s) {
+  if (!s.radioShareLocal || hub.running) return null;
+  final port = s.radioSharePort;
+  return switch (hub.problem) {
+    RadioShareProblem.portInUse => FriendlyError(
+      'Port $port is already used by another program on this PC, so the '
+      'radio cannot be shared on it. Pick another port.',
+      fix: FixAction.useFreePort,
+      fix2: FixAction.stopRadioShare,
+      details: hub.problemDetails == null
+          ? null
+          : scrubDetails(hub.problemDetails!),
+    ),
+    RadioShareProblem.cannotListen => FriendlyError(
+      'Windows did not let the app share the radio on port $port. Try '
+      'another port, or turn sharing off.',
+      fix: FixAction.useFreePort,
+      fix2: FixAction.stopRadioShare,
+      details: hub.problemDetails == null
+          ? null
+          : scrubDetails(hub.problemDetails!),
+    ),
+    null => null,
   };
 }
 

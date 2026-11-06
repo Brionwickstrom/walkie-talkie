@@ -10,6 +10,7 @@ import '../platform/platform_caps.dart';
 import 'location_source_ui.dart';
 import 'mesh_channels.dart';
 import 'radio_settings_page.dart';
+import 'radio_share_ui.dart';
 import 'radios_nearby_page.dart';
 import 'saved_radios.dart';
 import 'settings_search.dart';
@@ -411,6 +412,15 @@ class _RadioSettingsState extends State<RadioSettings> {
           ),
           const SizedBox(height: 8),
         ]);
+        // v2.6.9: share the radio with other programs on this PC.
+        if (PlatformCaps.desktop) {
+          children.add(
+            SettingAnchor(
+              id: 'radio-share-local',
+              child: RadioShareSetting(controller: c),
+            ),
+          );
+        }
         // v1.9.7: Meshtastic channels shared with Walkie channels.
         children.add(
           SettingAnchor(

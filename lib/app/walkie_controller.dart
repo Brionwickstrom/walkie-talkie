@@ -56,6 +56,7 @@ import '../lora/home_location.dart';
 import '../lora/meshtastic_settings.dart';
 import '../lora/radio_clip.dart';
 import '../lora/radio_match.dart';
+import '../lora/radio_share.dart';
 import '../lora/saved_radios.dart';
 import '../lora/stream_radio.dart';
 import '../messaging/inbox.dart';
@@ -169,6 +170,12 @@ class WalkieController extends ChangeNotifier {
           StreamRadioId.serialPort(r.id)!,
     ];
     radioDevice.onMoved = _radioMoved;
+    // v2.6.9: desktop USB sharing follows the radio's session.
+    radioDevice.onSession = (s) => bindRadioShare(radioShare, s);
+    radioShare.access = settings.radioShareFull
+        ? RadioShareAccess.full
+        : RadioShareAccess.readOnly;
+    radioShare.log = (l) => debugLog.add('share', l);
     // v2.5.4: remember the connected radio's names and node number.
     _subs.add(
       radioDevice.changes.listen((_) {
@@ -1106,6 +1113,9 @@ class WalkieController extends ChangeNotifier {
 
   /// Paired Meshtastic LoRa radio (v1.7.0) and the transport using it.
   final MeshtasticRadio radioDevice = MeshtasticRadio();
+
+  /// v2.6.9: the radio link shared with other programs on this PC.
+  final RadioShareHub radioShare = RadioShareHub();
   late final LoraTransport loraTransport = LoraTransport(radio: radioDevice);
 
   /// Codec 2 (native), null when the library is missing: then voice
@@ -1529,6 +1539,10 @@ class WalkieController extends ChangeNotifier {
     _subs.add(radioDevice.changes.listen((_) => notifyListeners()));
     if (_radiosMigrated) unawaited(settingsStore.save(settings));
     radioDevice.start();
+    _subs.add(radioShare.changes.listen((_) => notifyListeners()));
+    if (settings.radioShareLocal && PlatformCaps.desktop) {
+      unawaited(radioShare.start(settings.radioSharePort));
+    }
     _subs.add(
       manager.controls.listen((c) {
         switch (c.message.kind) {
@@ -2159,6 +2173,60 @@ class WalkieController extends ChangeNotifier {
   /// Gateways in this channel's relay room (Home gateway, phones sharing
   /// their radio).
   List<GatewayInfo> get gateways => manager.gateways;
+
+  // ------------------------------------------ Desktop USB sharing (v2.6.9)
+
+  /// Port 4403 is taken (and so on): the plain message and its fix.
+  FriendlyError? get radioShareError =>
+      settings.radioShareLocal ? radioShareProblem(radioShare, settings) : null;
+
+  /// Free port suggested by "Use a free port", found when the port is
+  /// taken.
+  int? radioShareFreePort;
+
+  /// "Share radio with other programs on this PC". Returns false when it
+  /// could not start (see [radioShareError]).
+  Future<bool> setRadioShareLocal(bool on) async {
+    settings.radioShareLocal = on;
+    var ok = true;
+    if (on) {
+      ok = await radioShare.start(settings.radioSharePort);
+      radioShareFreePort = ok
+          ? null
+          : await RadioShareHub.freePortAfter(settings.radioSharePort);
+    } else {
+      await radioShare.stop();
+      radioShare.problem = null;
+      radioShareFreePort = null;
+    }
+    notifyListeners();
+    await settingsStore.save(settings);
+    return ok;
+  }
+
+  /// Another port (1024-65535); restarts sharing when it is on.
+  Future<bool> setRadioSharePort(int port) async {
+    if (port < 1024 || port > 65535) return false;
+    settings.radioSharePort = port;
+    await settingsStore.save(settings);
+    if (settings.radioShareLocal) return setRadioShareLocal(true);
+    notifyListeners();
+    return true;
+  }
+
+  /// Other programs may change the radio's settings too ([full]) or not.
+  Future<void> setRadioShareFull(bool full) async {
+    settings.radioShareFull = full;
+    radioShare.access = full
+        ? RadioShareAccess.full
+        : RadioShareAccess.readOnly;
+    debugLog.add(
+      'share',
+      full ? 'other programs: full access' : 'other programs: read-only',
+    );
+    notifyListeners();
+    await settingsStore.save(settings);
+  }
 
   Future<void> setShareRadio(bool on) async {
     settings.shareRadio = on;
@@ -3640,17 +3708,13 @@ class WalkieController extends ChangeNotifier {
     );
   }
 
-
   /// v2.6.8: feed the fixed home position into Trip geofences.
   void _feedTripHomeFence() {
     final t = trip;
     final home = homeLocation;
     if (t == null) return;
     final my = radioDevice.session?.myNodeNum;
-    t.setHomeFence(
-      pos: home?.point,
-      nodeId: my ?? t.host.localId,
-    );
+    t.setHomeFence(pos: home?.point, nodeId: my ?? t.host.localId);
   }
 
   /// v2.6.8: public LongFast nodes never trigger geofence alerts.
@@ -5509,6 +5573,7 @@ class WalkieController extends ChangeNotifier {
     whosWhere.dispose();
     manager.dispose();
     radioDevice.dispose();
+    unawaited(radioShare.dispose());
     _audio.dispose();
     _notices.close();
     _uiRequests.close();

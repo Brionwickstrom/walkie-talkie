@@ -29,6 +29,7 @@ import 'dart:typed_data';
 import '../gateway/stream_wire.dart';
 import 'lora_transport.dart' show LoraRateLimiter;
 import 'meshtastic_proto.dart';
+import 'meshtastic_session.dart';
 import 'protobuf.dart';
 
 /// What other programs may do with the shared radio.
@@ -727,4 +728,30 @@ class RadioShareHub {
     await stop();
     await _changes.close();
   }
+}
+
+/// The app's own [MeshtasticSession] as the shared link.
+class SessionShareLink implements RadioShareLink {
+  SessionShareLink(this.session);
+  final MeshtasticSession session;
+
+  @override
+  Future<void> write(Uint8List toRadio) => session.wire.write(toRadio);
+
+  @override
+  Future<void> refreshConfig() => session.requestConfig();
+
+  @override
+  int? get listenOnlySlot => session.publicListenIndex;
+}
+
+/// Wire [hub] to [session] (every radio frame is offered to the hub, which
+/// ignores it while sharing is off), or detach it (null).
+void bindRadioShare(RadioShareHub hub, MeshtasticSession? session) {
+  if (session == null) {
+    hub.attach(null);
+    return;
+  }
+  session.rawTap = hub.onFromRadio;
+  hub.attach(SessionShareLink(session));
 }

@@ -7,6 +7,7 @@ import '../app/friendly_error.dart';
 import '../app/link_settings.dart';
 import '../app/setup.dart';
 import '../app/walkie_controller.dart';
+import '../lora/radio_share.dart';
 import '../trip/location_source.dart';
 import 'radio_settings.dart';
 import 'radio_settings_page.dart' show openRadioSettings;
@@ -128,6 +129,15 @@ Future<void> runFix(
       }
     case FixAction.usePhoneGps:
       await c.setLocationSource(LocationSource.auto);
+      callbacks.afterFix?.call();
+    case FixAction.useFreePort:
+      final p =
+          c.radioShareFreePort ??
+          await RadioShareHub.freePortAfter(c.settings.radioSharePort);
+      if (p != null) await c.setRadioSharePort(p);
+      callbacks.afterFix?.call();
+    case FixAction.stopRadioShare:
+      await c.setRadioShareLocal(false);
       callbacks.afterFix?.call();
   }
 }

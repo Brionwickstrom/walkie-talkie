@@ -28,6 +28,9 @@ enum SettingNeeds {
   radioBackup,
   savedRadios,
   radioPaired,
+
+  /// The desktop app (v2.6.9).
+  desktop,
 }
 
 /// What the app can do right now; decides which entries are offered.
@@ -67,6 +70,7 @@ class SettingsEnv {
     SettingNeeds.radioBackup => radioBackup,
     SettingNeeds.savedRadios => savedRadios,
     SettingNeeds.radioPaired => radioPaired,
+    SettingNeeds.desktop => !phone,
   };
 }
 
@@ -319,6 +323,27 @@ const settingsIndex = <SettingEntry>[
       'battery',
       'fix',
     ],
+  ),
+  SettingEntry(
+    id: 'radio-share-local',
+    title: 'Share radio with other programs on this PC',
+    section: _ps,
+    about: 'Let Meshtastic Python scripts use the radio with the app open.',
+    words: [
+      'share radio',
+      'usb sharing',
+      'tcp',
+      'python',
+      'cli',
+      'meshtastic',
+      'command line',
+      'script',
+      'range test',
+      'com port',
+      '4403',
+      'localhost',
+    ],
+    needs: SettingNeeds.desktop,
   ),
   SettingEntry(
     id: 'radio-channels',
@@ -762,7 +787,15 @@ const settingsIndex = <SettingEntry>[
     title: 'Draw a zone',
     section: 'Geofences',
     about: 'Tap the map to draw a circle or a polygon zone.',
-    words: ['geofence', 'zone', 'fence', 'draw', 'circle', 'polygon', 'alert area'],
+    words: [
+      'geofence',
+      'zone',
+      'fence',
+      'draw',
+      'circle',
+      'polygon',
+      'alert area',
+    ],
     home: SettingsHome.trip,
     needs: SettingNeeds.trip,
   ),
