@@ -5630,8 +5630,7 @@ RadioGpsState radioGpsStateOf(MeshtasticRadio d) {
   // The radio broadcasts its position on the first channel that shares a
   // location (precision above 0); with none it sends no position at all.
   final chans = s.channels.values.where((c) => !c.isDisabled).toList();
-  final sharing =
-      chans.isEmpty || chans.any((c) => c.positionPrecision > 0);
+  final sharing = chans.isEmpty || chans.any((c) => c.positionPrecision > 0);
   return RadioGpsState(
     connected: true,
     link: link,

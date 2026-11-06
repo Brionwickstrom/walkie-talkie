@@ -7,6 +7,7 @@ import '../lora/meshtastic_proto.dart';
 import '../lora/meshtastic_session.dart';
 import '../lora/stream_radio.dart';
 import '../platform/platform_caps.dart';
+import 'location_source_ui.dart';
 import 'mesh_channels.dart';
 import 'radio_settings_page.dart';
 import 'radios_nearby_page.dart';
@@ -400,6 +401,15 @@ class _RadioSettingsState extends State<RadioSettings> {
               onTap: rsBlocked ? null : () => openRadioSettings(context, c),
             ),
           ),
+        ]);
+        // v2.6.7: which GPS is "where I am".
+        children.addAll([
+          const SizedBox(height: 4),
+          SettingAnchor(
+            id: 'location-source',
+            child: LocationSourceSetting(controller: c),
+          ),
+          const SizedBox(height: 8),
         ]);
         // v1.9.7: Meshtastic channels shared with Walkie channels.
         children.add(

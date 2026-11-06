@@ -5,6 +5,8 @@
 import 'dart:async';
 import 'dart:io';
 
+import '../trip/location_source.dart';
+
 /// What a fix button does. The UI runs it (lib/ui/friendly_error.dart).
 enum FixAction {
   turnOnBluetooth('Turn on Bluetooth'),
@@ -21,7 +23,9 @@ enum FixAction {
   connectRadio('Connect radio'),
   retry('Try again'),
   restoreBackup('Restore backup'),
-  turnOnLocationSharing('Turn it on');
+  turnOnLocationSharing('Turn it on'),
+  openRadioSettings('Radio settings'),
+  usePhoneGps('Use Auto');
 
   const FixAction(this.label);
   final String label;
@@ -88,6 +92,38 @@ class FriendlyError {
 
   @override
   String toString() => message;
+}
+
+/// v2.6.7: why the radio's GPS is not giving the location, as a plain
+/// error with the fix that helps (Connect radio, Radio settings, or back to
+/// Auto). Null while the radio's GPS is used, with Phone GPS only, or when
+/// the phone is used on purpose (navigation and so on).
+FriendlyError? radioGpsError(LocationChoice c) {
+  if (c.setting == LocationSource.phone || c.usingRadio) return null;
+  final why = c.why;
+  if (why == null || why == RadioGpsWhy.needPhone) return null;
+  final r = c.reason ?? '';
+  final onlyRadio = c.setting == LocationSource.radio;
+  final lead = onlyRadio
+      ? 'No location: Radio GPS only is on and '
+      : "Using the phone's GPS: ";
+  final because = r.isEmpty ? r : r[0].toLowerCase() + r.substring(1);
+  final message = '$lead$because';
+  final second = onlyRadio ? FixAction.usePhoneGps : null;
+  return switch (why) {
+    RadioGpsWhy.notConnected => FriendlyError(
+      message,
+      cause: ErrorCause.radioNotConnected,
+      fix: FixAction.connectRadio,
+      fix2: second,
+    ),
+    RadioGpsWhy.notSharing || RadioGpsWhy.blurred => FriendlyError(
+      message,
+      fix: FixAction.openRadioSettings,
+      fix2: second,
+    ),
+    _ => FriendlyError(message, fix: second),
+  };
 }
 
 /// Raw text safe to show: no Meshtastic links, no key-like strings, no

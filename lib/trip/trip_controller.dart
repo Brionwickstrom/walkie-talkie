@@ -382,7 +382,8 @@ class TripController extends ChangeNotifier {
     if (a == ActiveLocation.phone && was != null) {
       // Back to the phone: use its last fix if it is still fresh.
       final f = phoneFix;
-      if (f != null && _clock().difference(f.at) < const Duration(seconds: 30)) {
+      if (f != null &&
+          _clock().difference(f.at) < const Duration(seconds: 30)) {
         _applyFix(f);
       }
     } else if (a == ActiveLocation.radio) {

@@ -304,6 +304,23 @@ const settingsIndex = <SettingEntry>[
     words: ['radio', 'tune', 'hop', 'region', 'speed', 'name', 'open'],
   ),
   SettingEntry(
+    id: 'location-source',
+    title: 'Location source',
+    section: _ps,
+    about: "Use the radio's GPS or the phone's for where you are.",
+    words: [
+      'gps',
+      'location source',
+      'radio gps',
+      'phone gps',
+      'location',
+      'position',
+      'where am i',
+      'battery',
+      'fix',
+    ],
+  ),
+  SettingEntry(
     id: 'radio-channels',
     title: 'Meshtastic channels',
     section: _ps,
@@ -579,8 +596,7 @@ const settingsIndex = <SettingEntry>[
     id: 'radio-home-location',
     title: 'Set home location',
     section: 'Radio settings',
-    about:
-        'Type latitude and longitude for a fixed base radio (no GPS).',
+    about: 'Type latitude and longitude for a fixed base radio (no GPS).',
     words: [
       'home',
       'base',
@@ -659,8 +675,7 @@ const settingsIndex = <SettingEntry>[
     id: 'radio-public-nodes',
     title: 'Show public nodes',
     section: 'Radio settings',
-    about:
-        'List the public radios in reach: name, signal, hops and distance.',
+    about: 'List the public radios in reach: name, signal, hops and distance.',
     words: [
       'public',
       'nodes',

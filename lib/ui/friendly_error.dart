@@ -7,7 +7,9 @@ import '../app/friendly_error.dart';
 import '../app/link_settings.dart';
 import '../app/setup.dart';
 import '../app/walkie_controller.dart';
+import '../trip/location_source.dart';
 import 'radio_settings.dart';
+import 'radio_settings_page.dart' show openRadioSettings;
 import 'sheets.dart';
 
 export '../app/friendly_error.dart';
@@ -112,6 +114,21 @@ Future<void> runFix(
       callbacks.restoreBackup?.call();
     case FixAction.turnOnLocationSharing:
       callbacks.turnOnLocationSharing?.call();
+    case FixAction.openRadioSettings:
+      if (!c.radioDevice.ready) {
+        await runFix(context, c, FixAction.connectRadio, callbacks: callbacks);
+      } else if (context.mounted) {
+        await openRadioSettings(
+          context,
+          c,
+          jumpTo: c.locationChoice?.why == RadioGpsWhy.blurred
+              ? 'radio-precision'
+              : 'radio-location',
+        );
+      }
+    case FixAction.usePhoneGps:
+      await c.setLocationSource(LocationSource.auto);
+      callbacks.afterFix?.call();
   }
 }
 

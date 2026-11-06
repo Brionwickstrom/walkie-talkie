@@ -394,6 +394,7 @@ class _HomePageState extends State<HomePage> {
             context,
             source: () => connectionHealthOf(c),
             listenable: c,
+            location: () => c.locationChoice,
             onMore: () => _openStatus(context, audience, here),
             onFix: (a) => runFix(
               context,

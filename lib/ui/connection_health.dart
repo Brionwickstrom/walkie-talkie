@@ -8,6 +8,7 @@ import '../core/transport.dart';
 import '../lora/meshtastic_ble.dart' show RadioState;
 import '../lora/stream_radio.dart';
 import '../trip/geo.dart' show formatAge;
+import '../trip/location_source.dart';
 import '../trip/range_test.dart' show defaultRangeHomeNode;
 import 'sheets.dart';
 
@@ -630,8 +631,12 @@ class ConnectionHealthSheet extends StatelessWidget {
     required this.health,
     this.onMore,
     this.onFix,
+    this.location,
   });
   final ConnectionHealth health;
+
+  /// Which GPS is "where I am" (v2.6.7), null = not shown.
+  final LocationChoice? location;
 
   /// Runs a path's fix button (v2.6.3); null = no buttons.
   final void Function(FixAction)? onFix;
@@ -725,6 +730,20 @@ class ConnectionHealthSheet extends StatelessWidget {
               child: Text(health.homeNote!, style: theme.textTheme.bodySmall),
             ),
         ],
+        if (location != null) ...[
+          const Divider(height: 16),
+          ListTile(
+            key: const Key('location-source-line'),
+            dense: true,
+            leading: Icon(switch (location!.active) {
+              ActiveLocation.radio => Icons.satellite_alt,
+              ActiveLocation.phone => Icons.phone_android,
+              ActiveLocation.none => Icons.gps_off,
+            }),
+            title: Text(location!.title),
+            subtitle: Text(location!.subtitle),
+          ),
+        ],
         if (onMore != null)
           Align(
             alignment: Alignment.centerRight,
@@ -748,6 +767,7 @@ Future<void> showConnectionSheet(
   Listenable? listenable,
   VoidCallback? onMore,
   void Function(FixAction)? onFix,
+  LocationChoice? Function()? location,
 }) => showAppSheet<void>(
   context: context,
   builder: (ctx) => ListenableBuilder(
@@ -755,6 +775,7 @@ Future<void> showConnectionSheet(
     builder: (ctx, _) => ConnectionHealthSheet(
       health: source(),
       onFix: onFix,
+      location: location?.call(),
       onMore: onMore == null
           ? null
           : () {
