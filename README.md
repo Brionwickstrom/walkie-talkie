@@ -1525,6 +1525,33 @@ Tests: `test/v195_gateway_test.dart`, `test/v195_quiet_test.dart`.
 Tests: `test/v197_meshtastic_import_test.dart` (vectors from the official
 apps and the Python library), `test/v195_quiet_test.dart`.
 
+## v2.6.8: Geofences
+
+**Trip map > fence button (or Settings search: geofence / zone / fence /
+alert area):** draw a zone on the map and get a local notification plus an
+in-app banner when a watched radio or friend enters or leaves it.
+
+- **Draw:** circle (tap the centre, then tap the edge) or a simple polygon
+  (tap each corner, then Done). Name it, pick an optional colour, and choose
+  who to watch: everyone, or specific radios / friends. Public LongFast
+  radios are never watched.
+- **Manage:** Settings search → Geofences (or the fence button) to rename,
+  mute, recolour, change who to watch, or delete a zone. Zones are stored
+  on this device (phone and desktop).
+- **Positions used:** mesh position packets, friends over the internet, and
+  the home location from v2.6.6. The app does **no** extra polling or radio
+  requests.
+- **Hysteresis:** a 25 m edge buffer and at most one alert per node per zone
+  every 3 minutes, so GPS jitter at the boundary does not spam you.
+- **Battery:** almost none — alerts only fire on positions the app already
+  receives. Drawing a zone uses no radio traffic.
+- **Search:** geofence, zone, fence, alert area.
+- Exported zones are optional and skipped for now.
+
+Tests: `test/v268_geofence_test.dart` (point-in-circle/polygon, hysteresis,
+enter/leave, store, search anchors). Screenshots:
+`V268_SHOTS=/workspace flutter test test/v268_geofence_test.dart`.
+
 ## v2.6.7: Radio GPS as location source
 
 **Settings > Long-range radio (Meshtastic) > Location source** (under Radio

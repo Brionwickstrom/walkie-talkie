@@ -1263,9 +1263,15 @@ class _HomePageState extends State<HomePage> {
   void _openTripSetting(BuildContext sheet, String id) {
     Navigator.pop(sheet);
     setState(() => _tab = _tripTab);
-    WidgetsBinding.instance.addPostFrameCallback(
-      (_) => _tripKey.currentState?.openRangeTest(),
-    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final trip = _tripKey.currentState;
+      if (trip == null) return;
+      if (id.startsWith('geofence')) {
+        trip.openGeofences();
+      } else {
+        trip.openRangeTest();
+      }
+    });
   }
 
   Future<void> _openSettings(BuildContext context) async {

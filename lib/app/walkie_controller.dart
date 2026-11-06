@@ -1669,6 +1669,8 @@ class WalkieController extends ChangeNotifier {
       trip = t;
       _bindRangeLog();
       _feedRadioGps();
+      _feedTripHomeFence();
+      syncFenceExclusions();
       // v2.5.6: Driving mode follows plug / unplug (event driven).
       await t.setPluggedIn(charging);
       unawaited(bridge.watchPower());
@@ -3610,6 +3612,7 @@ class WalkieController extends ChangeNotifier {
         settings.homeAlt = null;
         await settingsStore.save(settings);
       }
+      _feedTripHomeFence();
       debugLog.add('radio', 'settings saved: ${change.what}');
       return null;
     } on MeshWriteException catch (e) {
@@ -3635,6 +3638,32 @@ class WalkieController extends ChangeNotifier {
       RadioChange.restore(b.previous, full: b),
       onStep: onStep,
     );
+  }
+
+
+  /// v2.6.8: feed the fixed home position into Trip geofences.
+  void _feedTripHomeFence() {
+    final t = trip;
+    final home = homeLocation;
+    if (t == null) return;
+    final my = radioDevice.session?.myNodeNum;
+    t.setHomeFence(
+      pos: home?.point,
+      nodeId: my ?? t.host.localId,
+    );
+  }
+
+  /// v2.6.8: public LongFast nodes never trigger geofence alerts.
+  void syncFenceExclusions() {
+    final t = trip;
+    final sess = radioDevice.session;
+    if (t == null || sess == null) return;
+    t.fenceMonitor.excluded
+      ..clear()
+      ..addAll([
+        for (final n in sess.nodes.values)
+          if (sess.isPublicNode(n)) n.num,
+      ]);
   }
 
   /// v2.6.6: stored home / base coordinates, when set.

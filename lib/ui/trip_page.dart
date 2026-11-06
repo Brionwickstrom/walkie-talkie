@@ -11,6 +11,7 @@ import '../app/walkie_controller.dart';
 import '../lora/meshtastic_session.dart' show RadioNode;
 import '../trip/friend_motion.dart';
 import '../trip/geo.dart';
+import '../trip/geofence.dart';
 import '../trip/imports/map_layers.dart';
 import '../trip/imports/map_packs.dart';
 import '../trip/map_net.dart';
@@ -38,6 +39,7 @@ import 'map_search_page.dart';
 import 'drive_page.dart';
 import 'friend_marker.dart';
 import 'friendly_error.dart';
+import 'geofences_page.dart';
 import 'nav_page.dart';
 import 'network_map_page.dart';
 import 'offline_areas_page.dart';
@@ -116,6 +118,12 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
 
   /// Range test marker whose blur circle is shown (v2.5.9).
   RangeEvent? _rangeSel;
+
+  /// v2.6.8 geofence draw mode.
+  GeofenceShape? _drawShape;
+  GeoPoint? _drawCenter;
+  double? _drawRadiusM;
+  final List<GeoPoint> _drawVerts = [];
 
   /// Windows: look for new range test results from the PC every 30 s
   /// while the map is open (one file-time check, nothing else).
@@ -218,6 +226,7 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
         trip.layers,
         trip.range,
         trip.rangeLog,
+        trip.geofences,
       ]),
       builder: (context, _) {
         final me = trip.myFix;
@@ -247,6 +256,45 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
           controls: _mapControls(context, trip),
           fullControls: _zoomControls(),
           topLeft: [
+            if (_drawShape != null)
+              Material(
+                color: Colors.orange.shade800,
+                borderRadius: BorderRadius.circular(20),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        _drawShape == GeofenceShape.circle
+                            ? (_drawCenter == null
+                                  ? 'Tap centre'
+                                  : 'Tap the edge')
+                            : 'Corners ${_drawVerts.length}'
+                                  '${_drawVerts.length >= 3 ? ' · Done?' : ''}',
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                      if (_drawShape == GeofenceShape.polygon &&
+                          _drawVerts.length >= 3)
+                        TextButton(
+                          onPressed: () => _finishPolygon(context, trip),
+                          child: const Text(
+                            'Done',
+                            style: TextStyle(color: Colors.white),
+                          ),
+                        ),
+                      IconButton(
+                        icon: const Icon(Icons.close, color: Colors.white, size: 18),
+                        onPressed: _cancelDraw,
+                        tooltip: 'Cancel',
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             if (trip.drive != null)
               DriveCard(
                 trip: trip,
@@ -498,8 +546,14 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
             onPositionChanged: (cam, gesture) {
               if (gesture && _follow) setState(() => _follow = false);
             },
-            onLongPress: (_, point) =>
-                _pointSheet(context, trip, gp(point), 'Dropped point'),
+            onTap: (_, point) => _mapTap(context, trip, gp(point)),
+            onLongPress: (_, point) {
+              if (_drawShape != null) {
+                _mapTap(context, trip, gp(point));
+                return;
+              }
+              _pointSheet(context, trip, gp(point), 'Dropped point');
+            },
           ),
           children: [
             ...baseTileLayers(trip),
@@ -513,6 +567,7 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
               ),
             ),
             PolylineLayer(polylines: lines),
+            ..._geofenceLayers(trip),
             CircleLayer(circles: friendCircles(trip)),
             CircleLayer(circles: rangeCircles(trip.range, _rangeSel)),
             CircleLayer(circles: rangeSampleCircles(trip.range)),
@@ -656,6 +711,13 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
         onTap: () => _openOffline(context, trip),
       ),
       RoundMapButton(
+        key: const Key('mapGeofence'),
+        icon: Icons.fence,
+        tip: 'Geofences',
+        onTap: () => _openGeofences(context, trip),
+        color: _drawShape != null ? cs.primary : null,
+      ),
+      RoundMapButton(
         icon: Icons.add_location_alt,
         tip: 'Drop a pin here',
         onTap: () => _addPin(context, trip, gp(_map.camera.center)),
@@ -741,6 +803,212 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
     final tc = t;
     if (tc == null || !mounted) return;
     _openRange(context, tc);
+  }
+
+  /// Opens Geofences (from the Settings search, v2.6.8).
+  void openGeofences() {
+    final tc = t;
+    if (tc == null || !mounted) return;
+    _openGeofences(context, tc);
+  }
+
+  void startGeofenceDraw(GeofenceShape shape) {
+    setState(() {
+      _drawShape = shape;
+      _drawCenter = null;
+      _drawRadiusM = null;
+      _drawVerts.clear();
+      _follow = false;
+    });
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(
+        content: Text(
+          shape == GeofenceShape.circle
+              ? 'Tap the centre, then tap the edge of the circle.'
+              : 'Tap each corner. Tap Done when the shape is closed.',
+        ),
+        duration: const Duration(seconds: 5),
+      ),
+    );
+  }
+
+  List<Widget> _geofenceLayers(TripController trip) {
+    final circles = <CircleMarker>[];
+    final polys = <Polygon>[];
+    for (final z in trip.geofences.zones) {
+      final col = Color(z.colorArgb);
+      if (z.isCircle && z.center != null && z.radiusM != null) {
+        circles.add(
+          CircleMarker(
+            point: ll(z.center!),
+            radius: z.radiusM!,
+            useRadiusInMeter: true,
+            color: col.withValues(alpha: 0.18),
+            borderStrokeWidth: 2,
+            borderColor: col.withValues(alpha: z.muted ? 0.4 : 0.9),
+          ),
+        );
+      } else if (z.isPolygon && z.vertices.length >= 3) {
+        polys.add(
+          Polygon(
+            points: [for (final v in z.vertices) ll(v)],
+            color: col.withValues(alpha: 0.18),
+            borderStrokeWidth: 2,
+            borderColor: col.withValues(alpha: z.muted ? 0.4 : 0.9),
+          ),
+        );
+      }
+    }
+    // Live draft
+    if (_drawShape == GeofenceShape.circle &&
+        _drawCenter != null &&
+        _drawRadiusM != null) {
+      circles.add(
+        CircleMarker(
+          point: ll(_drawCenter!),
+          radius: _drawRadiusM!,
+          useRadiusInMeter: true,
+          color: Colors.orange.withValues(alpha: 0.2),
+          borderStrokeWidth: 2,
+          borderColor: Colors.orange,
+        ),
+      );
+    }
+    if (_drawShape == GeofenceShape.polygon && _drawVerts.isNotEmpty) {
+      if (_drawVerts.length >= 3) {
+        polys.add(
+          Polygon(
+            points: [for (final v in _drawVerts) ll(v)],
+            color: Colors.orange.withValues(alpha: 0.2),
+            borderStrokeWidth: 2,
+            borderColor: Colors.orange,
+          ),
+        );
+      }
+    }
+    return [
+      if (circles.isNotEmpty) CircleLayer(circles: circles),
+      if (polys.isNotEmpty) PolygonLayer(polygons: polys),
+      if (_drawShape == GeofenceShape.polygon && _drawVerts.isNotEmpty)
+        MarkerLayer(
+          markers: [
+            for (final v in _drawVerts)
+              Marker(
+                point: ll(v),
+                width: 12,
+                height: 12,
+                child: Container(
+                  decoration: const BoxDecoration(
+                    color: Colors.orange,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              ),
+          ],
+        ),
+    ];
+  }
+
+  Future<void> _mapTap(
+    BuildContext context,
+    TripController trip,
+    GeoPoint p,
+  ) async {
+    final shape = _drawShape;
+    if (shape == null) return;
+    if (shape == GeofenceShape.circle) {
+      if (_drawCenter == null) {
+        setState(() {
+          _drawCenter = p;
+          _drawRadiusM = 50;
+        });
+        return;
+      }
+      final r = distanceM(_drawCenter!, p);
+      setState(() => _drawRadiusM = r);
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      final z = await saveGeofenceDraft(
+        context,
+        store: trip.geofences,
+        shape: GeofenceShape.circle,
+        center: _drawCenter,
+        radiusM: r,
+      );
+      if (!mounted) return;
+      setState(() {
+        _drawShape = null;
+        _drawCenter = null;
+        _drawRadiusM = null;
+      });
+      if (z != null) {
+        messenger?.showSnackBar(
+          SnackBar(content: Text('Saved ${z.name}.')),
+        );
+      }
+      return;
+    }
+    // polygon
+    setState(() => _drawVerts.add(p));
+  }
+
+  Future<void> _finishPolygon(BuildContext context, TripController trip) async {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final z = await saveGeofenceDraft(
+      context,
+      store: trip.geofences,
+      shape: GeofenceShape.polygon,
+      vertices: List.of(_drawVerts),
+    );
+    if (!mounted) return;
+    setState(() {
+      _drawShape = null;
+      _drawVerts.clear();
+    });
+    if (z != null) {
+      messenger?.showSnackBar(
+        SnackBar(content: Text('Saved ${z.name}.')),
+      );
+    }
+  }
+
+  void _cancelDraw() {
+    setState(() {
+      _drawShape = null;
+      _drawCenter = null;
+      _drawRadiusM = null;
+      _drawVerts.clear();
+    });
+  }
+
+  Future<void> _openGeofences(BuildContext context, TripController trip) async {
+    c.syncFenceExclusions();
+    final sess = c.radioDevice.session;
+    final candidates = <({int id, String name})>[
+      for (final n in sess?.nodes.values ?? const <RadioNode>[])
+        if (n.num != sess?.myNodeNum &&
+            n.readable &&
+            n.longName.isNotEmpty &&
+            !(sess?.isPublicNode(n) ?? false))
+          (id: n.num, name: n.longName),
+      for (final f in c.settings.friends)
+        (id: f.id, name: f.name),
+    ];
+    // de-dupe by id
+    final seen = <int>{};
+    final uniq = [
+      for (final x in candidates)
+        if (seen.add(x.id)) x,
+    ];
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => GeofencesPage(
+          trip: trip,
+          nameOf: c.nameOf,
+          candidateIds: uniq,
+          onDraw: startGeofenceDraw,
+        ),
+      ),
+    );
   }
 
   void _openRange(BuildContext context, TripController trip) {

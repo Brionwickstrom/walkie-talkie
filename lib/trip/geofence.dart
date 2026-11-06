@@ -343,7 +343,7 @@ class GeofenceMonitor {
       } else {
         next = prev;
       }
-      _inside.putIfAbsent(z.id, () => {})[nodeId] = next!;
+      _inside.putIfAbsent(z.id, () => {})[nodeId] = next;
       if (prev == null || prev == next) continue;
       final last = _lastAlert[z.id]?[nodeId];
       if (last != null && now.difference(last) < cooldown) continue;
@@ -410,7 +410,7 @@ class GeofenceStore extends ChangeNotifier {
           ..addAll([
             for (final e in (j is Map ? j['z'] as List? : j as List?) ??
                 const [])
-              if (GeofenceZone.fromJson(e) case final z?) z,
+              ?GeofenceZone.fromJson(e),
           ]);
       }
     } catch (_) {

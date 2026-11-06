@@ -19,6 +19,7 @@ import 'location_source.dart';
 import 'imports/geo_import.dart' show ImportedData, ImportedLine;
 import 'imports/map_layers.dart';
 import 'imports/route_share.dart';
+import 'geofence.dart';
 import 'lost_contact.dart';
 import 'drive/drive_nav.dart' show spokenDistance;
 import 'drive/drive_session.dart';
@@ -198,6 +199,11 @@ class TripController extends ChangeNotifier {
       layers: layers,
       clock: _clock,
     );
+    geofences = GeofenceStore(
+      File('${dir.path}/geofences.json'),
+      clock: _clock,
+    );
+    fenceMonitor = GeofenceMonitor(clock: _clock);
     routes = SavedRoutes(File('${dir.path}/saved_routes.json'));
     areas.routeFor = routes.byId;
     weather = WeatherCache(
@@ -280,6 +286,13 @@ class TripController extends ChangeNotifier {
 
   /// Saved offline areas (v1.9.3): map tiles, trails and roads together.
   late final OfflineAreas areas;
+  late final GeofenceStore geofences;
+  late final GeofenceMonitor fenceMonitor;
+
+  /// Fixed home / base coordinates (v2.6.6), used as a position
+  /// source for [homeFenceNodeId] when set.
+  GeoPoint? homeFencePos;
+  int? homeFenceNodeId;
 
   /// Routes saved with "Save route for offline" (v2.2.0), one per area.
   late final SavedRoutes routes;
@@ -492,6 +505,9 @@ class TripController extends ChangeNotifier {
     range.addListener(_rangeChanged);
     await routes.load();
     await areas.load();
+    await geofences.load();
+    fenceMonitor.setZones(geofences.zones);
+    geofences.addListener(_geofencesChanged);
     await routes.prune({for (final a in areas.areas) a.id});
     await _restoreDrive();
     unawaited(tiles.trim());
@@ -517,6 +533,7 @@ class TripController extends ChangeNotifier {
     tiles.close();
     layers.close();
     range.removeListener(_rangeChanged);
+    geofences.removeListener(_geofencesChanged);
     rangeLog.dispose();
     range.dispose();
     super.dispose();
@@ -672,6 +689,7 @@ class TripController extends ChangeNotifier {
     if (!f.pos.valid) return;
     myFix = f;
     sos.updatePosition(f.pos, accuracyM: f.accuracyM);
+    _observeFence(host.localId, f.pos, at: f.at);
     if (recorder.add(f.pos, f.at, accuracyM: f.accuracyM)) {
       if (recorder.track!.points.length % 20 == 0) unawaited(_saveTracks());
     }
@@ -2982,6 +3000,7 @@ class TripController extends ChangeNotifier {
         if (lost.enabled) {
           lost.heard(origin, at: at, pos: msg.pos, posAt: fixAt);
         }
+        _observeFence(origin, msg.pos, at: fixAt);
         final bt = msg.battery;
         if (bt != null) {
           final prev = batteries[origin];
@@ -3074,6 +3093,44 @@ class TripController extends ChangeNotifier {
         break; // never nested
     }
     notifyListeners();
+  }
+
+  
+  void _geofencesChanged() {
+    fenceMonitor.setZones(geofences.zones);
+    _feedHomeFence();
+    notifyListeners();
+  }
+
+  /// Update the fixed home position used for geofences (no GPS poll).
+  void setHomeFence({GeoPoint? pos, int? nodeId}) {
+    homeFencePos = pos;
+    homeFenceNodeId = nodeId;
+    _feedHomeFence();
+  }
+
+  void _feedHomeFence() {
+    final p = homeFencePos;
+    final id = homeFenceNodeId;
+    if (p == null || id == null) return;
+    _observeFence(id, p);
+  }
+
+  /// Feed a position the app already has into the geofence monitor.
+  /// Public / excluded ids are skipped by the monitor.
+  void _observeFence(int id, GeoPoint pos, {DateTime? at}) {
+    if (!pos.valid) return;
+    final events = fenceMonitor.observe(id, pos, at: at);
+    for (final e in events) {
+      final who = host.nameOf(e.nodeId);
+      _event(
+        e.nodeId,
+        e.textFor(who),
+        e.cross == GeofenceCross.enter ? 'fence_in' : 'fence_out',
+        pos: e.pos,
+      );
+      host.notify(e.title, e.textFor(who));
+    }
   }
 
   void _onLost(ContactState s) {
