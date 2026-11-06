@@ -168,6 +168,29 @@ ImageProvider overlayImage(File f, int w, int h, {int maxSide = 4096}) {
 }
 
 /// Imported park map overlays, trail lines and waypoints (visible ones).
+/// v2.6.11: [importedLayers] built again only when the imported layers
+/// change (the Trip map used to build them on every refresh, every 2 s
+/// while friends are on it). The same widgets back = Flutter skips them.
+class ImportedLayersCache {
+  List<Widget>? _layers;
+  int _rev = -1;
+  Object? _of;
+
+  List<Widget> of(
+    TripController trip, {
+    void Function(MapLayer l, String name, GeoPoint at)? onWaypoint,
+  }) {
+    final layers = trip.layers;
+    final cached = _layers;
+    if (cached != null && identical(_of, layers) && _rev == layers.revision) {
+      return cached;
+    }
+    _of = layers;
+    _rev = layers.revision;
+    return _layers = importedLayers(trip, onWaypoint: onWaypoint);
+  }
+}
+
 List<Widget> importedLayers(
   TripController trip, {
   String? skipOverlay,

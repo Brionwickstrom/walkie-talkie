@@ -17,6 +17,7 @@ import '../trip/geo.dart';
 import '../trip/range_logger.dart' show radioNodeLabel;
 import '../trip/range_test.dart' show defaultRangeHomeNode;
 import 'chat_hub.dart';
+import 'map_cache_settings.dart';
 import 'chat_page.dart';
 import 'friends_page.dart';
 import 'home_view.dart';
@@ -1550,6 +1551,11 @@ class _HomePageState extends State<HomePage> {
                     onChanged: c.setBaseCamp,
                   ),
                 ),
+                if (c.trip != null) ...[
+                  const Divider(height: 32),
+                  _SectionTitle('Map'),
+                  MapCacheSettings(trip: c.trip!, controller: c),
+                ],
                 const Divider(height: 32),
                 SettingAnchor(
                   id: 'radio-section',

@@ -132,9 +132,7 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
   bool _layersReady = false;
 
   /// v2.6.11: imported layers are rebuilt only when they change.
-  List<Widget>? _imported;
-  int _importedRev = -1;
-  MapLayers? _importedOf;
+  final ImportedLayersCache _imported = ImportedLayersCache();
 
   /// Why the map opened where it did (tests, the "last view" chip).
   MapStartFrom? startFrom;
@@ -688,22 +686,12 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
 
   /// Imported trails and maps, built again only when they change (they
   /// used to be rebuilt on every map refresh, every 2 s with friends on).
-  List<Widget> _importedLayers(BuildContext context, TripController trip) {
-    final layers = trip.layers;
-    final cached = _imported;
-    if (cached != null &&
-        identical(_importedOf, layers) &&
-        _importedRev == layers.revision) {
-      return cached;
-    }
-    _importedOf = layers;
-    _importedRev = layers.revision;
-    return _imported = importedLayers(
-      trip,
-      onWaypoint: (l, name, at) =>
-          _pointSheet(context, trip, at, name.isEmpty ? 'Waypoint' : name),
-    );
-  }
+  List<Widget> _importedLayers(BuildContext context, TripController trip) =>
+      _imported.of(
+        trip,
+        onWaypoint: (l, name, at) =>
+            _pointSheet(context, trip, at, name.isEmpty ? 'Waypoint' : name),
+      );
 
   List<Widget> _mapControls(BuildContext context, TripController trip) {
     final cs = Theme.of(context).colorScheme;

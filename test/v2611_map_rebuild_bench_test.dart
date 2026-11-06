@@ -25,9 +25,7 @@ void main() {
     } catch (_) {}
   });
 
-  testWidgets('the map rebuilding with a 7000-point imported trail', (
-    tester,
-  ) async {
+  Future<TripController> bigTrail(WidgetTester tester) async {
     final dir = Directory('${tmp.path}/trip');
     late TripController t;
     await tester.runAsync(() async {
@@ -49,52 +47,99 @@ void main() {
       b.write('</trkseg></trk></gpx>');
       await t.layers.importTrail('big.gpx', utf8.encode(b.toString()));
     });
-    final key = GlobalKey<_BenchMapState>();
-    final first = Stopwatch()..start();
-    await tester.pumpWidget(
-      MaterialApp(
-        home: _BenchMap(key: key, trip: t),
-      ),
-    );
-    first.stop();
-    _say(
-      'first map frame with the imported trail: '
-      '${first.elapsedMilliseconds} ms',
-    );
-    await tester.pump();
-    final sw = Stopwatch();
-    for (var i = 0; i < 10; i++) {
-      key.currentState!.poke();
-      sw.start();
+    return t;
+  }
+
+  for (final v2611 in [false, true]) {
+    final how = v2611 ? 'v2.6.11' : 'v2.6.10';
+    testWidgets('$how: the map with a 7000-point imported trail', (
+      tester,
+    ) async {
+      final t = await bigTrail(tester);
+      // Warm up (the first map built in a run pays for loading code).
+      for (final w in [true, false]) {
+        await tester.pumpWidget(
+          MaterialApp(home: _BenchMap(trip: t, v2611: w)),
+        );
+        await tester.pump();
+        await tester.pump();
+        await tester.pumpWidget(const SizedBox());
+      }
+      final key = GlobalKey<_BenchMapState>();
+      final first = Stopwatch()..start();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: _BenchMap(key: key, trip: t, v2611: v2611),
+        ),
+      );
+      first.stop();
+      _say(
+        '$how first map frame with the imported trail: '
+        '${first.elapsedMilliseconds} ms',
+      );
+      final second = Stopwatch()..start();
       await tester.pump();
-      sw.stop();
-    }
-    final per = sw.elapsedMicroseconds / 10 / 1000;
-    _say('map rebuild with the imported trail: ${per.toStringAsFixed(2)} ms');
-    await tester.pumpWidget(const SizedBox());
-    t.dispose();
-  });
+      await tester.pump();
+      second.stop();
+      _say(
+        '$how next frames (trail drawn): ${second.elapsedMilliseconds} ms',
+      );
+      expect(find.byType(PolylineLayer), findsOneWidget);
+      final sw = Stopwatch();
+      for (var i = 0; i < 10; i++) {
+        key.currentState!.poke();
+        sw.start();
+        await tester.pump();
+        sw.stop();
+      }
+      final per = sw.elapsedMicroseconds / 10 / 1000;
+      _say(
+        '$how map refresh with the imported trail: '
+        '${per.toStringAsFixed(2)} ms',
+      );
+      // A change to the layers still shows (the cache follows it).
+      final l = t.layers.trails.first;
+      await tester.runAsync(() => t.layers.setVisible(l, false));
+      key.currentState!.poke();
+      await tester.pump();
+      await tester.pump();
+      expect(find.byType(PolylineLayer), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      t.dispose();
+    });
+  }
 }
 
-/// The Trip map's layer stack as the page builds it (2 s tick = poke).
+/// The Trip map's layer stack the way each version builds it (the 2 s
+/// refresh = poke): v2.6.10 builds every layer in the first frame and
+/// again on every refresh; v2.6.11 adds them one frame after the map
+/// and reuses them until they change (as lib/ui/trip_page.dart does).
 class _BenchMap extends StatefulWidget {
-  const _BenchMap({super.key, required this.trip});
+  const _BenchMap({super.key, required this.trip, required this.v2611});
   final TripController trip;
+  final bool v2611;
   @override
   State<_BenchMap> createState() => _BenchMapState();
 }
 
 class _BenchMapState extends State<_BenchMap> {
+  final _cache = ImportedLayersCache();
+  bool _ready = false;
   void poke() => setState(() {});
   @override
   Widget build(BuildContext context) => FlutterMap(
-    options: const MapOptions(
-      initialCenter: LatLng(45.3, -122),
+    options: MapOptions(
+      initialCenter: const LatLng(45.3, -122),
       initialZoom: 11,
+      onMapReady: () {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) setState(() => _ready = true);
+        });
+      },
     ),
-    children: [...benchLayers(widget.trip)],
+    children: [
+      if (!widget.v2611) ...importedLayers(widget.trip),
+      if (widget.v2611 && _ready) ..._cache.of(widget.trip),
+    ],
   );
 }
-
-/// The imported layers the way the Trip map gets them.
-List<Widget> benchLayers(TripController t) => importedLayers(t);
