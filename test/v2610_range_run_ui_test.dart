@@ -174,6 +174,9 @@ Future<void> openStart(WidgetTester t, Rig r) async {
 Future<void> done(WidgetTester t, Rig r) async {
   await t.pumpWidget(const SizedBox());
   r.close();
+  imageCache
+    ..clear()
+    ..clearLiveImages();
   await t.pump(const Duration(seconds: 2));
 }
 
@@ -462,9 +465,9 @@ void main() {
 
     Future<void> shot(WidgetTester t, String name) async {
       await t.pumpAndSettle(const Duration(milliseconds: 100));
-      for (var i = 0; i < 4; i++) {
+      for (var i = 0; i < 10; i++) {
         await t.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 150)),
+          () => Future<void>.delayed(const Duration(milliseconds: 200)),
         );
         await t.pump(const Duration(milliseconds: 50));
       }
@@ -512,7 +515,9 @@ void main() {
         debugShowCheckedModeBanner: false,
         theme: ThemeData(useMaterial3: true, fontFamily: 'Roboto'),
         home: Scaffold(
-          body: SafeArea(child: Stack(children: [child, label()])),
+          body: SafeArea(
+            child: Stack(fit: StackFit.expand, children: [child, label()]),
+          ),
         ),
       ),
     );
@@ -522,7 +527,19 @@ void main() {
       final r = Rig();
       await r.run.start();
       await t.runAsync(() => r.drive(n: 10));
-      // Still running: one more reply.
+      if (tiles != null) {
+        // Decode the tiles first (real time), so the map shows them.
+        await t.pumpWidget(framed(const SizedBox()));
+        final ctx = t.element(find.byType(Scaffold));
+        await t.runAsync(() async {
+          for (final f in Directory(tiles).listSync().whereType<File>()) {
+            await precacheImage(
+              FileImage(f),
+              ctx,
+            ).timeout(const Duration(seconds: 5), onTimeout: () {});
+          }
+        });
+      }
       await t.pumpWidget(
         framed(
           Stack(
