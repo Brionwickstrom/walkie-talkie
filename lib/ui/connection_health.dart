@@ -7,9 +7,11 @@ import '../app/walkie_controller.dart';
 import '../core/transport.dart';
 import '../lora/meshtastic_ble.dart' show RadioState;
 import '../lora/stream_radio.dart';
+import '../trip/battery_mode.dart';
 import '../trip/geo.dart' show formatAge;
 import '../trip/location_source.dart';
 import '../trip/range_test.dart' show defaultRangeHomeNode;
+import 'battery_mode_ui.dart' show batteryModeIcon, batteryModeColor;
 import 'sheets.dart';
 
 /// v2.6.0: the one connection chip on the Talk status line.
@@ -532,9 +534,18 @@ String healthWord(HealthLevel l) => switch (l) {
 /// The chip on the status line. [source] is read on every build and every
 /// 30 s while it is on screen.
 class ConnectionChip extends StatefulWidget {
-  const ConnectionChip({super.key, required this.source, required this.onTap});
+  const ConnectionChip({
+    super.key,
+    required this.source,
+    required this.onTap,
+    this.batteryMode,
+  });
   final ConnectionHealth Function() source;
   final VoidCallback onTap;
+
+  /// v2.6.12: the Battery mode (a leaf for Saver, a target for Tracking,
+  /// nothing for Normal). Null = not shown.
+  final BatteryMode Function()? batteryMode;
 
   @override
   State<ConnectionChip> createState() => _ConnectionChipState();
@@ -564,15 +575,19 @@ class _ConnectionChipState extends State<ConnectionChip> {
     final narrow = MediaQuery.of(context).size.width < 400;
     final color = healthColor(h.level, cs);
     final label = narrow ? h.shortText : h.text;
+    final mode = widget.batteryMode?.call() ?? BatteryMode.normal;
+    final modeWords = mode == BatteryMode.normal
+        ? ''
+        : ' Battery mode ${mode.label}.';
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 2),
       child: Tooltip(
-        message: 'Connection: ${h.headline}. Tap for details',
+        message: 'Connection: ${h.headline}.$modeWords Tap for details',
         child: Semantics(
           button: true,
           label:
-              'Connection ${healthWord(h.level)}: ${h.text}. ${h.headline}. '
-              'Tap for details',
+              'Connection ${healthWord(h.level)}: ${h.text}. ${h.headline}.'
+              '$modeWords Tap for details',
           excludeSemantics: true,
           child: InkWell(
             key: const Key('connection-chip'),
@@ -598,6 +613,15 @@ class _ConnectionChipState extends State<ConnectionChip> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Icon(h.pathIcon, size: 14, color: color),
+                      if (mode != BatteryMode.normal) ...[
+                        const SizedBox(width: 2),
+                        Icon(
+                          batteryModeIcon(mode),
+                          key: Key('connection-chip-mode-${mode.id}'),
+                          size: 13,
+                          color: batteryModeColor(mode),
+                        ),
+                      ],
                       const SizedBox(width: 4),
                       Flexible(
                         child: Text(
@@ -649,8 +673,12 @@ class ConnectionHealthSheet extends StatelessWidget {
     this.onFix,
     this.location,
     this.rangeTest,
+    this.battery,
   });
   final ConnectionHealth health;
+
+  /// The Battery mode picker (v2.6.12), null = not shown.
+  final Widget? battery;
 
   /// Start / stop the range test (v2.6.10), null = not shown.
   final RangeRunLine? rangeTest;
@@ -778,6 +806,14 @@ class ConnectionHealthSheet extends StatelessWidget {
             onTap: rangeTest!.onTap,
           ),
         ],
+        if (battery != null) ...[
+          const Divider(height: 16),
+          Padding(
+            key: const Key('connection-battery-mode'),
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+            child: battery,
+          ),
+        ],
         if (location != null) ...[
           const Divider(height: 16),
           ListTile(
@@ -831,6 +867,7 @@ Future<void> showConnectionSheet(
   void Function(FixAction)? onFix,
   LocationChoice? Function()? location,
   RangeRunLine? Function()? rangeTest,
+  Widget? battery,
 }) => showAppSheet<void>(
   context: context,
   builder: (ctx) => ListenableBuilder(
@@ -839,6 +876,7 @@ Future<void> showConnectionSheet(
       health: source(),
       onFix: onFix,
       location: location?.call(),
+      battery: battery,
       rangeTest: _closing(ctx, rangeTest?.call()),
       onMore: onMore == null
           ? null

@@ -617,13 +617,12 @@ class _RangeTestPageState extends State<RangeTestPage> {
         key: const Key('rangeLogging'),
         title: const Text('Range logging'),
         subtitle: Text(
-          rt.logging
-              ? lg.status
-              : 'Off. Turn on to log where your radio hears the home radio '
-                    'while you drive.',
+          '${rt.logging ? lg.status : 'Off. Turn on to log where your radio hears the home radio '
+                    'while you drive.'}'
+          '${rt.controlledNote == null ? '' : ' ${rt.controlledNote}: pick Normal to change it.'}',
         ),
         value: rt.logging,
-        onChanged: (v) => rt.setLogging(v),
+        onChanged: rt.controlledNote != null ? null : (v) => rt.setLogging(v),
       ),
       if (rt.logging) ...[
         ListTile(

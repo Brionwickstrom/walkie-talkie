@@ -4,10 +4,12 @@ import 'package:flutter/material.dart';
 
 import '../app/walkie_controller.dart';
 import '../trip/imports/map_layers.dart' show formatBytes;
+import '../trip/battery_mode.dart' show BatterySetting;
 import '../trip/map_start.dart';
 import '../trip/tile_cache.dart';
 import '../trip/trip_controller.dart';
 import '../trip/trip_settings.dart';
+import 'battery_mode_ui.dart' show lockedNote;
 import 'friendly_error.dart';
 import 'settings_search.dart';
 
@@ -187,10 +189,13 @@ class _MapCacheSettingsState extends State<MapCacheSettings> {
               'once. Only on Wi-Fi or while charging, about 1-3 MB once a '
               'week. Not for Street (OpenStreetMap), which does not allow '
               'saving ahead.'
-              '${t.settings.warmHome && t.warmStatus != null ? ' Now: ${t.warmStatus}' : ''}',
+              '${t.settings.warmHome && t.warmStatus != null ? ' Now: ${t.warmStatus}' : ''}'
+              '${lockedNote(t, BatterySetting.warmHome) == null ? '' : ' ${lockedNote(t, BatterySetting.warmHome)}'}',
             ),
             value: t.settings.warmHome,
-            onChanged: (v) async {
+            onChanged: lockedNote(t, BatterySetting.warmHome) != null
+                ? null
+                : (v) async {
               await t.update((x) => x.warmHome = v);
               if (!v) t.warmer.cancel();
               if (mounted) setState(() {});

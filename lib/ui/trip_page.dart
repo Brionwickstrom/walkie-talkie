@@ -27,10 +27,12 @@ import '../trip/search/overpass.dart';
 import '../trip/map_start.dart';
 import '../trip/tile_cache.dart';
 import '../trip/track.dart';
+import '../trip/battery_mode.dart' show BatteryMode, BatterySetting;
 import '../trip/trip_controller.dart';
 import '../trip/trip_packet.dart';
 import '../trip/trip_settings.dart';
 import '../trip/weather.dart';
+import 'battery_mode_ui.dart' show lockedNote;
 import 'home_view.dart';
 import 'map_import.dart';
 import 'map_layer_widgets.dart';
@@ -863,6 +865,8 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
     imperial: trip.settings.imperial,
     share: trip.host.shareFile,
     onFix: (f) => runFix(context, c, f),
+    saverOn: () => trip.batteryMode == BatteryMode.saver,
+    setMode: trip.setBatteryMode,
   );
 
   List<({int num, String name})> _rangeHomeChoices() => [
@@ -2517,13 +2521,14 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
           contentPadding: EdgeInsets.zero,
           title: const Text('Share my location with the group'),
           subtitle: Text(
-            trip.settings.tripMode
-                ? 'Live on the map, check-in every ${trip.settings.checkInMinutes == 0 ? '(off)' : '${trip.settings.checkInMinutes} min'}'
-                      '${trip.settings.lostContactMinutes > 0 ? ', lost-contact alert after ${trip.settings.lostContactMinutes} min' : ''}.'
-                : 'Off: others do not see you on the map. SOS always sends your location.',
+            '${trip.settings.tripMode ? 'Live on the map, check-in every ${trip.settings.checkInMinutes == 0 ? '(off)' : '${trip.settings.checkInMinutes} min'}'
+                      '${trip.settings.lostContactMinutes > 0 ? ', lost-contact alert after ${trip.settings.lostContactMinutes} min' : ''}.' : 'Off: others do not see you on the map. SOS always sends your location.'}'
+            '${lockedNote(trip, BatterySetting.shareLocation) == null ? '' : ' ${lockedNote(trip, BatterySetting.shareLocation)}'}',
           ),
           value: trip.settings.tripMode,
-          onChanged: (v) => trip.update((s) => s.tripMode = v),
+          onChanged: lockedNote(trip, BatterySetting.shareLocation) != null
+              ? null
+              : (v) => trip.update((s) => s.tripMode = v),
         ),
         SwitchListTile(
           key: const Key('tripOfflineSaver'),

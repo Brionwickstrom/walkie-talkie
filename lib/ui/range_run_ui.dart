@@ -10,6 +10,7 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'friendly_error.dart';
+import '../trip/battery_mode.dart';
 import '../trip/geo.dart';
 import '../trip/range_logger.dart';
 import '../trip/range_run.dart';
@@ -30,6 +31,8 @@ class RangeRunActions {
     this.onFix,
     this.exportDir,
     this.onStarted,
+    this.saverOn,
+    this.setMode,
   });
   final RangeRun run;
   final RangeLogger logger;
@@ -52,6 +55,12 @@ class RangeRunActions {
 
   /// After Start (Talk switches to the Trip map).
   final VoidCallback? onStarted;
+
+  /// v2.6.12: Battery mode is Saver (pings off: the test cannot start).
+  final bool Function()? saverOn;
+
+  /// v2.6.12: switch the Battery mode from the start sheet.
+  final Future<FriendlyError?> Function(BatteryMode m)? setMode;
 
   RangeTest get store => run.store;
 }
@@ -93,7 +102,10 @@ Future<bool?> showRangeStartSheet(BuildContext context, RangeRunActions a) {
     builder: (ctx) => StatefulBuilder(
       builder: (ctx, setState) {
         final ready = a.radioReady();
-        final problem = rangeTestProblem(radioReady: ready);
+        final saver = a.saverOn?.call() ?? false;
+        final problem =
+            rangeTestProblem(radioReady: ready) ??
+            (saver ? rangeTestSaverError : null);
         final choices = [
           (num: defaultRangeHomeNode, name: 'Skunk Ape'),
           for (final c in a.homeChoices?.call() ?? const [])
@@ -178,7 +190,19 @@ Future<bool?> showRangeStartSheet(BuildContext context, RangeRunActions a) {
                   const SizedBox(height: 12),
                   FriendlyErrorView(
                     error: problem,
-                    onFix: (f) {
+                    onFix: (f) async {
+                      if ((f == FixAction.useTrackingMode ||
+                              f == FixAction.useNormalMode) &&
+                          a.setMode != null) {
+                        // Stays open: Start works right after.
+                        await a.setMode!(
+                          f == FixAction.useTrackingMode
+                              ? BatteryMode.tracking
+                              : BatteryMode.normal,
+                        );
+                        setState(() {});
+                        return;
+                      }
                       Navigator.pop(ctx, false);
                       a.onFix?.call(f);
                     },
@@ -189,7 +213,7 @@ Future<bool?> showRangeStartSheet(BuildContext context, RangeRunActions a) {
                   key: const Key('rangeStartGo'),
                   icon: const Icon(Icons.play_arrow),
                   label: const Text('Start range test'),
-                  onPressed: !ready
+                  onPressed: !ready || saver
                       ? null
                       : () async {
                           await a.run.setMaxMinutes(max);

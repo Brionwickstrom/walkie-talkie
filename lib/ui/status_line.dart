@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../core/transport.dart';
 import '../core/transport_manager.dart';
+import '../trip/battery_mode.dart';
 import 'connection_health.dart';
 import 'home_view.dart';
 import 'sheets.dart';
@@ -55,6 +56,7 @@ class TalkStatusLine extends StatelessWidget {
     this.onOpenWeather,
     this.health,
     this.onOpenHealth,
+    this.batteryMode,
   });
 
   final AudienceInfo audience;
@@ -90,6 +92,10 @@ class TalkStatusLine extends StatelessWidget {
   /// heard). Null = no chip. Read on every build and every 30 s.
   final ConnectionHealth Function()? health;
   final VoidCallback? onOpenHealth;
+
+  /// v2.6.12: the Battery mode, shown on the chip (Saver: a leaf, Tracking:
+  /// a target; Normal: nothing). Null = not shown.
+  final BatteryMode Function()? batteryMode;
 
   String get _audienceText {
     final people = '$here ${here == 1 ? 'person' : 'people'}';
@@ -202,7 +208,11 @@ class TalkStatusLine extends StatelessWidget {
             ),
           ),
         if (health != null && onOpenHealth != null)
-          ConnectionChip(source: health!, onTap: onOpenHealth!),
+          ConnectionChip(
+            source: health!,
+            onTap: onOpenHealth!,
+            batteryMode: batteryMode,
+          ),
         if (weather != null && onOpenWeather != null)
           _Shortcut(
             key: const Key('talk-weather-shortcut'),

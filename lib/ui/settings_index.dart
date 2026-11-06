@@ -563,6 +563,30 @@ const settingsIndex = <SettingEntry>[
     words: ['delete', 'wipe', 'erase', 'reset', 'clean', 'queue', 'stuck'],
   ),
   SettingEntry(
+    id: 'battery-mode',
+    title: 'Battery mode',
+    section: 'Battery',
+    about:
+        'Saver, Normal or Tracking: switches location sharing, Range logging '
+        'pings and map precaching at once.',
+    words: [
+      'battery',
+      'battery mode',
+      'power mode',
+      'power',
+      'saver',
+      'save battery',
+      'tracking',
+      'track',
+      'normal',
+      'mode',
+      'gps',
+      'pings',
+      'battery life',
+    ],
+    needs: SettingNeeds.trip,
+  ),
+  SettingEntry(
     id: 'power-saver',
     title: 'Battery saver',
     label: 'Saver',

@@ -25,6 +25,7 @@ import 'link_sheet.dart';
 import 'people_tab.dart';
 import 'reach_of.dart';
 import 'person_sheet.dart';
+import 'battery_mode_ui.dart';
 import 'connection_health.dart';
 import 'status_line.dart';
 import 'messages_page.dart';
@@ -393,10 +394,14 @@ class _HomePageState extends State<HomePage> {
           weatherExtreme: c.weatherAlerts?.top?.isExtreme ?? false,
           onOpenWeather: () => openWeatherAlerts(context, c),
           health: () => connectionHealthOf(c),
+          batteryMode: c.trip == null ? null : () => c.trip!.batteryMode,
           onOpenHealth: () => showConnectionSheet(
             context,
             source: () => connectionHealthOf(c),
             listenable: c,
+            battery: c.trip == null
+                ? null
+                : BatteryModePicker(trip: c.trip!, controller: c, compact: true),
             location: () => c.locationChoice,
             rangeTest: () => _rangeRunLine(),
             onMore: () => _openStatus(context, audience, here),
@@ -1775,6 +1780,18 @@ class _HomePageState extends State<HomePage> {
                 ),
                 const Divider(height: 32),
                 _SectionTitle('Battery'),
+                if (c.trip != null) ...[
+                  SettingAnchor(
+                    id: 'battery-mode',
+                    child: BatteryModePicker(trip: c.trip!, controller: c),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Connection battery saver',
+                    style: Theme.of(ctx).textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 6),
+                ],
                 SettingAnchor(
                   id: 'power-saver',
                   child: SegmentedButton<bool>(
