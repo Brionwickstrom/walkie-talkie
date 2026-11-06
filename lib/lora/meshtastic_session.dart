@@ -82,6 +82,22 @@ class RadioHeard {
   final int id;
 }
 
+/// Our own radio's position as it reported it (v2.6.7): the position it
+/// broadcasts (a copy comes to the phone, nothing is asked for) or the one
+/// in its node list when the phone connects.
+class RadioOwnPosition {
+  const RadioOwnPosition(this.pos, this.at, {required this.live});
+  final PositionPb pos;
+
+  /// When the fix was taken: the receive time for a live broadcast (or the
+  /// fix time when it is older), the fix time for the node list copy; null
+  /// when the age is unknown (then it is not used).
+  final DateTime? at;
+
+  /// Heard as a broadcast now (true) or read from the node list (false).
+  final bool live;
+}
+
 /// What a received LoRa packet looked like on air.
 class RadioSignal {
   RadioSignal(this.snr, this.rssi, this.hopsAway, this.at);
@@ -161,6 +177,9 @@ class MeshtasticSession {
   int? queueFree;
   int? queueMax;
   RadioSignal? lastSignal;
+
+  /// Our own radio's newest position (v2.6.7), null until it sent one.
+  RadioOwnPosition? ownPosition;
   final Map<int, RadioNode> nodes = {};
   int sent = 0;
   int received = 0;
@@ -351,6 +370,7 @@ class MeshtasticSession {
       if (n.num == myNodeNum) {
         battery = bat ?? battery;
         voltage = n.metrics?.voltage ?? voltage;
+        if (pos != null) _noteOwn(pos, live: false);
       }
       changed = true;
     }
@@ -426,6 +446,18 @@ class MeshtasticSession {
       return false;
     }
     if (p.from == myNodeNum) {
+      // v2.6.7: the position our radio just broadcast (the radio copies it
+      // to the phone). Free: nothing is asked for.
+      if (d != null && d.portnum == PortNum.position) {
+        try {
+          final pos = PositionPb.decode(d.payload);
+          if (pos != null) {
+            _noteOwn(pos, live: true);
+            return true;
+          }
+        } catch (_) {}
+        return false;
+      }
       // Our own radio's telemetry (battery).
       if (d != null && d.portnum == PortNum.telemetry) {
         try {
@@ -500,6 +532,30 @@ class MeshtasticSession {
     received++;
     if (!_packets.isClosed) _packets.add(p);
     return true;
+  }
+
+  void _noteOwn(PositionPb pos, {required bool live}) {
+    final now = _clock();
+    DateTime? at;
+    final t = pos.time > 0
+        ? DateTime.fromMillisecondsSinceEpoch(pos.time * 1000)
+        : null;
+    if (live) {
+      // The receive time, unless the radio says the fix is older.
+      at = t != null && t.isBefore(now) && now.difference(t).inHours < 24
+          ? t
+          : now;
+    } else {
+      // From the node list: only as old as its own time says; a fix time
+      // in the future is not trusted.
+      at = t != null && !t.isAfter(now.add(const Duration(minutes: 1)))
+          ? t
+          : null;
+    }
+    // A node-list copy never replaces a newer live one.
+    final old = ownPosition;
+    if (!live && old != null && old.live) return;
+    ownPosition = RadioOwnPosition(pos, at, live: live);
   }
 
   /// Queue [payload] on [port] for [to] (a node number or [meshBroadcast]).

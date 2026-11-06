@@ -11,9 +11,11 @@ import '../app/conn_probes.dart' show probeInternet;
 import '../app/power_plan.dart';
 import '../core/transport.dart';
 import '../core/transport_manager.dart' show InboundTrip;
+import '../lora/meshtastic_proto.dart' show PositionPb;
 import 'friend_motion.dart';
 import 'geo.dart';
 import 'imagery.dart';
+import 'location_source.dart';
 import 'imports/geo_import.dart' show ImportedData, ImportedLine;
 import 'imports/map_layers.dart';
 import 'imports/route_share.dart';
@@ -259,7 +261,9 @@ class TripController extends ChangeNotifier {
   /// Range logging on this phone (v2.5.9): off until switched on.
   late final RangeLogger rangeLog = RangeLogger(
     store: range,
-    fix: () => myFix,
+    // Paired with the phone's own exact GPS fix, as before v2.6.7; with
+    // "Radio GPS only" (phone GPS never on) with the radio's fix instead.
+    fix: () => rangeFix,
     plugged: () => _pluggedIn,
   );
   bool _rangeLoggingSeen = false;
@@ -293,7 +297,108 @@ class TripController extends ChangeNotifier {
   final TrackRecorder recorder = TrackRecorder();
   final TrackAssembler _assembler = TrackAssembler();
 
+  /// Where I am: the fix from the source in use (see [location]).
   Fix? myFix;
+
+  /// The newest fix from the phone's own GPS (v2.6.7).
+  Fix? phoneFix;
+
+  /// The newest fix from the connected radio's own GPS (v2.6.7).
+  Fix? radioFix;
+
+  /// The fix range logging pairs a heard packet with: the phone's GPS,
+  /// unless the setting is Radio GPS only (then the radio's).
+  Fix? get rangeFix =>
+      locationSource == LocationSource.radio ? radioFix : phoneFix;
+
+  // ------------------------------------------------ location source (v2.6.7)
+
+  RadioGpsState _radioGps = RadioGpsState.none;
+  ActiveLocation? _activeSeen;
+
+  /// The "Location source" setting.
+  LocationSource get locationSource =>
+      LocationSource.fromId(settings.locationSource);
+
+  /// What the connected radio says about its own position.
+  RadioGpsState get radioGps => _radioGps;
+
+  /// Something needs the phone's fast GPS (navigation, Drive, SOS, a
+  /// recorded trail, range logging, Driving mode). In Auto that keeps the
+  /// phone's GPS; with Radio GPS only it does not.
+  bool get _needPhoneFast =>
+      nav != null ||
+      drive != null ||
+      sos.active != null ||
+      recorder.recording ||
+      range.logging ||
+      drivingMode;
+
+  /// Which GPS is "where I am" right now, and why.
+  LocationChoice get location => chooseLocation(
+    setting: locationSource,
+    radio: _radioGps,
+    now: _clock(),
+    needPhone: _needPhoneFast,
+  );
+
+  Future<void> setLocationSource(LocationSource v) async {
+    if (settings.locationSource == v.id) return;
+    settings.locationSource = v.id;
+    await host.saveTripSettings();
+    _checkSource(force: true);
+    notifyListeners();
+  }
+
+  /// The radio's state changed (connected, a new own position). The app
+  /// calls this from the radio's change events: the position is the one
+  /// the radio broadcasts anyway, nothing is asked for.
+  void setRadioGps(RadioGpsState g) {
+    final old = _radioGps;
+    _radioGps = g;
+    final p = g.pos, at = g.at;
+    if (p != null && at != null && (old.pos != p || old.at != at)) {
+      final f = radioFixOf(p, at);
+      if (f.pos.valid &&
+          p.source != PositionPb.sourceManual &&
+          p.source != PositionPb.sourceExternal) {
+        radioFix = f;
+      }
+    }
+    _checkSource();
+    if (location.usingRadio) {
+      final f = radioFix;
+      if (f != null && !identical(myFix, f)) _applyFix(f);
+    }
+  }
+
+  /// Re-pick the GPS (once a second, and on every change): start or stop
+  /// the phone's GPS when the source changes.
+  void _checkSource({bool force = false}) {
+    final a = location.active;
+    if (!force && a == _activeSeen) return;
+    final was = _activeSeen;
+    _activeSeen = a;
+    if (a == ActiveLocation.phone && was != null) {
+      // Back to the phone: use its last fix if it is still fresh.
+      final f = phoneFix;
+      if (f != null && _clock().difference(f.at) < const Duration(seconds: 30)) {
+        _applyFix(f);
+      }
+    } else if (a == ActiveLocation.radio) {
+      final f = radioFix;
+      if (f != null && !identical(myFix, f)) _applyFix(f);
+    }
+    unawaited(_updateLocationNeed());
+    notifyListeners();
+  }
+
+  /// A fix only from the phone, never with Radio GPS only.
+  Future<Fix?> _locateOnce() async {
+    if (locationSource == LocationSource.radio) return radioFix;
+    if (location.usingRadio) return radioFix;
+    return host.locateOnce();
+  }
 
   /// Compass heading (degrees from magnetic north), null if unknown.
   double? heading;
@@ -517,7 +622,11 @@ class TripController extends ChangeNotifier {
   Future<void> _updateLocationNeed() async {
     if (!_started) return;
     _locDriving = drivingMode;
-    if (_needLocation) {
+    // v2.6.7: no phone GPS while the radio's GPS is used, and never with
+    // Radio GPS only (the battery win).
+    final choice = location;
+    _activeSeen ??= choice.active;
+    if (_needLocation && choice.phoneGpsAllowed) {
       final want = _wantedInterval;
       final acc = _wantHighAccuracy;
       if (_locInterval != want || _locAccurate != acc) {
@@ -551,6 +660,14 @@ class TripController extends ChangeNotifier {
 
   /// A GPS fix from the phone.
   void onFix(Fix f) {
+    if (!f.pos.valid) return;
+    phoneFix = f;
+    // v2.6.7: only "where I am" while the phone is the source.
+    if (location.active != ActiveLocation.phone) return;
+    _applyFix(f);
+  }
+
+  void _applyFix(Fix f) {
     if (!f.pos.valid) return;
     myFix = f;
     sos.updatePosition(f.pos, accuracyM: f.accuracyM);
@@ -657,7 +774,7 @@ class TripController extends ChangeNotifier {
     String name = 'Destination',
     bool compass = false,
   }) async {
-    final me = myFix?.pos ?? (await host.locateOnce())?.pos;
+    final me = myFix?.pos ?? (await _locateOnce())?.pos;
     TrailRoute? r;
     var note = '';
     if (!compass) {
@@ -978,7 +1095,7 @@ class TripController extends ChangeNotifier {
     String name = 'Destination',
     TrailRoute? preview,
   }) async {
-    final me = myFix?.pos ?? (await host.locateOnce())?.pos;
+    final me = myFix?.pos ?? (await _locateOnce())?.pos;
     if (me == null) {
       lastWalkMessage = 'Waiting for GPS. Try again in a moment.';
       return null;
@@ -1058,7 +1175,7 @@ class TripController extends ChangeNotifier {
     GeoPoint to, {
     String name = 'Destination',
   }) async {
-    final me = myFix?.pos ?? (await host.locateOnce())?.pos;
+    final me = myFix?.pos ?? (await _locateOnce())?.pos;
     if (me == null) {
       return const SmartPlan(
         SmartKind.noRoute,
@@ -1204,7 +1321,7 @@ class TripController extends ChangeNotifier {
   /// Start a plan made by [planSmart].
   Future<void> startPlan(SmartPlan p, GeoPoint to, String name) async {
     if (!p.ok) return;
-    final me = myFix?.pos ?? (await host.locateOnce())?.pos;
+    final me = myFix?.pos ?? (await _locateOnce())?.pos;
     if (me == null || _disposed) return;
     switch (p.kind) {
       case SmartKind.drive:
@@ -1276,7 +1393,7 @@ class TripController extends ChangeNotifier {
     String name = 'Destination',
     SlopeLimit limit = SlopeLimit.gentle,
   }) async {
-    final me = myFix?.pos ?? (await host.locateOnce())?.pos;
+    final me = myFix?.pos ?? (await _locateOnce())?.pos;
     if (me == null) {
       return (
         session: null,
@@ -1495,7 +1612,7 @@ class TripController extends ChangeNotifier {
     if (layers.roads.isEmpty && !onlineRoutingAllowed) {
       return (session: null, message: noRoadsMessage);
     }
-    final me = myFix?.pos ?? (await host.locateOnce())?.pos;
+    final me = myFix?.pos ?? (await _locateOnce())?.pos;
     if (me == null) {
       return (
         session: null,
@@ -2606,6 +2723,7 @@ class TripController extends ChangeNotifier {
     sos.tick();
     _ticks++;
     mapNet.tick(onScreen: _onScreen, routing: nav != null || drive != null);
+    _checkSource();
     if (settings.tripMode) {
       final every = checkInMinutesNow;
       if (every > 0 && myFix != null) {

@@ -76,6 +76,7 @@ import '../transports/relay_socket.dart';
 import '../transports/relay_transport.dart';
 import '../transports/wifi_direct_transport.dart';
 import '../trip/geo.dart';
+import '../trip/location_source.dart';
 import '../trip/range_logger.dart';
 import '../trip/sos.dart';
 import '../trip/trip_controller.dart';
@@ -173,6 +174,7 @@ class WalkieController extends ChangeNotifier {
       radioDevice.changes.listen((_) {
         _noteRadio();
         _bindRangeLog();
+        _feedRadioGps();
       }),
     );
     if (settings.radioId != null) ble?.ignoreDevices.add(settings.radioId!);
@@ -1666,6 +1668,7 @@ class WalkieController extends ChangeNotifier {
       await t.setOfflineSaver(settings.offlineSaver);
       trip = t;
       _bindRangeLog();
+      _feedRadioGps();
       // v2.5.6: Driving mode follows plug / unplug (event driven).
       await t.setPluggedIn(charging);
       unawaited(bridge.watchPower());
@@ -3227,6 +3230,22 @@ class WalkieController extends ChangeNotifier {
   /// time. Runs on the radio's own change events, writes only on a real
   /// change. No traffic.
   /// Range logging (v2.5.9) listens to the connected radio's session.
+  /// v2.6.7: the connected radio's own position (the one it broadcasts
+  /// anyway; nothing is asked for) for the Location source choice.
+  void _feedRadioGps() {
+    final t = trip;
+    if (t == null) return;
+    t.setRadioGps(radioGpsStateOf(radioDevice));
+  }
+
+  /// "Where I am" comes from (v2.6.7), for the connection sheet.
+  LocationChoice? get locationChoice => trip?.location;
+
+  Future<void> setLocationSource(LocationSource v) async {
+    await trip?.setLocationSource(v);
+    notifyListeners();
+  }
+
   void _bindRangeLog() {
     final t = trip;
     if (t == null) return;
@@ -5597,4 +5616,29 @@ class _WalkieTripHost implements TripHost {
   @override
   Future<bool> shareFile(String path, String mime, String title) =>
       c.bridge.shareFile(path, mime: mime, title: title);
+}
+
+/// What [d]'s session says about the radio's own GPS (v2.6.7).
+RadioGpsState radioGpsStateOf(MeshtasticRadio d) {
+  final s = d.ready ? d.session : null;
+  if (s == null) return RadioGpsState.none;
+  final id = d.deviceId;
+  final link = !StreamRadioId.isStream(id)
+      ? 'Bluetooth'
+      : (StreamRadioId.serialPort(id!) != null ? 'USB' : 'Wi-Fi');
+  final own = s.ownPosition;
+  // The radio broadcasts its position on the first channel that shares a
+  // location (precision above 0); with none it sends no position at all.
+  final chans = s.channels.values.where((c) => !c.isDisabled).toList();
+  final sharing =
+      chans.isEmpty || chans.any((c) => c.positionPrecision > 0);
+  return RadioGpsState(
+    connected: true,
+    link: link,
+    pos: own?.pos,
+    at: own?.at,
+    broadcastSecs: s.positionSecs,
+    smart: s.positionSmart,
+    sharing: sharing,
+  );
 }

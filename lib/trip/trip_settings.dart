@@ -20,6 +20,7 @@ class TripSettings {
     List<String>? overlays,
     this.driveVoice = true,
     this.trailVoice = false,
+    this.locationSource = 'auto',
   }) : overlays = overlays ?? [],
        canned = canned ?? List.of(defaultCustomCanned);
 
@@ -61,6 +62,10 @@ class TripSettings {
 
   /// Spoken junctions / off-route on trail navigation (v1.9.2).
   bool trailVoice;
+
+  /// Where "where I am" comes from (v2.6.7): 'auto' (the radio's GPS while
+  /// it is good, else the phone's), 'phone' or 'radio'.
+  String locationSource;
   static const radioTrailChoices = [0, 5, 10, 15];
 
   static const defaultCustomCanned = ['Lunch spot', 'Going ahead', 'Found it'];
@@ -82,6 +87,7 @@ class TripSettings {
     if (overlays.isNotEmpty) 'ov': overlays,
     if (!driveVoice) 'dv': false,
     if (trailVoice) 'tv': true,
+    if (locationSource != 'auto') 'ls': locationSource,
   });
 
   static TripSettings decode(String? s) {
@@ -112,6 +118,11 @@ class TripSettings {
         ],
         driveVoice: j['dv'] != false,
         trailVoice: j['tv'] == true,
+        locationSource: switch (j['ls']) {
+          'phone' => 'phone',
+          'radio' => 'radio',
+          _ => 'auto',
+        },
       );
     } catch (_) {
       return TripSettings();

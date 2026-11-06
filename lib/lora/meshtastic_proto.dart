@@ -301,28 +301,81 @@ DeviceMetricsPb? decodeTelemetryDeviceMetrics(Uint8List b) {
 
 /// `Position` (mesh.proto): latitude_i=1, longitude_i=2 (sfixed32, degrees
 /// x 1e7), altitude=3 (int32 metres). A (0, 0) fix means "no position".
+/// v2.6.7 also reads time=4 (fixed32 epoch s), location_source=5,
+/// HDOP=12 (1/100), sats_in_view=19 and precision_bits=23, for using the
+/// radio's own GPS as the phone's location.
 class PositionPb {
-  PositionPb(this.lat, this.lng, {this.alt});
+  PositionPb(
+    this.lat,
+    this.lng, {
+    this.alt,
+    this.time = 0,
+    this.source = 0,
+    this.hdop = 0,
+    this.sats = 0,
+    this.precisionBits = 0,
+  });
   final double lat, lng;
 
   /// Metres above sea level; null when the radio did not send one.
   final int? alt;
 
+  /// When the fix was taken (seconds since 1970 UTC), 0 = not sent.
+  final int time;
+
+  /// Position.LocSource: 0 unset, 1 manual (fixed position), 2 the
+  /// radio's own GPS, 3 external (a phone gave it to the radio).
+  final int source;
+
+  /// Horizontal dilution of precision x 100, 0 = not sent.
+  final int hdop;
+  final int sats;
+
+  /// Bits of precision kept (32 = exact, 10-19 = blurred), 0 = not sent.
+  final int precisionBits;
+
+  static const sourceUnset = 0;
+  static const sourceManual = 1;
+  static const sourceInternal = 2;
+  static const sourceExternal = 3;
+
   static PositionPb? decode(Uint8List b) {
     var la = 0, lo = 0, alt = 0;
     var hasAlt = false;
+    var time = 0, src = 0, hdop = 0, sats = 0, prec = 0;
     for (final f in pbDecode(b)) {
       if (f.wireType == 5) {
         if (f.number == 1) la = f.asSFixed32;
         if (f.number == 2) lo = f.asSFixed32;
-      } else if (f.wireType == 0 && f.number == 3) {
-        alt = f.asInt32;
-        hasAlt = true;
+        if (f.number == 4) time = f.asFixed32;
+      } else if (f.wireType == 0) {
+        switch (f.number) {
+          case 3:
+            alt = f.asInt32;
+            hasAlt = true;
+          case 5:
+            src = f.asInt;
+          case 12:
+            hdop = f.asInt;
+          case 19:
+            sats = f.asInt;
+          case 23:
+            prec = f.asInt;
+        }
       }
     }
     if (la == 0 && lo == 0) return null;
     if (la.abs() > 900000000 || lo.abs() > 1800000000) return null;
-    return PositionPb(la / 1e7, lo / 1e7, alt: hasAlt ? alt : null);
+    return PositionPb(
+      la / 1e7,
+      lo / 1e7,
+      alt: hasAlt ? alt : null,
+      time: time,
+      source: src,
+      hdop: hdop,
+      sats: sats,
+      precisionBits: prec,
+    );
   }
 
   /// Encode for AdminMessage.set_fixed_position (v2.6.6). Uses sfixed32
