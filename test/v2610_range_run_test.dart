@@ -507,9 +507,11 @@ void main() {
   });
 
   group('version and release', () {
-    test('pubspec is 2.6.10+70 (versionCode 2070)', () {
+    test('pubspec is 2.6.10+70 or later (versionCode 2070+)', () {
       final p = File('pubspec.yaml').readAsStringSync();
-      expect(p, contains('\nversion: 2.6.10+70\n'));
+      final m = RegExp(r'\nversion: 2\.6\.(\d+)\+(\d+)\n').firstMatch(p)!;
+      expect(int.parse(m.group(1)!), greaterThanOrEqualTo(10));
+      expect(int.parse(m.group(2)!), greaterThanOrEqualTo(70));
       expect(2000 + 70, 2070);
     });
 

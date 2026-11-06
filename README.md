@@ -2677,3 +2677,54 @@ reopens on incoming audio without clipping the first syllable; idle,
 backgrounded friend location sharing uses balanced (network) accuracy every
 45 s (120 s with battery saver) and goes back to high accuracy while
 navigating, recording, on the Trip screen or in SOS.
+
+## v2.6.11: Faster map start
+
+The Trip map (and the Drive, offline area and overlay maps, which use the
+same tiles) opens noticeably faster. What was slow, measured with
+`test/v2611_map_start_bench_test.dart` and `test/v2611_map_rebuild_bench_test.dart`
+(box timings, debug build; a phone is slower in absolute terms):
+
+| What | v2.6.10 | v2.6.11 |
+|---|---|---|
+| A screen of 24 tiles saved more than 7 days ago, 250 ms signal | 3.1 s (waited for the server, 2 at a time) | 16 ms (drawn from the phone, refreshed behind the map) |
+| Cache trim walk, 8000 tiles | 0.8 s on the main thread at every start | 0.1 s, off the main thread, 45 s after start |
+| First map frame with a 7000-point imported trail | 83 ms | 9 ms (trail drawn the next frame) |
+| Every map refresh with that trail (every 2 s with friends on the map) | 72-77 ms | 2 ms |
+| No GPS fix yet | the whole US at zoom 4, then a jump when GPS arrives | where the map was last left |
+
+What changed:
+
+- **Tiles from the phone first.** A tile on the phone is shown at once. When
+  it is older than its fresh time (7 days, satellite photos 60 days) it is
+  checked with the server behind the map: the same one conditional request
+  as before (304 = keep), at most 2 at a time, once per tile per run, none
+  when offline.
+- **Least recently used first.** The cache (Settings > Map > Map cache
+  limit: 250 MB, 500 MB (default), 1 GB or 2 GB) drops the tiles not looked
+  at for longest, not just the oldest downloads. Saved offline areas are
+  never dropped. The folder walk runs off the main thread, 45 s after start.
+- **Opens where you left it.** No GPS fix yet? The map opens where it was
+  last left (saved every few seconds while it moves), then follows you when
+  the fix comes. An SOS "Map" button or a fix you already have still win.
+- **Layers after the map.** Imported trails and maps, geofences and range
+  circles come one frame after the map, and imported layers are built again
+  only when they change. Every layer is still there: satellite, range
+  markers, geofences, public nodes, weather, friends, pins.
+- **Keep home area ready** (Settings > Map, on by default): about 1.5 km
+  around home (the home location, else where the map was last left), zoom
+  12 to 15, at most 120 tiles (about 1-3 MB), **only on Wi-Fi or while
+  charging**, once a week or when home moves over 1 km, one tile a second,
+  skipping tiles already there, stopping after 6 failures. Never from Street
+  (OpenStreetMap), whose tile policy forbids saving ahead, and never in
+  Offline power save.
+- **Clear map cache** (Settings > Map > Map cache): shows how much is
+  saved from looking around and in saved offline areas; Clear deletes only
+  the viewed tiles. A failure is one plain sentence with Try again.
+- Settings search: "map cache", "clear cache", "offline map", "home area".
+
+Battery and data: no extra requests while you use the map (the same
+refreshes, just not waited for), and none at all offline. The warm-up uses
+up to about 3 MB a week, only on Wi-Fi or a charger. A phone charging in a
+car on mobile data counts as charging, so it may use that data once a week;
+switch Keep home area ready off to stop it.

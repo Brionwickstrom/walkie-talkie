@@ -3,10 +3,8 @@
 // It prints one line per measurement ("bench: ...") and checks the
 // v2.6.11 targets. The same file ran on v2.6.10 (915941d) for the
 // "before" numbers in the README.
-import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';

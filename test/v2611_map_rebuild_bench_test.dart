@@ -59,7 +59,9 @@ void main() {
       // Warm up (the first map built in a run pays for loading code).
       for (final w in [true, false]) {
         await tester.pumpWidget(
-          MaterialApp(home: _BenchMap(trip: t, v2611: w)),
+          MaterialApp(
+            home: _BenchMap(trip: t, v2611: w),
+          ),
         );
         await tester.pump();
         await tester.pump();
@@ -81,9 +83,7 @@ void main() {
       await tester.pump();
       await tester.pump();
       second.stop();
-      _say(
-        '$how next frames (trail drawn): ${second.elapsedMilliseconds} ms',
-      );
+      _say('$how next frames (trail drawn): ${second.elapsedMilliseconds} ms');
       expect(find.byType(PolylineLayer), findsOneWidget);
       final sw = Stopwatch();
       for (var i = 0; i < 10; i++) {

@@ -216,7 +216,9 @@ void main() {
       final w = await world(fresh: const Duration(milliseconds: 1));
       await w.cache.get(sat, pdx17.z, pdx17.x, pdx17.y);
       await Future<void>.delayed(const Duration(milliseconds: 20));
-      await w.cache.get(sat, pdx17.z, pdx17.x, pdx17.y);
+      // v2.6.11: drawn from the phone at once, fetched again behind it.
+      expect(await w.cache.get(sat, pdx17.z, pdx17.x, pdx17.y), isNotNull);
+      await w.cache.refreshesDone();
       expect(w.srv.count('/osip'), 2);
     });
 
