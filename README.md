@@ -1525,6 +1525,86 @@ Tests: `test/v195_gateway_test.dart`, `test/v195_quiet_test.dart`.
 Tests: `test/v197_meshtastic_import_test.dart` (vectors from the official
 apps and the Python library), `test/v195_quiet_test.dart`.
 
+## v2.6.9: Desktop USB sharing
+
+**Settings > Long-range radio (Meshtastic) >
+Share radio with other programs on this PC** (desktop app only, off by
+default).
+
+The desktop app holds the radio's COM port (USB) by itself, so before this
+release a Meshtastic Python script or the `meshtastic` command had to close
+the app to talk to the radio. With this switch on, the app shares its own
+radio link with programs **on the same PC** over Meshtastic's standard TCP
+stream protocol (the same one a Wi-Fi radio speaks on port 4403). The app
+stays connected and keeps working as before.
+
+- **Only this PC:** the server listens on `127.0.0.1` only; other computers
+  on the network cannot connect. At most 4 programs at a time. The switch
+  shows `On at 127.0.0.1:4403 · 1 program connected`.
+- **Port:** 4403 by default (tap **Port** to change it, 1024-65535). If
+  another program already uses it, the switch says so in plain words with
+  **Use a free port** (picks the next free one) and **Turn off sharing**.
+- **Read-only (default):** programs get the node list, the radio's settings
+  and everything the radio hears, and may send text messages and requests:
+  position, node info and telemetry requests (want_response), traceroute and
+  range test. **Settings changes (admin) are blocked**, as is any other kind
+  of packet (Stalkie Talkie frames, position broadcasts, pre-encrypted
+  packets). Channel keys, the radio's private key, the Wi-Fi and MQTT
+  passwords and the fixed Bluetooth PIN are taken out before anything is
+  sent to the program, and the radio's answers to the app's own settings
+  requests are not passed on. Every blocked packet is logged (which kind,
+  never its contents) and the last few show under the switch.
+- **Full access:** programs may also change the radio's settings, like the
+  Meshtastic app over Wi-Fi (a confirm screen says so first). Everything goes
+  through as the radio sent it, keys included. Every settings change is
+  logged with its kind (for example "set config", "reboot"). The app does
+  not notice a change a program made until it reads the settings again
+  (Radio settings, or the next reconnect).
+- **Always:** nothing is ever sent on the listen-only public channel
+  (v2.6.4); a program's heartbeat and disconnect stay local; a program may
+  send at most 8 packets at once, then one every 2 s (radio airtime).
+- **The handshake:** each program's `want_config` is answered by the app,
+  never passed to the radio, from the settings and node list the app's link
+  downloaded. When that copy is older than 2 minutes the app asks the radio
+  for a fresh one first (a few seconds over USB), so the node list is
+  current.
+- **Battery / CPU:** while the switch is off the app does nothing extra (one
+  check per radio packet). While on, each radio packet is copied to the
+  connected programs.
+
+### Using it from Python or the command line
+
+```
+meshtastic --host 127.0.0.1 --nodes
+```
+
+```python
+import meshtastic.tcp_interface
+iface = meshtastic.tcp_interface.TCPInterface('127.0.0.1')
+for n in iface.nodes.values():
+    print(n['user']['longName'], n.get('lastHeard'))
+iface.close()
+```
+
+With another port: `meshtastic --host 127.0.0.1:4404` or
+`TCPInterface('127.0.0.1', portNumber=4404)`.
+
+### Pointing range_test.py at it
+
+`C:\Users\15035\meshtastic_watch\range_test.py` closes the app
+(`stop_app()`), opens `SerialInterface("COM7", timeout=18)` and starts the
+app again (`start_app()`). With sharing on:
+
+1. Replace `import meshtastic.serial_interface as si` and
+   `i=si.SerialInterface("COM7",timeout=18)` with
+   `import meshtastic.tcp_interface as ti` and
+   `i=ti.TCPInterface("127.0.0.1",timeout=18)`.
+2. Remove the `stop_app()` and `start_app()` calls: the app stays open.
+
+Its traceroute and position requests to Yowie are allowed in Read-only.
+
+Tests: `test/v269_usb_sharing_test.dart`.
+
 ## v2.6.8: Geofences
 
 **Trip map > fence button (or Settings search: geofence / zone / fence /

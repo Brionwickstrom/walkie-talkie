@@ -199,6 +199,11 @@ Uint8List pbEdit(Uint8List msg, int field, Uint8List Function(Uint8List) edit) {
   return w.toBytes();
 }
 
+/// Which oneof a Config / ModuleConfig holds (its first field).
+int? _oneof(List<PbField> fields) =>
+    fields.isEmpty ? null : fields.first.number;
+
+/// Which FromRadio / ToRadio variant (the first field that is not `id`).
 int? _variant(List<PbField> fields) {
   for (final f in fields) {
     if (f.number != _From.id) return f.number;
@@ -228,7 +233,7 @@ Uint8List? redactForReadOnly(Uint8List fromRadio) {
         );
       case _From.config:
         final cfg = fields.firstWhere((f) => f.number == _From.config).asBytes;
-        final kind = _variant(pbDecode(cfg)) ?? 0;
+        final kind = _oneof(pbDecode(cfg)) ?? 0;
         // security=8 (keys), sessionkey=9: not at all.
         if (kind == 8 || kind == 9) return null;
         // network=4: wifi_psk=4. bluetooth=7: fixed_pin=3.
@@ -245,7 +250,7 @@ Uint8List? redactForReadOnly(Uint8List fromRadio) {
             .firstWhere((f) => f.number == _From.moduleConfig)
             .asBytes;
         // mqtt=1: password=4.
-        if (_variant(pbDecode(mc)) == 1) {
+        if (_oneof(pbDecode(mc)) == 1) {
           return pbEdit(
             fromRadio,
             _From.moduleConfig,
@@ -285,6 +290,7 @@ class RadioShareHub {
   RadioShareHub({
     this.maxClients = 4,
     this.cacheMaxAge = const Duration(minutes: 2),
+    this.refreshTimeout = const Duration(seconds: 15),
     DateTime Function()? clock,
   }) : _clock = clock ?? DateTime.now;
 
@@ -295,6 +301,7 @@ class RadioShareHub {
   /// The settings / node list copy is downloaded again for a program that
   /// connects when it is older than this.
   final Duration cacheMaxAge;
+  final Duration refreshTimeout;
   final DateTime Function() _clock;
 
   RadioShareAccess access = RadioShareAccess.readOnly;
@@ -380,7 +387,10 @@ class RadioShareHub {
     final c = e.osError?.errorCode;
     if (c == 10048 || c == 98 || c == 48) return true;
     final m = '${e.message} ${e.osError?.message ?? ''}'.toLowerCase();
-    return m.contains('in use') || m.contains('only one usage');
+    // The same process binding twice (Dart refuses before the OS does).
+    return m.contains('in use') ||
+        m.contains('only one usage') ||
+        m.contains('binding multiple times');
   }
 
   /// A free port on 127.0.0.1 from [from] + 1 on (null if none of 20).
@@ -643,7 +653,8 @@ class RadioShareHub {
     final done = Completer<void>();
     _refreshing = done;
     try {
-      await link.refreshConfig();
+      // Python waits 30 s for the handshake: never longer than 15 s here.
+      await link.refreshConfig().timeout(refreshTimeout);
     } catch (_) {
     } finally {
       if (identical(_refreshing, done)) _refreshing = null;

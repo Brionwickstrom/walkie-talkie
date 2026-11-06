@@ -116,9 +116,52 @@ class RadioShareSetting extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = controller;
     final h = c.radioShare;
+    return RadioShareSection(
+      on: c.settings.radioShareLocal,
+      status: radioShareStatusText(h),
+      error: c.radioShareError,
+      port: c.settings.radioSharePort,
+      full: c.settings.radioShareFull,
+      events: h.events.take(3).toList(),
+      onToggle: (v) => c.setRadioShareLocal(v),
+      onPort: () => _pickPort(context),
+      onAccess: (full) => _setAccess(context, full),
+      onFix: (a) => runFix(context, c, a),
+    );
+  }
+}
+
+/// The switch, its status line or error, port, access and the last few
+/// things programs did (plain data, for tests and screenshots).
+class RadioShareSection extends StatelessWidget {
+  const RadioShareSection({
+    super.key,
+    required this.on,
+    required this.status,
+    required this.port,
+    required this.full,
+    this.error,
+    this.events = const [],
+    required this.onToggle,
+    required this.onPort,
+    required this.onAccess,
+    required this.onFix,
+  });
+  final bool on;
+  final String status;
+  final FriendlyError? error;
+  final int port;
+  final bool full;
+  final List<RadioShareEvent> events;
+  final ValueChanged<bool> onToggle;
+  final VoidCallback onPort;
+  final ValueChanged<bool> onAccess;
+  final void Function(FixAction) onFix;
+
+  @override
+  Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final on = c.settings.radioShareLocal;
-    final err = c.radioShareError;
+    final err = error;
     final children = <Widget>[
       SwitchListTile(
         key: const Key('radioShareLocal'),
@@ -130,7 +173,7 @@ class RadioShareSetting extends StatelessWidget {
           'connect.',
         ),
         value: on,
-        onChanged: (v) => c.setRadioShareLocal(v),
+        onChanged: onToggle,
       ),
     ];
     if (on) {
@@ -138,16 +181,13 @@ class RadioShareSetting extends StatelessWidget {
         children.add(
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
-            child: FriendlyErrorView(
-              error: err,
-              onFix: (a) => runFix(context, c, a),
-            ),
+            child: FriendlyErrorView(error: err, onFix: onFix),
           ),
         );
       } else {
         children.add(
           Text(
-            radioShareStatusText(h),
+            status,
             key: const Key('radioShareStatus'),
             style: theme.textTheme.bodyMedium,
           ),
@@ -159,9 +199,9 @@ class RadioShareSetting extends StatelessWidget {
           dense: true,
           contentPadding: EdgeInsets.zero,
           title: const Text('Port'),
-          subtitle: Text('${c.settings.radioSharePort}'),
+          subtitle: Text('$port'),
           trailing: const Icon(Icons.edit_outlined),
-          onTap: () => _pickPort(context),
+          onTap: onPort,
         ),
         Padding(
           padding: const EdgeInsets.only(bottom: 4),
@@ -171,12 +211,12 @@ class RadioShareSetting extends StatelessWidget {
               ButtonSegment(value: false, label: Text('Read-only')),
               ButtonSegment(value: true, label: Text('Full access')),
             ],
-            selected: {c.settings.radioShareFull},
-            onSelectionChanged: (s) => _setAccess(context, s.first),
+            selected: {full},
+            onSelectionChanged: (s) => onAccess(s.first),
           ),
         ),
         Text(
-          c.settings.radioShareFull
+          full
               ? 'Full access: programs can also change the radio\'s '
                     'settings. Every change is logged below.'
               : 'Read-only: programs can read the node list and send text '
@@ -187,14 +227,13 @@ class RadioShareSetting extends StatelessWidget {
         ),
         const SizedBox(height: 4),
         SelectableText(
-          radioShareHowTo(c.settings.radioSharePort),
+          radioShareHowTo(port),
           style: theme.textTheme.bodySmall?.copyWith(fontFamily: 'monospace'),
         ),
       ]);
-      final ev = h.events.take(3).toList();
-      if (ev.isNotEmpty) {
+      if (events.isNotEmpty) {
         children.add(const SizedBox(height: 4));
-        for (final e in ev) {
+        for (final e in events) {
           children.add(
             Text(
               '${_hm(e.at)}  ${e.allowed ? 'Allowed' : 'Blocked'} ${e.what}',
