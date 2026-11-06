@@ -401,7 +401,11 @@ class _HomePageState extends State<HomePage> {
             listenable: c,
             battery: c.trip == null
                 ? null
-                : BatteryModePicker(trip: c.trip!, controller: c, compact: true),
+                : BatteryModePicker(
+                    trip: c.trip!,
+                    controller: c,
+                    compact: true,
+                  ),
             location: () => c.locationChoice,
             rangeTest: () => _rangeRunLine(),
             onMore: () => _openStatus(context, audience, here),

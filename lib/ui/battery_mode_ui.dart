@@ -109,9 +109,7 @@ class _BatteryModePickerState extends State<BatteryModePicker> {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  widget.compact
-                      ? 'Battery mode: ${m.label}'
-                      : 'Battery mode',
+                  widget.compact ? 'Battery mode: ${m.label}' : 'Battery mode',
                   key: const Key('battery-mode-title'),
                   style: theme.textTheme.titleSmall,
                 ),

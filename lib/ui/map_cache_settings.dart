@@ -196,10 +196,10 @@ class _MapCacheSettingsState extends State<MapCacheSettings> {
             onChanged: lockedNote(t, BatterySetting.warmHome) != null
                 ? null
                 : (v) async {
-              await t.update((x) => x.warmHome = v);
-              if (!v) t.warmer.cancel();
-              if (mounted) setState(() {});
-            },
+                    await t.update((x) => x.warmHome = v);
+                    if (!v) t.warmer.cancel();
+                    if (mounted) setState(() {});
+                  },
           ),
         ),
       ],

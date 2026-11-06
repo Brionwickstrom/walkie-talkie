@@ -73,6 +73,7 @@ class RangeRun extends ChangeNotifier {
     _prevLogging = v;
     await _save();
   }
+
   DateTime? get startedAt => _startedAt;
   Duration get maxDuration => Duration(minutes: maxMinutes);
 
