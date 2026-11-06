@@ -196,6 +196,10 @@ class MeshtasticSession {
   bool _closed = false;
   Completer<void>? _configDone;
 
+  /// Every FromRadio as read, before it is handled (v2.6.9: desktop USB
+  /// sharing, see radio_share.dart). Null = no work.
+  void Function(Uint8List raw)? rawTap;
+
   /// Packets from other nodes (any port).
   Stream<MeshPacketPb> get packets => _packets.stream;
 
@@ -328,6 +332,12 @@ class MeshtasticSession {
           return;
         }
         if (b.isEmpty) break;
+        final tap = rawTap;
+        if (tap != null) {
+          try {
+            tap(b);
+          } catch (_) {}
+        }
         final m = FromRadio.tryDecode(b);
         if (m != null) handle(m);
       }

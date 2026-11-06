@@ -115,6 +115,10 @@ class MeshtasticRadio implements RadioLink {
   Completer<void>? _lost;
   int _failures = 0;
 
+  /// Called when a session to the radio starts (before its settings are
+  /// downloaded) and with null when it ends (v2.6.9, desktop USB sharing).
+  void Function(MeshtasticSession? session)? onSession;
+
   /// Called with the radio's Bluetooth id when it changes (null = none),
   /// so the phone transport can ignore it.
   void Function(String? id)? onDevice;
@@ -407,6 +411,7 @@ class MeshtasticRadio implements RadioLink {
     _set(RadioState.configuring);
     final s = MeshtasticSession(_BleWire(toRadio, fromRadio, fromNum));
     session = s;
+    onSession?.call(s);
     _linkSubs.add(
       s.packets.listen((p) {
         if (!_packets.isClosed) _packets.add(p);
@@ -456,6 +461,7 @@ class MeshtasticRadio implements RadioLink {
     _set(RadioState.configuring);
     final s = MeshtasticSession(conn.wire);
     session = s;
+    onSession?.call(s);
     _linkSubs.add(
       s.packets.listen((p) {
         if (!_packets.isClosed) _packets.add(p);
@@ -536,6 +542,7 @@ class MeshtasticRadio implements RadioLink {
     _linkSubs.clear();
     final s = session;
     session = null;
+    if (s != null) onSession?.call(null);
     await s?.close();
     final st = _stream;
     _stream = null;
