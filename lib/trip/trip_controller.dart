@@ -32,6 +32,7 @@ import 'drive/speech.dart';
 import 'map_net.dart';
 import 'nav/foot_router.dart';
 import 'range_logger.dart';
+import 'range_run.dart';
 import 'range_test.dart';
 import 'nav/gentle_route.dart';
 import 'search/trailhead_finder.dart';
@@ -274,6 +275,22 @@ class TripController extends ChangeNotifier {
   );
   bool _rangeLoggingSeen = false;
 
+  /// One-tap range test (v2.6.10) on top of Range logging; stops by itself
+  /// after its time limit with a notification.
+  late final RangeRun rangeRun = RangeRun(
+    store: range,
+    logger: rangeLog,
+    file: File('${dir.path}/range_run.json'),
+    homePos: (n) => rangeLog.radio?.positionOf(n),
+    onAutoStop: (s) => host.notify(
+      'Range test stopped',
+      'Stopped by itself after ${formatRunDuration(s.duration)}. '
+          '${s.connectedPct == null ? 'No pings were sent.' : '${s.connectedPct}% connected'}'
+          '${s.furthestReplyM == null ? '' : ', furthest reply ${formatDistance(s.furthestReplyM!, imperial: settings.imperial)}'}. '
+          'Open the Trip map for the summary.',
+    ),
+  );
+
   void _rangeChanged() {
     if (range.logging == _rangeLoggingSeen) return;
     _rangeLoggingSeen = range.logging;
@@ -503,6 +520,7 @@ class TripController extends ChangeNotifier {
     ]);
     _rangeLoggingSeen = range.logging;
     range.addListener(_rangeChanged);
+    await rangeRun.load();
     await routes.load();
     await areas.load();
     await geofences.load();
@@ -534,6 +552,7 @@ class TripController extends ChangeNotifier {
     layers.close();
     range.removeListener(_rangeChanged);
     geofences.removeListener(_geofencesChanged);
+    rangeRun.dispose();
     rangeLog.dispose();
     range.dispose();
     super.dispose();
