@@ -17,7 +17,7 @@ import 'package:walkie_talkie/ui/settings_index.dart';
 import 'package:walkie_talkie/ui/settings_search.dart' show searchSettings;
 
 import 'trip_integration_test.dart' show FakeHost;
-import 'v259_range_log_test.dart' show FakeRadio, home, homePos;
+import 'v259_range_log_test.dart' show FakeRadio, homePos;
 
 class Clock {
   DateTime now = DateTime(2026, 11, 6, 9, 0, 0);
