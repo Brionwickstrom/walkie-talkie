@@ -2,7 +2,6 @@
 // other programs on this PC over a localhost Meshtastic TCP server
 // (lib/lora/radio_share.dart). All radios, names and keys here are
 // example data.
-import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -636,7 +635,7 @@ void main() {
       p.send(toRadioPacket(port: PortNum.text, channel: 2));
       p.send(toRadioPacket(port: PortNum.text, channel: 0));
       await p.until(() => link.written.length == 1 && hub.blocked == 1);
-      expect(hub.events.first.what, contains('listen-only public channel'));
+      expect(hub.events.first.what, contains('listen-only public LongFast'));
     });
 
     test('heartbeat and disconnect stay local', () async {

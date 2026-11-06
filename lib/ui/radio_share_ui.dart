@@ -28,9 +28,10 @@ String radioShareStatusText(RadioShareHub h) {
 
 /// What to type in Python / the meshtastic command for [port].
 String radioShareHowTo(int port) => port == RadioShareHub.defaultPort
-    ? "meshtastic --host 127.0.0.1   or   TCPInterface('127.0.0.1')"
-    : "meshtastic --host 127.0.0.1:$port   or   "
-          "TCPInterface('127.0.0.1', portNumber=$port)";
+    ? "Python: TCPInterface('127.0.0.1')\n"
+          'Command line: meshtastic --host 127.0.0.1'
+    : "Python: TCPInterface('127.0.0.1', portNumber=$port)\n"
+          'Command line: meshtastic --host 127.0.0.1:$port';
 
 class RadioShareSetting extends StatelessWidget {
   const RadioShareSetting({super.key, required this.controller});
@@ -226,10 +227,7 @@ class RadioShareSection extends StatelessWidget {
           style: theme.textTheme.bodySmall,
         ),
         const SizedBox(height: 4),
-        SelectableText(
-          radioShareHowTo(port),
-          style: theme.textTheme.bodySmall?.copyWith(fontFamily: 'monospace'),
-        ),
+        SelectableText(radioShareHowTo(port), style: theme.textTheme.bodySmall),
       ]);
       if (events.isNotEmpty) {
         children.add(const SizedBox(height: 4));

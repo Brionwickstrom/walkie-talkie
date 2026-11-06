@@ -559,7 +559,7 @@ class RadioShareHub {
     final pub = link.listenOnlySlot;
     if (pub != null && channel == pub && port != PortNum.admin) {
       blocked++;
-      _event(c, '$what on the listen-only public channel', allowed: false);
+      _event(c, '$what on listen-only public LongFast', allowed: false);
       return;
     }
     if (!full) {
