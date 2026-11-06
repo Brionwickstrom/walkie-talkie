@@ -62,6 +62,17 @@ class RangeRun extends ChangeNotifier {
   RangeRunSummary? last;
 
   bool get running => _startedAt != null;
+
+  /// Range logging as it was before Start (put back when the test ends).
+  bool get prevLogging => _prevLogging;
+
+  /// v2.6.12: Battery mode changed during a run: what Range logging goes
+  /// back to when the test ends.
+  Future<void> setPrevLogging(bool v) async {
+    if (v == _prevLogging) return;
+    _prevLogging = v;
+    await _save();
+  }
   DateTime? get startedAt => _startedAt;
   Duration get maxDuration => Duration(minutes: maxMinutes);
 

@@ -8,6 +8,7 @@ import '../app/link_settings.dart';
 import '../app/setup.dart';
 import '../app/walkie_controller.dart';
 import '../lora/radio_share.dart';
+import '../trip/battery_mode.dart';
 import '../trip/location_source.dart';
 import 'radio_settings.dart';
 import 'radio_settings_page.dart' show openRadioSettings;
@@ -139,7 +140,26 @@ Future<void> runFix(
     case FixAction.stopRadioShare:
       await c.setRadioShareLocal(false);
       callbacks.afterFix?.call();
+    case FixAction.stopRangeTest:
+      await c.trip?.rangeRun.stop();
+      callbacks.afterFix?.call();
+    case FixAction.useTrackingMode:
+      await _useMode(context, c, BatteryMode.tracking);
+      callbacks.afterFix?.call();
+    case FixAction.useNormalMode:
+      await _useMode(context, c, BatteryMode.normal);
+      callbacks.afterFix?.call();
   }
+}
+
+/// v2.6.12: a fix button that switches the Battery mode.
+Future<void> _useMode(
+  BuildContext context,
+  WalkieController c,
+  BatteryMode m,
+) async {
+  final fe = await c.trip?.setBatteryMode(m);
+  if (fe != null && context.mounted) showFriendlySnack(context, fe, c);
 }
 
 /// The raw text in a dialog (for snack bars, which have room for one

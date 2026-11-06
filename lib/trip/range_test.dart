@@ -456,6 +456,16 @@ class RangeTest extends ChangeNotifier {
     'events': [for (final e in events) e.toJson()],
   });
 
+  /// v2.6.12: set while Battery mode decides Range logging (the switch is
+  /// locked and shows this note); null = your own setting.
+  String? controlledNote;
+
+  void setControlled(String? note) {
+    if (note == controlledNote) return;
+    controlledNote = note;
+    notifyListeners();
+  }
+
   Future<void> setLogging(bool v) async {
     if (v == logging) return;
     logging = v;

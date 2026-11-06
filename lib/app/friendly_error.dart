@@ -6,6 +6,7 @@ import 'dart:async';
 import 'dart:io';
 
 import '../lora/radio_share.dart';
+import '../trip/battery_mode.dart';
 import '../trip/location_source.dart';
 import 'settings.dart';
 
@@ -29,7 +30,10 @@ enum FixAction {
   openRadioSettings('Radio settings'),
   usePhoneGps('Use Auto'),
   useFreePort('Use a free port'),
-  stopRadioShare('Turn off sharing');
+  stopRadioShare('Turn off sharing'),
+  stopRangeTest('Stop range test'),
+  useTrackingMode('Switch to Tracking'),
+  useNormalMode('Switch to Normal');
 
   const FixAction(this.label);
   final String label;
@@ -158,6 +162,43 @@ FriendlyError? rangeTestProblem({
     );
   }
   return null;
+}
+
+/// v2.6.12: why a Battery mode cannot be picked right now (null = it can).
+FriendlyError? batteryModeProblem({
+  required BatteryMode want,
+  required bool rangeTestRunning,
+}) {
+  if (want == BatteryMode.saver && rangeTestRunning) {
+    return const FriendlyError(
+      'A range test is running, and Saver turns its pings off. Stop the '
+      'test first, or use Tracking.',
+      fix: FixAction.stopRangeTest,
+      fix2: FixAction.useTrackingMode,
+    );
+  }
+  return null;
+}
+
+/// v2.6.12: the one-tap range test cannot start while Battery mode is
+/// Saver (Saver turns the pings off).
+const rangeTestSaverError = FriendlyError(
+  'Battery mode is Saver, which turns radio pings off, so the range test '
+  'cannot run. Switch to Tracking (or Normal) to start it.',
+  fix: FixAction.useTrackingMode,
+  fix2: FixAction.useNormalMode,
+);
+
+/// v2.6.12: the Battery mode could not be saved.
+FriendlyError batteryModeSaveError(Object e) {
+  final fe = friendlyFromError(e);
+  if (fe.message.contains('out of storage')) return fe;
+  return FriendlyError(
+    'Could not change the Battery mode: the phone did not let the app save '
+    'the setting. Nothing else was changed.',
+    fix: FixAction.retry,
+    details: detailsOf(e),
+  );
 }
 
 /// v2.6.9: why "Share radio with other programs on this PC" is not

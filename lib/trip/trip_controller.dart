@@ -8,10 +8,13 @@ import 'dart:math' show max;
 import 'package:flutter/foundation.dart';
 
 import '../app/conn_probes.dart' show probeInternet;
+import '../app/friendly_error.dart'
+    show FriendlyError, batteryModeProblem, batteryModeSaveError;
 import '../app/power_plan.dart';
 import '../core/transport.dart';
 import '../core/transport_manager.dart' show InboundTrip;
 import '../lora/meshtastic_proto.dart' show PositionPb;
+import 'battery_mode.dart';
 import 'friend_motion.dart';
 import 'geo.dart';
 import 'imagery.dart';
@@ -293,6 +296,7 @@ class TripController extends ChangeNotifier {
   );
 
   void _rangeChanged() {
+    _enforceRangeMode();
     if (range.logging == _rangeLoggingSeen) return;
     _rangeLoggingSeen = range.logging;
     unawaited(_updateLocationNeed());
@@ -524,6 +528,8 @@ class TripController extends ChangeNotifier {
     _rangeLoggingSeen = range.logging;
     range.addListener(_rangeChanged);
     await rangeRun.load();
+    _syncControlledNotes();
+    _enforceRangeMode();
     await routes.load();
     await areas.load();
     await geofences.load();
@@ -686,6 +692,145 @@ class TripController extends ChangeNotifier {
   /// Battery saver switched (re-pick the GPS interval).
   Future<void> onPowerChanged() => _updateLocationNeed();
 
+  // ------------------------------------------------ battery mode (v2.6.12)
+  // See battery_mode.dart for the rules.
+
+  BatteryMode get batteryMode => settings.batteryMode;
+
+  bool get _tracking => settings.batteryMode == BatteryMode.tracking;
+
+  /// The value of [s] right now (Range logging: what it goes back to after
+  /// a running range test).
+  bool _currentValue(BatterySetting s) => switch (s) {
+    BatterySetting.shareLocation => settings.tripMode,
+    BatterySetting.rangeLogging =>
+      rangeRun.running ? rangeRun.prevLogging : range.logging,
+    BatterySetting.warmHome => settings.warmHome,
+  };
+
+  /// Your own value of [s]: the saved one while the mode controls it.
+  bool ownValue(BatterySetting s) {
+    final snap = settings.batterySnapshot;
+    if (snap != null && controls(settings.batteryMode, s)) {
+      return snap.valueOf(s);
+    }
+    return _currentValue(s);
+  }
+
+  /// Switch the Battery mode. Returns a plain error when it cannot (a
+  /// range test is running and Saver was picked, or it could not be
+  /// saved); nothing changes then.
+  Future<FriendlyError?> setBatteryMode(BatteryMode m) async {
+    final cur = settings.batteryMode;
+    if (m == cur) return null;
+    final p = batteryModeProblem(want: m, rangeTestRunning: rangeRun.running);
+    if (p != null) return p;
+    final own = BatterySnapshot(
+      shareLocation: ownValue(BatterySetting.shareLocation),
+      rangeLogging: ownValue(BatterySetting.rangeLogging),
+      warmHome: ownValue(BatterySetting.warmHome),
+    );
+    bool target(BatterySetting s) => forcedBy(m, s) ?? own.valueOf(s);
+    final before = (
+      trip: settings.tripMode,
+      warm: settings.warmHome,
+      mode: cur,
+      snap: settings.batterySnapshot,
+    );
+    settings
+      ..tripMode = target(BatterySetting.shareLocation)
+      ..warmHome = target(BatterySetting.warmHome)
+      ..batteryMode = m
+      ..batterySnapshot = m == BatteryMode.normal ? null : own;
+    try {
+      await host.saveTripSettings();
+    } catch (e) {
+      settings
+        ..tripMode = before.trip
+        ..warmHome = before.warm
+        ..batteryMode = before.mode
+        ..batterySnapshot = before.snap;
+      notifyListeners();
+      return batteryModeSaveError(e);
+    }
+    final rl = target(BatterySetting.rangeLogging);
+    _syncControlledNotes();
+    if (rangeRun.running) {
+      // The test keeps Range logging on; this is what it goes back to.
+      await rangeRun.setPrevLogging(rl);
+    } else {
+      await range.setLogging(rl);
+    }
+    if (m == BatteryMode.saver) warmer.cancel();
+    _trackingOnBatterySince = null;
+    _nudgeSent = false;
+    trackingNudge = false;
+    _applySettings();
+    await _updateLocationNeed();
+    if (settings.tripMode) _maybeSendLive();
+    notifyListeners();
+    return null;
+  }
+
+  /// The mode's values win over a stray change (the switches are locked,
+  /// this is the safety net).
+  void _enforceBatteryMode() {
+    final m = settings.batteryMode;
+    final share = forcedBy(m, BatterySetting.shareLocation);
+    if (share != null) settings.tripMode = share;
+    final warm = forcedBy(m, BatterySetting.warmHome);
+    if (warm != null) settings.warmHome = warm;
+  }
+
+  void _enforceRangeMode() {
+    final want = forcedBy(settings.batteryMode, BatterySetting.rangeLogging);
+    if (want == null || range.logging == want) return;
+    if (!want && rangeRun.running) return; // never stop a running test
+    unawaited(range.setLogging(want));
+  }
+
+  void _syncControlledNotes() => range.setControlled(
+    controls(settings.batteryMode, BatterySetting.rangeLogging)
+        ? controlledNote
+        : null,
+  );
+
+  DateTime? _trackingOnBatterySince;
+  bool _nudgeSent = false;
+
+  /// Tracking has run on battery for over 3 hours: suggest Normal (shown
+  /// on Settings and the connection sheet until dismissed).
+  bool trackingNudge = false;
+
+  void dismissTrackingNudge() {
+    if (!trackingNudge) return;
+    trackingNudge = false;
+    notifyListeners();
+  }
+
+  void _checkTrackingNudge(DateTime now) {
+    if (!_tracking || _pluggedIn) {
+      _trackingOnBatterySince = null;
+      _nudgeSent = false;
+      if (trackingNudge) {
+        trackingNudge = false;
+        notifyListeners();
+      }
+      return;
+    }
+    final since = _trackingOnBatterySince ??= now;
+    if (_nudgeSent || now.difference(since) < trackingNudgeAfter) return;
+    _nudgeSent = true;
+    trackingNudge = true;
+    host.notify(
+      'Tracking is using battery',
+      'Battery mode has been on Tracking for 3 hours without a charger. '
+          'Switch back to Normal to save battery: Settings > Battery > '
+          'Battery mode.',
+    );
+    notifyListeners();
+  }
+
   bool get _needLocation =>
       settings.tripMode ||
       recorder.recording ||
@@ -693,11 +838,15 @@ class TripController extends ChangeNotifier {
       _onScreen ||
       nav != null ||
       drive != null ||
-      range.logging;
+      range.logging ||
+      _tracking;
 
   Duration get _wantedInterval {
     var base = _baseInterval;
-    if (range.logging && base > rangeGpsInterval) base = rangeGpsInterval;
+    // Range logging and Tracking (v2.6.12): a fix every 10 s.
+    if ((range.logging || _tracking) && base > rangeGpsInterval) {
+      base = rangeGpsInterval;
+    }
     return drivingMode && base > drivingGpsInterval ? drivingGpsInterval : base;
   }
 
@@ -727,6 +876,7 @@ class TripController extends ChangeNotifier {
       drive != null ||
       recorder.recording ||
       range.logging ||
+      _tracking ||
       sos.active != null;
 
   /// What the location was last started with (tests / debug).
@@ -2844,6 +2994,7 @@ class TripController extends ChangeNotifier {
     final now = _clock();
     sos.tick();
     _ticks++;
+    _checkTrackingNudge(now);
     mapNet.tick(onScreen: _onScreen, routing: nav != null || drive != null);
     _checkSource();
     if (settings.tripMode) {
@@ -3399,6 +3550,7 @@ class TripController extends ChangeNotifier {
 
   Future<void> update(void Function(TripSettings s) f) async {
     f(settings);
+    _enforceBatteryMode();
     _applySettings();
     await host.saveTripSettings();
     await _updateLocationNeed();

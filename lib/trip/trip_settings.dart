@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'battery_mode.dart';
 import 'geo.dart';
 import 'trip_packet.dart';
 
@@ -23,6 +24,8 @@ class TripSettings {
     this.locationSource = 'auto',
     this.mapCacheMb = 500,
     this.warmHome = true,
+    this.batteryMode = BatteryMode.normal,
+    this.batterySnapshot,
   }) : overlays = overlays ?? [],
        canned = canned ?? List.of(defaultCustomCanned);
 
@@ -78,6 +81,13 @@ class TripSettings {
   /// Keep the map around home on the phone, on Wi-Fi or while charging
   /// only (v2.6.11).
   bool warmHome;
+
+  /// Battery mode (v2.6.12): Saver / Normal / Tracking.
+  BatteryMode batteryMode;
+
+  /// Your own values of the settings the mode controls, saved when leaving
+  /// Normal (null in Normal).
+  BatterySnapshot? batterySnapshot;
   static const radioTrailChoices = [0, 5, 10, 15];
 
   static const defaultCustomCanned = ['Lunch spot', 'Going ahead', 'Found it'];
@@ -102,6 +112,8 @@ class TripSettings {
     if (locationSource != 'auto') 'ls': locationSource,
     if (mapCacheMb != 500) 'mc': mapCacheMb,
     if (!warmHome) 'wh': false,
+    if (batteryMode != BatteryMode.normal) 'bm': batteryMode.id,
+    if (batterySnapshot != null) 'bs': batterySnapshot!.toJson(),
   });
 
   static TripSettings decode(String? s) {
@@ -142,6 +154,8 @@ class TripSettings {
           _ => 500,
         },
         warmHome: j['wh'] != false,
+        batteryMode: BatteryMode.fromId(j['bm']),
+        batterySnapshot: BatterySnapshot.fromJson(j['bs']),
       );
     } catch (_) {
       return TripSettings();
