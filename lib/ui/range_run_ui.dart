@@ -150,8 +150,10 @@ Future<bool?> showRangeStartSheet(BuildContext context, RangeRunActions a) {
                     border: OutlineInputBorder(),
                   ),
                   items: [
-                    for (final m in {...RangeRun.maxChoices, max}.toList()
-                      ..sort())
+                    for (final m in {
+                      ...RangeRun.maxChoices,
+                      max,
+                    }.toList()..sort())
                       DropdownMenuItem(value: m, child: Text(_stopLabel(m))),
                   ],
                   onChanged: (v) => setState(() => max = v ?? max),
@@ -504,9 +506,9 @@ class RangeSummaryView extends StatelessWidget {
                   ClipboardData(text: s.toText(imperial: im)),
                 );
                 if (!context.mounted) return;
-                ScaffoldMessenger.maybeOf(
-                  context,
-                )?.showSnackBar(const SnackBar(content: Text('Summary copied.')));
+                ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+                  const SnackBar(content: Text('Summary copied.')),
+                );
               },
             ),
             OutlinedButton.icon(

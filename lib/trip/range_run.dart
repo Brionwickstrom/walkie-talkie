@@ -201,7 +201,8 @@ class RangeRun extends ChangeNotifier {
       startedAt: from,
       endedAt: capped,
       home: store.homeNode,
-      homeName: logger.radio?.nameOf(store.homeNode) ??
+      homeName:
+          logger.radio?.nameOf(store.homeNode) ??
           last?.homeName ??
           radioNodeLabel(store.homeNode),
       samples: _window(from, end),
@@ -314,7 +315,9 @@ class RangeRunLive {
       lastReplyAt: lastOk?.at,
       snr: lastOk?.snr,
       hops: lastOk?.hops,
-      distM: lastOk == null || home == null ? null : distanceM(home, lastOk.pos),
+      distM: lastOk == null || home == null
+          ? null
+          : distanceM(home, lastOk.pos),
       replies: ok,
       noReplies: fail,
       heard: heard,

@@ -1525,6 +1525,52 @@ Tests: `test/v195_gateway_test.dart`, `test/v195_quiet_test.dart`.
 Tests: `test/v197_meshtastic_import_test.dart` (vectors from the official
 apps and the Python library), `test/v195_quiet_test.dart`.
 
+## v2.6.10: One-tap range test
+
+**Trip map > radar button**, or **Talk > connection chip > Range test to
+Skunk Ape > Start** (Settings search: range test / coverage / ping test).
+Also on the Trip map's **Range test markers** page as **One-tap range test**.
+
+1. Tap the radar button (or Start on Talk's connection sheet; Talk then
+   shows the Trip map).
+2. Pick the **Home radio** (Skunk Ape `!0b4f84fb` by default, or any radio
+   your radio knows) and **Stop by itself after** (30 min to 8 h, default
+   3 h).
+3. Tap **Start range test** and drive or walk away from the home radio.
+4. Tap **Stop** on the strip (or the red stop button) to see the summary.
+
+What it does: it turns on the v2.5.9 **Range logging** (passive packets
+from the home radio, a want-ack ping every 30 s while charging, otherwise
+every 60-120 s, default 90; the phone's exact GPS for every point; no-reply
+points) and keeps track of when this run started. Nothing new is sent over
+the air.
+
+- **Live strip** (top left of the Trip map): elapsed time, the home radio,
+  last reply time, SNR, hops, distance from home at that reply, replies vs.
+  no-reply counts, and a "High-accuracy GPS on" flag. Green connect and red
+  drop markers appear live on the map's Range test markers layer.
+- **Summary** after Stop: furthest reply distance, best and worst SNR
+  (replies and heard packets), connected % (answered pings out of all
+  pings), packets heard, connects / drops. **Copy summary** (plain text,
+  no keys, no exact home spot), **Export CSV** (the Range logging columns
+  plus `dist_m`, this run only) and **Export GPX** (the drive as a track,
+  connect / drop / no-reply / furthest-reply waypoints). The last summary
+  stays under **Last range test** on the Range test markers page.
+- **Stop** puts Range logging back the way it was before Start (off, unless
+  it was already on). Turning Range logging off on its page also ends the
+  run.
+- **Time limit:** it stops by itself after the limit (default 3 h) and says
+  so with a notification. A run carries on after the app restarts; one whose
+  time is up stops at start-up.
+- **Plain errors:** no radio connected ("Connect radio") and no GPS fix
+  ("Turn on location" / "Allow location"), on the start sheet and the strip.
+- **Battery:** the same as Range logging. Each ping is a radio transmit
+  (and up to 3 retries), and the phone uses high-accuracy GPS every 10 s
+  while it runs, which is the biggest drain on battery. The strip's
+  one-second clock runs only while the strip is on screen.
+
+Tests: `test/v2610_range_run_test.dart`, `test/v2610_range_run_ui_test.dart`.
+
 ## v2.6.9: Desktop USB sharing
 
 **Settings > Long-range radio (Meshtastic) >
