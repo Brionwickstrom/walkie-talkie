@@ -49,6 +49,9 @@ class RadioNode {
 
   /// Readable: named by a NodeInfo or heard on a channel we can decode.
   bool get readable => hasInfo || decodedHeard;
+
+  /// Packets read from it on the listen-only public channel (v2.6.4).
+  int publicPackets = 0;
 }
 
 /// A packet from another node, as heard on air (v2.5.9, range logging):
@@ -219,6 +222,34 @@ class MeshtasticSession {
     }
     return 0;
   }
+
+  /// Slot of the listen-only public LongFast channel (v2.6.4): a
+  /// secondary channel with the public name and default key. Null when the
+  /// radio does not have it. A public *primary* channel is not counted:
+  /// that radio's own group is public then, and nothing changes for it.
+  /// (At most 8 channels: cheap enough to work out for every packet.)
+  int? get publicListenIndex {
+    int? found;
+    for (final c in channels.values) {
+      if (c.isSecondary &&
+          c.index > 0 &&
+          (found == null || c.index < found) &&
+          refOf(c) == meshPublicRef) {
+        found = c.index;
+      }
+    }
+    return found;
+  }
+
+  /// [n] was last read on the listen-only public channel (a public node).
+  bool isPublicNode(RadioNode n) {
+    final i = publicListenIndex;
+    return i != null && n.channel == i && n.num != myNodeNum;
+  }
+
+  /// Packets read on the public channel (v2.6.4). They are kept out of
+  /// [packets]: no part of the app ever acts on public traffic.
+  int publicReceived = 0;
 
   /// Other nodes we only know as a number and a signal (heard on a channel
   /// we cannot decode, no NodeInfo).
@@ -449,6 +480,14 @@ class MeshtasticSession {
         if (dm?.batteryLevel != null) node.battery = dm!.batteryLevel;
       }
     } catch (_) {}
+    final pub = publicListenIndex;
+    if (pub != null && p.channel == pub) {
+      // Public traffic (v2.6.4): only who, how strong and how far is kept
+      // for the list; it never reaches the rest of the app.
+      node.publicPackets++;
+      publicReceived++;
+      return true;
+    }
     received++;
     if (!_packets.isClosed) _packets.add(p);
     return true;
@@ -466,6 +505,13 @@ class MeshtasticSession {
     int channel = 0,
     int hopLimitOverride = 0,
   }) async {
+    if (port != PortNum.admin) {
+      final pub = publicListenIndex;
+      if (pub != null && channel == pub) {
+        // The public channel is listen-only (v2.6.4).
+        throw StateError('Public LongFast is listen-only.');
+      }
+    }
     if (payload.length > meshDataPayloadLen) {
       throw ArgumentError('payload ${payload.length} > $meshDataPayloadLen');
     }

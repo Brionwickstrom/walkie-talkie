@@ -1525,6 +1525,48 @@ Tests: `test/v195_gateway_test.dart`, `test/v195_quiet_test.dart`.
 Tests: `test/v197_meshtastic_import_test.dart` (vectors from the official
 apps and the Python library), `test/v195_quiet_test.dart`.
 
+## v2.6.4: Show public nodes
+
+**Radio settings > Show public nodes** (right under Relay through public
+radios) lists the public Meshtastic radios in reach of your radio, so you can
+see who could pass your messages along.
+
+- **How:** the switch adds the public LongFast channel (name "LongFast", the
+  well-known default key) to your radio as an extra, **listen-only**
+  secondary channel: MQTT uplink and downlink off, location precision 0
+  (the radio never sends its position there), and the app never sends on
+  it (the session refuses, links and the LoRa queue skip it). Only that
+  channel is written (begin / set_channel / commit, read back by name and
+  hash); the main channel, keys and LoRa settings do not change. Off takes
+  the channel off again. Both ask first.
+- **The list:** each public radio by its radio ID ("Public radio
+  !1a2b3c4d") with when it was last heard, signal (SNR, RSSI), hops and
+  distance (from your radio's position, else the phone's). **No names and
+  no locations** (their position is used only to work out the distance).
+  Newest first, 25 rows, then "and N more".
+- **Hearing them needs the public frequency:** with Relay through public
+  radios off, the radio is on another slot and hears no public radios; the
+  section says so. Your messages go through public radios only when Relay
+  through public radios is on (unchanged from v2.5.8).
+- **Kept apart:** public packets never reach the rest of the app (Talk,
+  messages, weather, gateway). Public radios are left out of Radios nearby
+  (a count points here), the Range test home choices, the radio match
+  check, the Meshtastic channel links and the Location precision list (so
+  "Set all channels to Full" never touches the public channel). A public
+  LongFast channel set up elsewhere with upload or location on is flagged.
+- **Privacy:** public radios can see your radio's ID, and its name if they
+  ask for it (the radio answers those requests itself).
+- **Battery:** nothing is polled or sent to fill the list. While the
+  channel is on, the radio passes every public packet it hears to the
+  phone over Bluetooth/USB, so a busy area means more wake-ups (a small
+  drain); the list redraws at most every 5 s and only while it is open.
+- **Search:** "public nodes", "strangers", "longfast", "snr", "rssi" find
+  it.
+
+Tests: `test/v264_public_nodes_test.dart` (fake radio; not yet tried on a
+real radio). Screenshots:
+`V264_SHOTS=/workspace flutter test test/v264_public_nodes_test.dart`.
+
 ## v2.6.3: Plain error messages with a fix button
 
 Common dead-end errors are now one plain sentence that says what happened

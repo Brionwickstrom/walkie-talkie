@@ -755,7 +755,8 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
                 in c.radioDevice.session?.nodes.values ?? const <RadioNode>[])
               if (n.num != c.radioDevice.session?.myNodeNum &&
                   n.readable &&
-                  n.longName.isNotEmpty)
+                  n.longName.isNotEmpty &&
+                  !(c.radioDevice.session?.isPublicNode(n) ?? false))
                 (num: n.num, name: n.longName),
           ],
           share: trip.host.shareFile,

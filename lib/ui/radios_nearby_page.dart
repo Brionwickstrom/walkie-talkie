@@ -89,6 +89,7 @@ class RadiosNearby {
     this.mine,
     this.radios = const [],
     this.unreadable = 0,
+    this.public = 0,
   });
 
   /// A radio is paired and its session is running.
@@ -100,6 +101,10 @@ class RadiosNearby {
 
   /// Nodes known only as a number and a signal (another channel).
   final int unreadable;
+
+  /// Public radios heard on the listen-only public channel (v2.6.4): not
+  /// listed here (no names yet), they are on the Radio settings page.
+  final int public;
 }
 
 /// Build the list from what the radio session and the LoRa transport already
@@ -187,8 +192,13 @@ RadiosNearby computeRadiosNearby({
 
   final list = <NearbyRadio>[];
   var unreadable = 0;
+  var public = 0;
   for (final n in session.nodes.values) {
     if (n.num == me) continue;
+    if (session.isPublicNode(n)) {
+      public++;
+      continue;
+    }
     if (!n.readable) {
       unreadable++;
       continue;
@@ -210,6 +220,7 @@ RadiosNearby computeRadiosNearby({
     mine: own == null ? null : build(own, mine: true),
     radios: list,
     unreadable: unreadable,
+    public: public,
   );
 }
 
@@ -335,7 +346,7 @@ class _RadiosNearbyPageState extends State<RadiosNearbyPage> {
       if (mine != null) {
         children.add(_ThisRadio(mine));
       }
-      if (data.radios.isEmpty && data.unreadable == 0) {
+      if (data.radios.isEmpty && data.unreadable == 0 && data.public == 0) {
         children.add(const _Note('No other radios heard yet.'));
       }
       for (final r in data.radios) {
@@ -343,6 +354,21 @@ class _RadiosNearbyPageState extends State<RadiosNearbyPage> {
           _RadioTile(
             r,
             line: nearbyRadioLine(r, now: now, imperial: imperial),
+          ),
+        );
+      }
+      if (data.public > 0) {
+        children.add(
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            child: Text(
+              'Public radios heard: ${data.public} (listed in Radio settings '
+              'under Show public nodes)',
+              key: const Key('radios-public'),
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
           ),
         );
       }

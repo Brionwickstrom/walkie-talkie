@@ -616,3 +616,44 @@ int? meshFreeSlot(
   }
   return null;
 }
+
+// ------------------------------------------- public nodes (v2.6.4)
+
+/// Name of the public channel every Meshtastic radio uses out of the box
+/// (an unnamed primary on the LongFast preset is called "LongFast").
+const String meshPublicName = 'LongFast';
+
+/// The one-byte "simple" key of the public channel (index 1 = the
+/// firmware's well-known default key). Public on purpose: every radio
+/// ships with it, so it protects nothing.
+const List<int> _meshPublicPsk = [1];
+
+/// The public LongFast channel's link (name + hash) as the firmware
+/// computes it, so it can be found on a radio whatever slot it is in.
+final MeshChannelRef meshPublicRef = MeshChannelRef(
+  meshPublicName,
+  meshChannelHash(meshPublicName, meshExpandPsk(_meshPublicPsk)),
+);
+
+/// The `ChannelSettings` of the listen-only public channel (v2.6.4):
+/// name "LongFast", the default key, MQTT uplink and downlink off, and
+/// module settings with location precision 0 so the radio never sends its
+/// position on it. The app never sends anything on it either.
+Uint8List meshPublicListenSettings() {
+  final w = PbWriter()
+    ..bytes(2, _meshPublicPsk)
+    ..string(3, meshPublicName)
+    ..boolean(5, false) // uplink_enabled: off
+    ..boolean(6, false); // downlink_enabled: off
+  // module_settings{position_precision: 0}: written (empty) so the radio
+  // knows the precision is set, and set to "never share".
+  w.message(7, Uint8List(0));
+  return w.toBytes();
+}
+
+/// The listen-only public channel as a one-channel set in add mode (the
+/// radio's own settings are never changed by it), for [MeshChannelWriter].
+MeshChannelSet meshPublicListenSet() => MeshChannelSet.decode(
+  (PbWriter()..message(1, meshPublicListenSettings())).toBytes(),
+  addMode: true,
+);

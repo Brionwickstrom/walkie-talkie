@@ -8,6 +8,7 @@ import '../lora/meshtastic_settings.dart';
 import '../lora/radio_match.dart';
 import 'adaptive_layout.dart';
 import 'friendly_error.dart';
+import 'public_nodes.dart';
 import 'radio_match_card.dart';
 import 'settings_index.dart';
 import 'settings_search.dart';
@@ -64,6 +65,35 @@ const radioNotHereText =
     'security keys, the main channel name and key, Wi-Fi / MQTT, modules, '
     'display, role, position intervals, transmit power, '
     'custom speed.';
+
+/// Show public nodes (v2.6.4) texts.
+const radioPublicExplain =
+    'Adds the public LongFast channel to your radio as listen-only, so you '
+    'can see which public radios are in reach. Nothing is sent on it: no '
+    'messages, no location, no internet upload.';
+
+const radioPublicNote =
+    'Public radios are shown by radio ID with signal, hops and distance; '
+    'no names or locations. Your messages go through public radios only '
+    'when Relay through public radios is on. Uses a little more battery '
+    'while on: the radio passes every public packet it hears to this '
+    'device.';
+
+const radioPublicConfirmOn =
+    'Your radio gets an extra listen-only channel: the public LongFast '
+    'channel with its well-known key. Internet upload and download are off, '
+    'location sharing on it is off, and the app never sends on it.';
+
+const radioPublicConfirmLines = [
+  'Public radios can see your radio\'s ID, and its name if they ask for '
+      'it.',
+  'Your main channel, keys and radio settings do not change.',
+  'It uses a little more battery while on.',
+];
+
+const radioPublicConfirmOff =
+    'The public LongFast channel is taken off your radio. Your other '
+    'channels do not change.';
 
 /// The lines of the read-only summary.
 List<String> radioSummaryLines(MeshtasticSession s) {
@@ -569,6 +599,116 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
     );
   }
 
+  /// Show public nodes (v2.6.4): add or take off the listen-only public
+  /// channel after a confirm.
+  Future<void> _togglePublic(bool on) async {
+    final ok = await _confirm(
+      title: on ? 'Show public nodes?' : 'Stop showing public nodes?',
+      intro: on ? radioPublicConfirmOn : radioPublicConfirmOff,
+      lines: on ? radioPublicConfirmLines : const [],
+    );
+    if (ok != true || !mounted) return;
+    Future<void> go() async {
+      _again = go;
+      setState(() {
+        _step = MeshWriteStep.preparing;
+        _failed = null;
+        _saved = null;
+      });
+      final err = await c.setPublicListen(
+        on,
+        onStep: (st) {
+          if (mounted) setState(() => _step = st);
+        },
+      );
+      _finish(
+        err,
+        on
+            ? 'Listening to public radios (nothing is sent on that channel).'
+            : 'Public nodes are no longer shown; public LongFast is off '
+                  'your radio.',
+      );
+    }
+
+    await go();
+  }
+
+  Widget _publicSection(
+    ThemeData theme,
+    MeshtasticSession? s,
+    bool canEdit,
+    Widget Function(String) head,
+  ) {
+    if (s == null) return const SizedBox.shrink();
+    final small = theme.textTheme.bodySmall;
+    final imperial = c.trip?.settings.imperial ?? true;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        head('Show public nodes'),
+        SwitchListTile(
+          key: const Key('rs-public'),
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Listen to public radios'),
+          subtitle: const Text(radioPublicExplain),
+          value: c.publicListenOn,
+          onChanged: canEdit ? _togglePublic : null,
+        ),
+        if (c.publicListenShares)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Text(
+              'This public LongFast channel was set up outside the app and '
+              'shares more than listening (internet upload or location). '
+              'Turn it off and on again here to make it listen-only.',
+              key: const Key('rs-public-shares'),
+              style: small?.copyWith(color: theme.colorScheme.error),
+            ),
+          ),
+        PublicNodesList(
+          key: const Key('rs-public-list'),
+          session: s,
+          build: (context) {
+            final data = computePublicNodes(
+              session: s,
+              onPublicSlot: _relayInfo(s).on,
+              phone: c.trip?.myFix?.pos,
+            );
+            final now = DateTime.now();
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  publicNodesStateText(data),
+                  key: const Key('rs-public-state'),
+                  style: small,
+                ),
+                for (final n in data.nodes)
+                  ListTile(
+                    key: Key('rs-public-node-${n.num}'),
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.cell_tower),
+                    title: Text(n.label),
+                    subtitle: Text(
+                      publicNodeLine(n, now: now, imperial: imperial),
+                    ),
+                  ),
+                if (data.more > 0)
+                  Text(
+                    'and ${data.more} more heard earlier',
+                    key: const Key('rs-public-more'),
+                    style: small,
+                  ),
+              ],
+            );
+          },
+        ),
+        Text(radioPublicNote, key: const Key('rs-public-note'), style: small),
+      ],
+    );
+  }
+
   Widget _relaySection(
     ThemeData theme,
     MeshtasticSession? s,
@@ -991,6 +1131,10 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
                   SettingAnchor(
                     id: 'radio-relay',
                     child: _relaySection(theme, s, canEdit, head),
+                  ),
+                  SettingAnchor(
+                    id: 'radio-public-nodes',
+                    child: _publicSection(theme, s, canEdit, head),
                   ),
                   if (backup != null) ...[
                     SettingAnchor(

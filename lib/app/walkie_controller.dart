@@ -204,7 +204,12 @@ class WalkieController extends ChangeNotifier {
     // on that channel's slot of the paired radio (looked up by name +
     // hash on whichever radio is paired).
     loraTransport.meshLinkFor = meshLinkForFrame;
-    loraTransport.meshIndexOf = (ref) => radioDevice.session?.indexOf(ref);
+    loraTransport.meshIndexOf = (ref) {
+      final s = radioDevice.session;
+      final i = s?.indexOf(ref);
+      // Never the listen-only public channel (v2.6.4).
+      return i != null && i == s!.publicListenIndex ? null : i;
+    };
     manager.meshLinkFor = meshLinkForFrame;
     // Only form a Wi-Fi Direct group with phones we cannot already reach
     // over a shared Wi-Fi / hotspot.
@@ -3409,11 +3414,16 @@ class WalkieController extends ChangeNotifier {
   /// The Meshtastic channel [ch] is shared with, or null.
   MeshLink? meshLinkOf(int ch) => settings.meshLinks[ch];
 
-  /// The paired radio's channels (primary and secondary, by slot).
+  /// The paired radio's channels (primary and secondary, by slot). The
+  /// listen-only public channel (v2.6.4) is left out: it is not linked,
+  /// and its location precision stays 0 (never "Set all to Full").
   List<MeshRadioChannel> get radioChannels {
     final s = radioDevice.session;
     if (s == null) return const [];
-    return s.channels.values.where((c) => !c.isDisabled).toList()
+    final pub = s.publicListenIndex;
+    return s.channels.values
+        .where((c) => !c.isDisabled && c.index != pub)
+        .toList()
       ..sort((a, b) => a.index.compareTo(b.index));
   }
 
@@ -3434,8 +3444,76 @@ class WalkieController extends ChangeNotifier {
       if (!settings.meshLinks.containsKey(ch)) ch,
   ];
 
-  MeshChannelWriter meshWriter() =>
+  /// Writer for Meshtastic channels; tests replace it with short waits.
+  late MeshChannelWriter Function() meshWriterFactory = () =>
       MeshChannelWriter(() => radioDevice.session);
+
+  MeshChannelWriter meshWriter() => meshWriterFactory();
+
+  // ------------------------------------------- public nodes (v2.6.4)
+
+  /// The radio has the listen-only public LongFast channel.
+  bool get publicListenOn => radioDevice.session?.publicListenIndex != null;
+
+  /// The radio's public channel was set up elsewhere (the Meshtastic app)
+  /// with internet upload or location sharing on: not listen-only.
+  bool get publicListenShares {
+    final s = radioDevice.session;
+    final i = s?.publicListenIndex;
+    final ch = i == null ? null : s!.channels[i];
+    return ch != null && (ch.uplinkEnabled || ch.positionPrecision != 0);
+  }
+
+  /// Add ([on]) or remove the listen-only public LongFast channel on the
+  /// connected radio: uplink and downlink off, location precision 0, and
+  /// the app never sends on it. Only the channel is written; the radio's
+  /// main channel, keys and LoRa settings do not change. Null when done,
+  /// else the plain reason.
+  Future<String?> setPublicListen(
+    bool on, {
+    void Function(MeshWriteStep step)? onStep,
+  }) async {
+    if (radioEditing) return 'Another change is still being saved.';
+    if (radioEditBlocked) {
+      return 'A talk is going on. Try again when it is over.';
+    }
+    final s = radioDevice.session;
+    if (s == null || !radioDevice.ready) {
+      return 'Connect your radio first.';
+    }
+    if (on == (s.publicListenIndex != null)) return null;
+    radioEditing = true;
+    notifyListeners();
+    try {
+      final w = meshWriter();
+      if (on) {
+        final r = await w.addChannel(meshPublicListenSet(), 0, onStep: onStep);
+        final now = radioDevice.session;
+        final ch = now?.channels[r.index];
+        if (ch != null && (ch.uplinkEnabled || ch.positionPrecision != 0)) {
+          // Not listen-only after all: take it off rather than leave it.
+          await w.removeChannel(r.index);
+          return 'Your radio did not keep public LongFast listen-only, so it '
+              'was taken off again.';
+        }
+        debugLog.add('radio', 'public listen channel on (slot ${r.index})');
+      } else {
+        final i = s.publicListenIndex;
+        if (i != null) await w.removeChannel(i, onStep: onStep);
+        debugLog.add('radio', 'public listen channel off');
+      }
+      return null;
+    } on MeshWriteException catch (e) {
+      debugLog.add('radio', 'public listen failed: ${e.message}');
+      return e.message;
+    } catch (e) {
+      debugLog.add('radio', 'public listen failed: ${e.runtimeType}');
+      return 'Your radio did not take the change.';
+    } finally {
+      radioEditing = false;
+      notifyListeners();
+    }
+  }
 
   // ------------------------------------------- radio settings (v2.5.3)
 

@@ -72,7 +72,12 @@ List<({String name, MeshRadioChannel channel})> _namedChannels(
     s.modemPreset ?? 0,
     usePreset: s.usePreset ?? true,
   );
-  final list = s.channels.values.where((c) => !c.isDisabled).toList()
+  // The listen-only public channel (v2.6.4) is not one of the group's
+  // channels: radios with and without it still match.
+  final pub = s.publicListenIndex;
+  final list = s.channels.values
+      .where((c) => !c.isDisabled && c.index != pub)
+      .toList()
     ..sort((a, b) => a.index.compareTo(b.index));
   final seen = <String>{};
   final out = <({String name, MeshRadioChannel channel})>[];
