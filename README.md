@@ -2728,3 +2728,45 @@ refreshes, just not waited for), and none at all offline. The warm-up uses
 up to about 3 MB a week, only on Wi-Fi or a charger. A phone charging in a
 car on mobile data counts as charging, so it may use that data once a week;
 switch Keep home area ready off to stop it.
+
+## v2.6.12: Battery modes
+
+One **Battery mode** picker switches everything that costs battery at once:
+**Settings > Battery > Battery mode** (search "battery", "saver",
+"tracking" or "power mode"), and also on Talk: tap the connection chip, the
+picker is in the sheet. Switch any time.
+
+| Mode | What it does | Battery |
+|---|---|---|
+| **Saver** (leaf on the chip) | Share my location off (so no live updates, check-ins or radio trail summaries), Range logging and its pings off, Keep home area ready (background map precaching) off. The radio link stays up: messages, voice and rings still come in. A location goes out only with SOS (always works, full speed), Check in now or a dropped pin. | The least. The phone's GPS runs only while the Trip map is open, navigating, recording or in SOS; no radio pings from this phone. |
+| **Normal** | Exactly your own settings, as before v2.6.12. | Depends on your settings. |
+| **Tracking** (target on the chip) | Share my location on, high-accuracy GPS every 10 s, Range logging on: a ping to the home radio every 30 s while charging, otherwise every 60-120 s (your Range logging setting, 90 s by default). | The most: GPS every 10 s and a radio transmit every 30-120 s. Keep the phone plugged in if you can. |
+
+Rules:
+
+- **Snapshot and restore.** Leaving Normal saves your own Share my
+  location, Range logging and Keep home area ready; picking Normal again
+  puts exactly those back (also after Saver -> Tracking -> Normal, and
+  across an app restart).
+- **Locked, not dropped.** While Saver or Tracking is on, a switch the mode
+  controls is greyed out with "Controlled by Battery mode"; pick Normal to
+  change it. The mode is never changed behind your back. Settings a mode
+  does not control (check-in interval, ping interval, Location source,
+  Keep home area ready in Tracking) stay yours.
+- **Location source** (v2.6.7) is never changed. In Saver, Auto still uses
+  the radio's own GPS when it is good, which costs the phone nothing.
+  Tracking uses the phone's fast GPS, like Range logging.
+- **One-tap range test** (v2.6.10): it needs pings, so it cannot start in
+  Saver (the start sheet says so, with Switch to Tracking / Switch to
+  Normal), and Saver cannot be picked while a test runs (Stop range test,
+  or use Tracking). Tracking during a test keeps Range logging on after it
+  ends; Normal during a test keeps it on until the test ends, then puts
+  your own setting back.
+- **Tracking on battery for 3 hours** (not charging): one gentle
+  notification and a note on the picker suggesting Normal (Switch to Normal
+  / Keep Tracking). Plugging in resets the 3 hours.
+- Plain errors: Saver during a range test, and a mode that could not be
+  saved (nothing changes; Try again).
+- The older **Battery saver** (Normal / Saver for the phone links, now
+  under "Connection battery saver") and **Offline power save** are separate
+  and work as before; they stack with any Battery mode.
