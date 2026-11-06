@@ -61,7 +61,7 @@ class _MapCacheSettingsState extends State<MapCacheSettings> {
       builder: (ctx) => AlertDialog(
         title: const Text('Clear map cache?'),
         content: Text(
-          'Deletes ${s == null ? 'the' : formatBytes(s.viewedBytes)} map '
+          'Deletes ${s == null ? 'the' : '${formatBytes(s.viewedBytes)} of'} map '
           'tiles you have looked at. Saved offline areas stay. The map '
           'downloads tiles again as you look around, so the next start '
           'is slower and uses some data.',
