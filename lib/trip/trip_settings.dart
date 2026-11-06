@@ -21,6 +21,8 @@ class TripSettings {
     this.driveVoice = true,
     this.trailVoice = false,
     this.locationSource = 'auto',
+    this.mapCacheMb = 500,
+    this.warmHome = true,
   }) : overlays = overlays ?? [],
        canned = canned ?? List.of(defaultCustomCanned);
 
@@ -66,6 +68,16 @@ class TripSettings {
   /// Where "where I am" comes from (v2.6.7): 'auto' (the radio's GPS while
   /// it is good, else the phone's), 'phone' or 'radio'.
   String locationSource;
+
+  /// Map cache limit in MB (v2.6.11): viewed tiles past it are dropped,
+  /// least recently used first; saved offline areas never count against
+  /// being dropped.
+  int mapCacheMb;
+  static const mapCacheChoices = [250, 500, 1000, 2000];
+
+  /// Keep the map around home on the phone, on Wi-Fi or while charging
+  /// only (v2.6.11).
+  bool warmHome;
   static const radioTrailChoices = [0, 5, 10, 15];
 
   static const defaultCustomCanned = ['Lunch spot', 'Going ahead', 'Found it'];
@@ -88,6 +100,8 @@ class TripSettings {
     if (!driveVoice) 'dv': false,
     if (trailVoice) 'tv': true,
     if (locationSource != 'auto') 'ls': locationSource,
+    if (mapCacheMb != 500) 'mc': mapCacheMb,
+    if (!warmHome) 'wh': false,
   });
 
   static TripSettings decode(String? s) {
@@ -123,6 +137,11 @@ class TripSettings {
           'radio' => 'radio',
           _ => 'auto',
         },
+        mapCacheMb: switch ((j['mc'] as num?)?.toInt()) {
+          final v? when mapCacheChoices.contains(v) => v,
+          _ => 500,
+        },
+        warmHome: j['wh'] != false,
       );
     } catch (_) {
       return TripSettings();

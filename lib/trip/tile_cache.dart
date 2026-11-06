@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -654,8 +655,15 @@ class TileCache {
     } catch (_) {}
     final fresh = mtime != null && DateTime.now().difference(mtime) < minFresh;
     final off = !online || !net;
+    if (cached != null) _touch(s.id, z, x, y);
     if (cached != null && (fresh || off)) return cached;
     if (off) return null;
+    if (cached != null && staleWhileRevalidate) {
+      // v2.6.11: draw the tile on the phone at once, ask the server
+      // behind it (the same one request as before, just not waited for).
+      _later('${s.id}/$z/$x/$y', () => _revalidate(s, z, x, y));
+      return cached;
+    }
     final got = await _fetch(s, z, x, y, conditional: cached != null);
     if (got == null) return cached; // offline / error: stale is fine
     if (got.isEmpty && cached != null) {
@@ -666,6 +674,138 @@ class TileCache {
       return cached;
     }
     return got.isEmpty ? cached : got;
+  }
+
+  /// The conditional request a stale tile gets (304 = keep, mark fresh).
+  Future<void> _revalidate(MapSource s, int z, int x, int y) async {
+    final got = await _fetch(s, z, x, y, conditional: true);
+    if (got != null && got.isEmpty) {
+      try {
+        await _file(s.id, z, x, y).setLastModified(DateTime.now());
+      } catch (_) {}
+    }
+  }
+
+  // ------------------------------------------- v2.6.11: faster map start
+
+  /// Show a stale tile from the phone at once and refresh it behind the
+  /// map, instead of waiting for the server (the map used to wait about a
+  /// signal round trip per tile, two at a time).
+  bool staleWhileRevalidate = true;
+
+  /// Refreshes behind the map at most this many at a time.
+  static const maxBackgroundRefreshes = 2;
+
+  final Set<String> _refreshing = {};
+  final List<(String, Future<void> Function())> _refreshQueue = [];
+  int _refreshRunning = 0;
+  Completer<void>? _refreshIdle;
+
+  /// Each tile is refreshed at most once a run; nothing is queued when the
+  /// queue is long (the tiles are fine as they are).
+  void _later(String key, Future<void> Function() job) {
+    if (!_refreshing.add(key)) return;
+    if (_refreshQueue.length > 400) return;
+    _refreshQueue.add((key, job));
+    _pump();
+  }
+
+  void _pump() {
+    while (_refreshRunning < maxBackgroundRefreshes &&
+        _refreshQueue.isNotEmpty) {
+      final (_, job) = _refreshQueue.removeAt(0);
+      _refreshRunning++;
+      unawaited(
+        job().catchError((_) {}).whenComplete(() {
+          _refreshRunning--;
+          if (!online || !net) _refreshQueue.clear();
+          _pump();
+        }),
+      );
+    }
+    if (_refreshRunning == 0 && _refreshQueue.isEmpty) {
+      _refreshIdle?.complete();
+      _refreshIdle = null;
+    }
+  }
+
+  /// Done when no refresh is waiting or running (tests).
+  Future<void> refreshesDone() {
+    if (_refreshRunning == 0 && _refreshQueue.isEmpty) return Future.value();
+    return (_refreshIdle ??= Completer<void>()).future;
+  }
+
+  /// When each tile on the phone was last drawn (this run and before),
+  /// relative path -> ms since epoch: the cache drops the least recently
+  /// used tiles first, not just the oldest downloads.
+  final Map<String, int> _used = {};
+  bool _usedLoaded = false;
+  File get _usedFile => File('${dir.path}/used.json');
+
+  void _touch(String src, int z, int x, int y) {
+    _used['$src/$z/$x/$y.png'] = DateTime.now().millisecondsSinceEpoch;
+    if (_used.length > 60000) _used.remove(_used.keys.first);
+  }
+
+  Future<void> _loadUsed() async {
+    if (_usedLoaded) return;
+    _usedLoaded = true;
+    try {
+      if (!await _usedFile.exists()) return;
+      final j = jsonDecode(await _usedFile.readAsString()) as Map;
+      j.forEach((k, v) {
+        if (k is String && v is num) _used.putIfAbsent(k, v.toInt);
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _saveUsed() async {
+    try {
+      await dir.create(recursive: true);
+      await _usedFile.writeAsString(jsonEncode(_used));
+    } catch (_) {}
+  }
+
+  /// Whether a tile of [s] is on the phone (any of its photo folders).
+  Future<bool> has(MapSource s, int z, int x, int y) async {
+    final dirs = s.photos
+        ? [
+            if (z >= photoMinZoom)
+              for (final c in _photoChain(z, x, y)) c.id,
+            if (z <= oldPhotoMaxZoom) oldPhotos.id,
+          ]
+        : [s.id];
+    for (final d in dirs) {
+      try {
+        if (await _file(d, z, x, y).exists()) return true;
+      } catch (_) {}
+    }
+    return false;
+  }
+
+  /// What the map cache holds, counted off the main thread.
+  Future<MapCacheStats> stats() async {
+    final regs = [for (final r in regions) r.toJson()];
+    final path = dir.path;
+    try {
+      return await Isolate.run(() => _scanCache(path, regs));
+    } catch (_) {
+      return const MapCacheStats();
+    }
+  }
+
+  /// Settings > Map > Clear map cache: delete the tiles that were only
+  /// viewed; saved offline areas stay. Returns the bytes freed.
+  Future<int> clearViewed() async {
+    _refreshQueue.clear();
+    _used.clear();
+    final regs = [for (final r in regions) r.toJson()];
+    final path = dir.path;
+    final freed = await Isolate.run(() => _deleteViewed(path, regs));
+    try {
+      if (await _usedFile.exists()) await _usedFile.delete();
+    } catch (_) {}
+    return freed;
   }
 
   // ------------------------------------------- newer photos (v2.5.5)
@@ -769,8 +909,19 @@ class TileCache {
       final f = _file(c.id, z, x, y);
       final b = await _read(f);
       if (b == null) continue;
+      _touch(c.id, z, x, y);
       if (off || await _isFresh(f, photoFresh)) return b;
       cached ??= b;
+    }
+    if (cached != null && staleWhileRevalidate && z <= photoViewMaxZoom) {
+      // v2.6.11: the photos on the phone now, newer ones behind the map.
+      final c0 = chain.first;
+      _later('${c0.id}/$z/$x/$y', () async {
+        for (final c in chain) {
+          if (await _fetchPhoto(c, z, x, y) != null) return;
+        }
+      });
+      return cached;
     }
     if (z > photoViewMaxZoom && cached == null) {
       // Zoom 18 only exists inside saved areas: otherwise the zoom 17
@@ -833,9 +984,14 @@ class TileCache {
     final old = oldPhotos;
     final f = _file(old.id, z, x, y);
     final cached = await _read(f);
+    if (cached != null) _touch(old.id, z, x, y);
     final fresh = cached != null && await _isFresh(f, minFresh);
     if (cached != null && (fresh || off)) return cached;
     if (off) return null;
+    if (cached != null && staleWhileRevalidate) {
+      _later('${old.id}/$z/$x/$y', () => _revalidate(old, z, x, y));
+      return cached;
+    }
     final got = await _fetch(old, z, x, y, conditional: cached != null);
     if (got == null) return cached;
     if (got.isEmpty) {
@@ -1224,43 +1380,20 @@ class TileCache {
     return n;
   }
 
-  /// Delete viewed tiles (oldest first) until under [maxBytes]; saved
-  /// areas are kept.
+  /// Delete viewed tiles, least recently used first, until under
+  /// [maxBytes]; saved areas are kept. v2.6.11: the folder walk runs off
+  /// the main thread, so the map does not stutter while it runs.
   Future<void> trim() async {
-    final files = <(File, DateTime, int, bool)>[];
-    var total = 0;
+    await _loadUsed();
+    final regs = [for (final r in regions) r.toJson()];
+    final used = Map<String, int>.of(_used);
+    final path = dir.path;
+    final cap = maxBytes;
     try {
-      if (!await dir.exists()) return;
-      await for (final e in dir.list(recursive: true, followLinks: false)) {
-        if (e is! File || !e.path.endsWith('.png')) continue;
-        final st = await e.stat();
-        total += st.size;
-        final parts = e.path
-            .substring(dir.path.length + 1)
-            .split(RegExp(r'[\\/]'));
-        var keep = false;
-        if (parts.length == 4) {
-          final z = int.tryParse(parts[1]), x = int.tryParse(parts[2]);
-          final y = int.tryParse(parts[3].split('.').first);
-          if (z != null && x != null && y != null) {
-            keep = inRegion(parts[0], z, x, y);
-          }
-        }
-        files.add((e, st.modified, st.size, keep));
-      }
-    } catch (_) {
-      return;
-    }
-    if (total <= maxBytes) return;
-    files.sort((a, b) => a.$2.compareTo(b.$2));
-    for (final f in files) {
-      if (total <= maxBytes) break;
-      if (f.$4) continue;
-      try {
-        await f.$1.delete();
-        total -= f.$3;
-      } catch (_) {}
-    }
+      final gone = await Isolate.run(() => _trimCache(path, regs, used, cap));
+      gone.forEach(_used.remove);
+    } catch (_) {}
+    await _saveUsed();
   }
 
   /// Delete every tile and saved area.
@@ -1272,9 +1405,133 @@ class TileCache {
   }
 
   void close() {
+    _refreshQueue.clear();
+    if (_used.isNotEmpty) unawaited(_saveUsed());
     _client?.close(force: true);
     _client = null;
     _photoClient?.close(force: true);
     _photoClient = null;
   }
+}
+
+// ---------------------------------------------------- v2.6.11 cache helpers
+
+/// What the map cache holds: tiles only viewed (cleared by "Clear map
+/// cache", trimmed to the limit) and tiles of saved offline areas.
+class MapCacheStats {
+  const MapCacheStats({
+    this.viewedBytes = 0,
+    this.viewedTiles = 0,
+    this.savedBytes = 0,
+    this.savedTiles = 0,
+  });
+  final int viewedBytes, viewedTiles, savedBytes, savedTiles;
+  int get totalBytes => viewedBytes + savedBytes;
+}
+
+/// Every tile file under [path]: (relative path, file, keep = in a saved
+/// area).
+Iterable<(String, File, bool)> _tileFiles(
+  String path,
+  List<Map<String, Object?>> regs,
+) sync* {
+  final regions = [
+    for (final r in regs)
+      if (OfflineRegion.fromJson(r) != null) OfflineRegion.fromJson(r)!,
+  ];
+  final dir = Directory(path);
+  if (!dir.existsSync()) return;
+  for (final e in dir.listSync(recursive: true, followLinks: false)) {
+    if (e is! File || !e.path.endsWith('.png')) continue;
+    final rel = e.path.substring(path.length + 1).replaceAll('\\', '/');
+    final parts = rel.split('/');
+    var keep = false;
+    if (parts.length == 4) {
+      final z = int.tryParse(parts[1]), x = int.tryParse(parts[2]);
+      final y = int.tryParse(parts[3].split('.').first);
+      if (z != null && x != null && y != null) {
+        keep = regions.any((r) => r.covers(parts[0], z, x, y));
+      }
+    }
+    yield (rel, e, keep);
+  }
+}
+
+MapCacheStats _scanCache(String path, List<Map<String, Object?>> regs) {
+  var vb = 0, vt = 0, sb = 0, st = 0;
+  for (final (_, f, keep) in _tileFiles(path, regs)) {
+    int n;
+    try {
+      n = f.lengthSync();
+    } catch (_) {
+      continue;
+    }
+    if (keep) {
+      sb += n;
+      st++;
+    } else {
+      vb += n;
+      vt++;
+    }
+  }
+  return MapCacheStats(
+    viewedBytes: vb,
+    viewedTiles: vt,
+    savedBytes: sb,
+    savedTiles: st,
+  );
+}
+
+void _deleteTile(File f) {
+  f.deleteSync();
+  try {
+    final m = File('${f.path.substring(0, f.path.length - 4)}.meta');
+    if (m.existsSync()) m.deleteSync();
+  } catch (_) {}
+}
+
+int _deleteViewed(String path, List<Map<String, Object?>> regs) {
+  var freed = 0;
+  for (final (_, f, keep) in _tileFiles(path, regs).toList()) {
+    if (keep) continue;
+    try {
+      final n = f.lengthSync();
+      _deleteTile(f);
+      freed += n;
+    } catch (_) {}
+  }
+  return freed;
+}
+
+/// Least recently used first (drawn or downloaded, whichever is newer)
+/// until under [cap]; returns the relative paths deleted.
+List<String> _trimCache(
+  String path,
+  List<Map<String, Object?>> regs,
+  Map<String, int> used,
+  int cap,
+) {
+  final files = <(String, File, int, int, bool)>[];
+  var total = 0;
+  for (final (rel, f, keep) in _tileFiles(path, regs)) {
+    try {
+      final st = f.statSync();
+      total += st.size;
+      final t = max(st.modified.millisecondsSinceEpoch, used[rel] ?? 0);
+      files.add((rel, f, t, st.size, keep));
+    } catch (_) {}
+  }
+  final gone = <String>[];
+  if (total <= cap) return gone;
+  files.sort((a, b) => a.$3.compareTo(b.$3));
+  for (final f in files) {
+    if (total <= cap) break;
+    if (f.$5) continue;
+    try {
+      _deleteTile(f.$2);
+      total -= f.$4;
+      gone.add(f.$1);
+    } catch (_) {}
+  }
+  return gone;
 }

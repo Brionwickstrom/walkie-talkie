@@ -24,6 +24,7 @@ import '../trip/search/map_search.dart';
 import '../trip/search/nominatim.dart';
 import '../trip/search/offline_search.dart';
 import '../trip/search/overpass.dart';
+import '../trip/map_start.dart';
 import '../trip/tile_cache.dart';
 import '../trip/track.dart';
 import '../trip/trip_controller.dart';
@@ -126,6 +127,18 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
   double? _drawRadiusM;
   final List<GeoPoint> _drawVerts = [];
 
+  /// v2.6.11: the heavy layers (imported trails and maps, geofences,
+  /// range circles) come one frame after the map, so tiles start sooner.
+  bool _layersReady = false;
+
+  /// v2.6.11: imported layers are rebuilt only when they change.
+  List<Widget>? _imported;
+  int _importedRev = -1;
+  MapLayers? _importedOf;
+
+  /// Why the map opened where it did (tests, the "last view" chip).
+  MapStartFrom? startFrom;
+
   /// Windows: look for new range test results from the PC every 30 s
   /// while the map is open (one file-time check, nothing else).
   Timer? _rangePc;
@@ -158,6 +171,7 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
     _hlTimer?.cancel();
     _tick?.cancel();
     _rangePc?.cancel();
+    unawaited(t?.camera.flush());
     t?.setVisible(false);
     for (final s in _sensors) {
       s.cancel();
@@ -291,7 +305,11 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
                           ),
                         ),
                       IconButton(
-                        icon: const Icon(Icons.close, color: Colors.white, size: 18),
+                        icon: const Icon(
+                          Icons.close,
+                          color: Colors.white,
+                          size: 18,
+                        ),
                         onPressed: _cancelDraw,
                         tooltip: 'Cancel',
                       ),
@@ -345,11 +363,18 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
   Widget _mapView(BuildContext context, TripController trip) {
     final src = trip.mapSource;
     final me = trip.myFix;
-    final start =
-        widget.focus ??
-        me?.pos ??
-        (trip.people.values.isNotEmpty ? trip.people.values.first.pos : null) ??
-        (trip.pins.isNotEmpty ? trip.pins.first.pos : null);
+    // v2.6.11: no GPS fix yet? Open where the map was last left (not the
+    // whole country), and move to me when the fix comes (follow mode).
+    final view = mapStartView(
+      focus: widget.focus,
+      fix: me?.pos,
+      saved: trip.camera.camera,
+      friend: trip.people.values.isNotEmpty
+          ? trip.people.values.first.pos
+          : null,
+      pin: trip.pins.isNotEmpty ? trip.pins.first.pos : null,
+    );
+    startFrom ??= view.from;
     final track = _shown ?? trip.currentTrack;
     final hl = _hl;
     final nav = trip.nav;
@@ -537,17 +562,21 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
         FlutterMap(
           mapController: _map,
           options: MapOptions(
-            initialCenter: start != null
-                ? ll(start)
-                : const LatLng(39.5, -98.35),
-            initialZoom: start != null ? 15 : 4,
+            initialCenter: ll(view.center),
+            initialZoom: view.zoom,
             maxZoom: 19,
             minZoom: 2,
             onMapReady: () {
               _mapReady = true;
               if (widget.focus != null) _map.move(ll(widget.focus!), 15);
+              if (!_layersReady) {
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (mounted) setState(() => _layersReady = true);
+                });
+              }
             },
             onPositionChanged: (cam, gesture) {
+              trip.rememberCamera(gp(cam.center), cam.zoom);
               if (gesture && _follow) setState(() => _follow = false);
             },
             onTap: (_, point) => _mapTap(context, trip, gp(point)),
@@ -561,20 +590,14 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
           ),
           children: [
             ...baseTileLayers(trip),
-            ...importedLayers(
-              trip,
-              onWaypoint: (l, name, at) => _pointSheet(
-                context,
-                trip,
-                at,
-                name.isEmpty ? 'Waypoint' : name,
-              ),
-            ),
+            if (_layersReady) ..._importedLayers(context, trip),
             PolylineLayer(polylines: lines),
-            ..._geofenceLayers(trip),
+            if (_layersReady) ..._geofenceLayers(trip),
             CircleLayer(circles: friendCircles(trip)),
-            CircleLayer(circles: rangeCircles(trip.range, _rangeSel)),
-            CircleLayer(circles: rangeSampleCircles(trip.range)),
+            if (_layersReady) ...[
+              CircleLayer(circles: rangeCircles(trip.range, _rangeSel)),
+              CircleLayer(circles: rangeSampleCircles(trip.range)),
+            ],
             MarkerLayer(markers: markers),
             PhotoDateLine(trip: trip),
             SimpleAttributionWidget(
@@ -660,6 +683,25 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
             ),
           ),
       ],
+    );
+  }
+
+  /// Imported trails and maps, built again only when they change (they
+  /// used to be rebuilt on every map refresh, every 2 s with friends on).
+  List<Widget> _importedLayers(BuildContext context, TripController trip) {
+    final layers = trip.layers;
+    final cached = _imported;
+    if (cached != null &&
+        identical(_importedOf, layers) &&
+        _importedRev == layers.revision) {
+      return cached;
+    }
+    _importedOf = layers;
+    _importedRev = layers.revision;
+    return _imported = importedLayers(
+      trip,
+      onWaypoint: (l, name, at) =>
+          _pointSheet(context, trip, at, name.isEmpty ? 'Waypoint' : name),
     );
   }
 
@@ -980,9 +1022,7 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
         _drawRadiusM = null;
       });
       if (z != null) {
-        messenger?.showSnackBar(
-          SnackBar(content: Text('Saved ${z.name}.')),
-        );
+        messenger?.showSnackBar(SnackBar(content: Text('Saved ${z.name}.')));
       }
       return;
     }
@@ -1004,9 +1044,7 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
       _drawVerts.clear();
     });
     if (z != null) {
-      messenger?.showSnackBar(
-        SnackBar(content: Text('Saved ${z.name}.')),
-      );
+      messenger?.showSnackBar(SnackBar(content: Text('Saved ${z.name}.')));
     }
   }
 
@@ -1029,8 +1067,7 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
             n.longName.isNotEmpty &&
             !(sess?.isPublicNode(n) ?? false))
           (id: n.num, name: n.longName),
-      for (final f in c.settings.friends)
-        (id: f.id, name: f.name),
+      for (final f in c.settings.friends) (id: f.id, name: f.name),
     ];
     // de-dupe by id
     final seen = <int>{};

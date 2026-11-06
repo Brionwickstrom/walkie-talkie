@@ -189,6 +189,18 @@ FriendlyError? radioShareProblem(RadioShareHub hub, AppSettings s) {
   };
 }
 
+/// v2.6.11: "Clear map cache" did not finish.
+FriendlyError mapCacheClearError(Object e) {
+  final fe = friendlyFromError(e);
+  if (fe.message.contains('out of storage')) return fe;
+  return FriendlyError(
+    'Could not clear the map cache: the phone did not let the app delete '
+    'some map files. Saved offline areas were not touched.',
+    fix: FixAction.retry,
+    details: detailsOf(e),
+  );
+}
+
 /// Raw text safe to show: no Meshtastic links, no key-like strings, no
 /// web addresses.
 String scrubDetails(String raw) {

@@ -259,6 +259,17 @@ class MapLayers extends ChangeNotifier {
   static const int maxImagePixels = 8192;
 
   final List<MapLayer> _layers = [];
+
+  /// Bumped on every change (v2.6.11): the map rebuilds its imported
+  /// layers only when this moves, not on every map refresh.
+  int revision = 0;
+
+  @override
+  void notifyListeners() {
+    revision++;
+    super.notifyListeners();
+  }
+
   final Map<String, MbTiles> _open = {};
 
   /// Offline search over imported trails and places (v1.8.4), kept up to

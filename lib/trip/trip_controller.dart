@@ -30,6 +30,7 @@ import 'drive/road_router.dart';
 import 'drive/road_service.dart';
 import 'drive/speech.dart';
 import 'map_net.dart';
+import 'map_start.dart';
 import 'nav/foot_router.dart';
 import 'range_logger.dart';
 import 'range_run.dart';
@@ -490,6 +491,7 @@ class TripController extends ChangeNotifier {
   int _nextId() => _id = (_id + 1) & 0xFFFF;
 
   void _applySettings() {
+    tiles.maxBytes = settings.mapCacheMb * 1024 * 1024;
     lost
       ..enabled = settings.tripMode && settings.lostContactMinutes > 0
       ..threshold = Duration(
@@ -512,6 +514,7 @@ class TripController extends ChangeNotifier {
     } catch (_) {}
     await Future.wait([
       tiles.load(),
+      camera.load(),
       weather.load(),
       _loadPins(),
       _loadTracks(),
@@ -528,16 +531,93 @@ class TripController extends ChangeNotifier {
     geofences.addListener(_geofencesChanged);
     await routes.prune({for (final a in areas.areas) a.id});
     await _restoreDrive();
-    unawaited(tiles.trim());
+    // v2.6.11: the cache trim walks every tile on the phone; it waits until
+    // the map has opened (and runs off the main thread).
+    _trimTimer = Timer(trimDelay, () => unawaited(tiles.trim()));
+    _warmTimer = Timer(warmDelay, () => unawaited(maybeWarmHome()));
     await _updateLocationNeed();
     notifyListeners();
   }
+
+  // ------------------------------------------------- v2.6.11 map start
+
+  /// Where the map was last looking: it opens there at once.
+  late final CameraMemory camera = CameraMemory(
+    File('${dir.path}/map_camera.json'),
+  );
+
+  /// The map moved (the map calls this; written every few seconds).
+  void rememberCamera(GeoPoint center, double zoom) =>
+      camera.remember(center, zoom, at: _clock());
+
+  /// Keeps the map around home on the phone (Wi-Fi or charging only).
+  late final HomeWarmer warmer = HomeWarmer(
+    tiles: tiles,
+    stamp: File('${dir.path}/home_warm.json'),
+    clock: _clock,
+  );
+
+  /// On Wi-Fi now (tests replace it).
+  Future<bool> Function() onWifi = isOnWifi;
+  Duration trimDelay = const Duration(seconds: 45);
+  Duration warmDelay = const Duration(seconds: 90);
+  Timer? _trimTimer;
+  Timer? _warmTimer;
+
+  /// Why the home area is not being kept ready now (null = it is / may).
+  String? warmStatus;
+
+  /// Home for the warm-up: the fixed home location, else where the map
+  /// was last left (zoomed in to town level or closer).
+  GeoPoint? get warmHomePoint {
+    final h = homeFencePos;
+    if (h != null) return h;
+    final c = camera.camera;
+    if (c != null && c.zoom >= 11) return c.center;
+    return null;
+  }
+
+  /// Keep the home area ready if it is due and allowed. Returns the tiles
+  /// fetched.
+  Future<int> maybeWarmHome() async {
+    if (_disposed || warmer.running) return 0;
+    final wifi = await onWifi();
+    final src = mapSource;
+    final home = warmHomePoint;
+    warmStatus = HomeWarmer.blocker(
+      enabled: settings.warmHome,
+      wifi: wifi,
+      charging: _pluggedIn,
+      offlineSaver: _offline,
+      online: tiles.online && tiles.net && !mapNet.isOffline,
+      home: home,
+      source: src,
+    );
+    if (warmStatus != null || home == null) return 0;
+    if (!await warmer.due(home, src)) return 0;
+    return warmer.run(
+      src,
+      home,
+      stillOk: () async =>
+          !_disposed && settings.warmHome && (_pluggedIn || await onWifi()),
+    );
+  }
+
+  /// What the map cache holds (Settings > Map).
+  Future<MapCacheStats> mapCacheStats() => tiles.stats();
+
+  /// Delete the viewed tiles; saved offline areas stay. Bytes freed.
+  Future<int> clearMapCache() => tiles.clearViewed();
 
   bool _disposed = false;
 
   @override
   void dispose() {
     _disposed = true;
+    _trimTimer?.cancel();
+    _warmTimer?.cancel();
+    warmer.cancel();
+    camera.dispose();
     nav?.dispose();
     nav = null;
     drive?.dispose();
@@ -759,6 +839,10 @@ class TripController extends ChangeNotifier {
     if (on == _pluggedIn) return;
     _pluggedIn = on;
     rangeLog.powerChanged();
+    if (on && _started && !_disposed) {
+      _warmTimer?.cancel();
+      _warmTimer = Timer(warmDelay, () => unawaited(maybeWarmHome()));
+    }
     await _updateLocationNeed();
     notifyListeners();
   }
@@ -3114,7 +3198,6 @@ class TripController extends ChangeNotifier {
     notifyListeners();
   }
 
-  
   void _geofencesChanged() {
     fenceMonitor.setZones(geofences.zones);
     _feedHomeFence();
