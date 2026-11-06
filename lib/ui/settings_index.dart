@@ -638,7 +638,8 @@ const settingsIndex = <SettingEntry>[
     id: 'radio-public-nodes',
     title: 'Show public nodes',
     section: 'Radio settings',
-    about: 'List the public radios in reach: signal, hops and distance.',
+    about:
+        'List the public radios in reach: name, signal, hops and distance.',
     words: [
       'public',
       'nodes',
@@ -654,6 +655,11 @@ const settingsIndex = <SettingEntry>[
       'distance',
       'hops',
       'mesh',
+      'names',
+      'name',
+      'callsign',
+      'long name',
+      'short name',
     ],
     home: SettingsHome.radio,
   ),

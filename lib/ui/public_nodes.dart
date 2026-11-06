@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
@@ -6,17 +7,20 @@ import '../lora/meshtastic_session.dart';
 import '../trip/geo.dart';
 import 'radios_nearby_page.dart' show radioAgo, radioNodeId;
 
-/// Show public nodes (v2.6.4): the public Meshtastic radios our own radio
-/// has heard on its listen-only public LongFast channel. Only what the
-/// radio already sent us is used: nothing is transmitted to fill the list
-/// (no pings, no NodeInfo, position or traceroute requests). Public radios
-/// are shown by their radio ID only: no names and no locations (the
-/// distance is worked out on the phone, their position is never shown).
+/// Show public nodes (v2.6.4) with names (v2.6.5): the public Meshtastic
+/// radios our own radio has heard on its listen-only public LongFast
+/// channel. Only what the radio already sent us is used: nothing is
+/// transmitted to fill the list (no pings, no NodeInfo, position or
+/// traceroute requests). Names come from NodeInfo / User packets the
+/// radio already decoded with the default public key; they are sanitized
+/// for display. Locations are never shown (distance only).
 
 /// One public radio in the list.
 class PublicNode {
   const PublicNode({
     required this.num,
+    this.longName = '',
+    this.shortName = '',
     this.lastHeard,
     this.snr,
     this.rssi,
@@ -24,6 +28,12 @@ class PublicNode {
     this.distanceM,
   });
   final int num;
+
+  /// Sanitized long name, empty when unknown or stripped.
+  final String longName;
+
+  /// Sanitized short name, empty when unknown or stripped.
+  final String shortName;
   final DateTime? lastHeard;
   final double? snr;
   final int? rssi;
@@ -32,8 +42,17 @@ class PublicNode {
   final int? hops;
   final double? distanceM;
 
-  /// "Public radio !1a2b3c4d" (the ID, never its name).
-  String get label => 'Public radio ${radioNodeId(num)}';
+  bool get hasName => longName.isNotEmpty;
+
+  /// "!1a2b3c4d" (always shown, smaller when a name is known).
+  String get idLabel => radioNodeId(num);
+
+  /// Name (and short name), or "Public radio !id" when unknown.
+  String get label {
+    if (!hasName) return 'Public radio $idLabel';
+    if (shortName.isEmpty || shortName == longName) return longName;
+    return '$longName ($shortName)';
+  }
 }
 
 /// What the "Show public nodes" section shows.
@@ -68,6 +87,37 @@ class PublicNodes {
 /// Rows listed at most (the radio's own node list holds a few hundred).
 const int publicNodesShown = 25;
 
+/// Long-name byte budget (Meshtastic User.long_name).
+const int publicLongNameMaxBytes = 39;
+
+/// Short-name byte budget (Meshtastic User.short_name).
+const int publicShortNameMaxBytes = 4;
+
+/// Strip control characters and length-limit an untrusted public name.
+/// Empty when nothing usable remains. Does not send or request anything.
+String sanitizePublicName(String raw, {int maxBytes = publicLongNameMaxBytes}) {
+  if (raw.isEmpty || maxBytes <= 0) return '';
+  final buf = StringBuffer();
+  for (final r in raw.runes) {
+    if (r < 0x20 || r == 0x7F || (r >= 0x80 && r < 0xA0)) continue;
+    buf.writeCharCode(r);
+  }
+  var t = buf.toString().trim();
+  if (t.isEmpty) return '';
+  // Collapse runs of whitespace to a single space.
+  t = t.replaceAll(RegExp(r'\s+'), ' ');
+  var bytes = utf8.encode(t);
+  if (bytes.length <= maxBytes) return t;
+  // Drop trailing runes until it fits the byte budget.
+  final runes = t.runes.toList();
+  while (runes.isNotEmpty && bytes.length > maxBytes) {
+    runes.removeLast();
+    t = String.fromCharCodes(runes).trimRight();
+    bytes = utf8.encode(t);
+  }
+  return t;
+}
+
 /// Build the list from the radio session. Pure: the page and the tests
 /// call it; it reads only what is already in memory.
 PublicNodes computePublicNodes({
@@ -97,6 +147,11 @@ PublicNodes computePublicNodes({
     all.add(
       PublicNode(
         num: n.num,
+        longName: sanitizePublicName(n.longName),
+        shortName: sanitizePublicName(
+          n.shortName,
+          maxBytes: publicShortNameMaxBytes,
+        ),
         lastHeard: n.lastHeard,
         snr: n.snr == 0 ? null : n.snr,
         rssi: n.rssi == 0 ? null : n.rssi,

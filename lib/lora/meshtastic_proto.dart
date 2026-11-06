@@ -318,6 +318,58 @@ class PositionPb {
   }
 }
 
+/// `User` (mesh.proto), the payload of PortNum.nodeInfo (NODEINFO_APP):
+/// id=1, long_name=2, short_name=3, hw_model=5, role=7.
+class UserPb {
+  UserPb({
+    this.id = '',
+    this.longName = '',
+    this.shortName = '',
+    this.hwModel = 0,
+    this.role = 0,
+  });
+  final String id;
+  final String longName;
+  final String shortName;
+  final int hwModel;
+  final int role;
+
+  static UserPb decode(Uint8List b) {
+    var id = '', long = '', short = '';
+    var hw = 0, role = 0;
+    for (final f in pbDecode(b)) {
+      switch (f.number) {
+        case 1:
+          id = f.asString;
+        case 2:
+          long = f.asString;
+        case 3:
+          short = f.asString;
+        case 5:
+          hw = f.asInt;
+        case 7:
+          role = f.asInt;
+      }
+    }
+    return UserPb(
+      id: id,
+      longName: long,
+      shortName: short,
+      hwModel: hw,
+      role: role,
+    );
+  }
+
+  Uint8List encode() =>
+      (PbWriter()
+            ..string(1, id)
+            ..string(2, longName)
+            ..string(3, shortName)
+            ..uint(5, hwModel)
+            ..uint(7, role))
+          .toBytes();
+}
+
 /// `NodeInfo`: num=1, user=2 (User: id=1, long_name=2, short_name=3,
 /// hw_model=5, role=7), position=3, snr=4, last_heard=5, device_metrics=6,
 /// channel=7, hops_away=9.

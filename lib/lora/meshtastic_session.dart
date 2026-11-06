@@ -478,12 +478,21 @@ class MeshtasticSession {
       } else if (d.portnum == PortNum.telemetry) {
         final dm = decodeTelemetryDeviceMetrics(d.payload);
         if (dm?.batteryLevel != null) node.battery = dm!.batteryLevel;
+      } else if (d.portnum == PortNum.nodeInfo) {
+        // User (NODEINFO_APP) on a channel we can decode, including the
+        // listen-only public one (v2.6.5): free name, no request sent.
+        final u = UserPb.decode(d.payload);
+        if (u.longName.isNotEmpty) node.longName = u.longName;
+        if (u.shortName.isNotEmpty) node.shortName = u.shortName;
+        node.hasInfo = true;
+        if (u.hwModel != 0) node.hwModel = u.hwModel;
+        if (u.role != 0) node.role = u.role;
       }
     } catch (_) {}
     final pub = publicListenIndex;
     if (pub != null && p.channel == pub) {
-      // Public traffic (v2.6.4): only who, how strong and how far is kept
-      // for the list; it never reaches the rest of the app.
+      // Public traffic (v2.6.4 / v2.6.5): who, name, how strong and how
+      // far is kept for the list; it never reaches the rest of the app.
       node.publicPackets++;
       publicReceived++;
       return true;

@@ -1525,6 +1525,28 @@ Tests: `test/v195_gateway_test.dart`, `test/v195_quiet_test.dart`.
 Tests: `test/v197_meshtastic_import_test.dart` (vectors from the official
 apps and the Python library), `test/v195_quiet_test.dart`.
 
+## v2.6.5: Public-node names
+
+**Radio settings > Show public nodes** now shows each public radio's **name**
+(long and short name) when the radio has heard a NodeInfo / User packet for
+it on the listen-only public LongFast channel. The radio ID stays on the
+row, shown smaller under the name. Locations are still never shown
+(distance only). Nothing else about v2.6.4 changes: listen-only, no sending
+on public, public traffic kept out of Talk / messages / weather / gateway /
+Radios nearby / range test / match check / precision list, no extra polling
+or radio requests.
+
+- **Where names come from:** NodeInfo already in the radio's node DB, and
+  User (NODEINFO_APP) packets decoded on the public channel with the default
+  public key. The app never asks a public radio for its name.
+- **Untrusted text:** names are sanitized for display (control characters
+  stripped, length-limited to the Meshtastic budgets) before they appear.
+- **Search:** "names", "name", "callsign", "long name", "short name" also
+  find the section (on top of the v2.6.4 synonyms).
+
+Tests: `test/v265_public_names_test.dart` (fake radio). Screenshots:
+`V265_SHOTS=/workspace flutter test test/v265_public_names_test.dart`.
+
 ## v2.6.4: Show public nodes
 
 **Radio settings > Show public nodes** (right under Relay through public
@@ -1539,11 +1561,11 @@ see who could pass your messages along.
   channel is written (begin / set_channel / commit, read back by name and
   hash); the main channel, keys and LoRa settings do not change. Off takes
   the channel off again. Both ask first.
-- **The list:** each public radio by its radio ID ("Public radio
-  !1a2b3c4d") with when it was last heard, signal (SNR, RSSI), hops and
-  distance (from your radio's position, else the phone's). **No names and
-  no locations** (their position is used only to work out the distance).
-  Newest first, 25 rows, then "and N more".
+- **The list:** each public radio by name when known (v2.6.5) and its radio
+  ID, with when it was last heard, signal (SNR, RSSI), hops and distance
+  (from your radio's position, else the phone's). **No locations** (their
+  position is used only to work out the distance). Newest first, 25 rows,
+  then "and N more".
 - **Hearing them needs the public frequency:** with Relay through public
   radios off, the radio is on another slot and hears no public radios; the
   section says so. Your messages go through public radios only when Relay
@@ -1560,8 +1582,8 @@ see who could pass your messages along.
   channel is on, the radio passes every public packet it hears to the
   phone over Bluetooth/USB, so a busy area means more wake-ups (a small
   drain); the list redraws at most every 5 s and only while it is open.
-- **Search:** "public nodes", "strangers", "longfast", "snr", "rssi" find
-  it.
+- **Search:** "public nodes", "strangers", "longfast", "snr", "rssi",
+  "names" find it.
 
 Tests: `test/v264_public_nodes_test.dart` (fake radio; not yet tried on a
 real radio). Screenshots:

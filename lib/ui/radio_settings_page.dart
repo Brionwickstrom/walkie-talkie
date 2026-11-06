@@ -73,11 +73,11 @@ const radioPublicExplain =
     'messages, no location, no internet upload.';
 
 const radioPublicNote =
-    'Public radios are shown by radio ID with signal, hops and distance; '
-    'no names or locations. Your messages go through public radios only '
-    'when Relay through public radios is on. Uses a little more battery '
-    'while on: the radio passes every public packet it hears to this '
-    'device.';
+    'Public radios are shown by name (when the radio has heard one) and '
+    'radio ID, with signal, hops and distance; locations are not shown. '
+    'Your messages go through public radios only when Relay through public '
+    'radios is on. Uses a little more battery while on: the radio passes '
+    'every public packet it hears to this device.';
 
 const radioPublicConfirmOn =
     'Your radio gets an extra listen-only channel: the public LongFast '
@@ -687,11 +687,15 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
                   ListTile(
                     key: Key('rs-public-node-${n.num}'),
                     dense: true,
+                    isThreeLine: n.hasName,
                     contentPadding: EdgeInsets.zero,
                     leading: const Icon(Icons.cell_tower),
                     title: Text(n.label),
                     subtitle: Text(
-                      publicNodeLine(n, now: now, imperial: imperial),
+                      n.hasName
+                          ? '${n.idLabel}\n'
+                              '${publicNodeLine(n, now: now, imperial: imperial)}'
+                          : publicNodeLine(n, now: now, imperial: imperial),
                     ),
                   ),
                 if (data.more > 0)

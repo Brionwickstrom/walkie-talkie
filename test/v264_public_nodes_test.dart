@@ -101,6 +101,7 @@ void addExamplePublic(MeshtasticSession s, {DateTime? now}) {
     double? lat,
     double? lng,
     String name = '',
+    String short = '',
   }) {
     s.nodes[num] = RadioNode(num)
       ..channel = pub
@@ -111,7 +112,8 @@ void addExamplePublic(MeshtasticSession s, {DateTime? now}) {
       ..hopsAway = hops
       ..lat = lat
       ..lng = lng
-      ..longName = name;
+      ..longName = name
+      ..shortName = short;
   }
 
   add(
@@ -123,6 +125,7 @@ void addExamplePublic(MeshtasticSession s, {DateTime? now}) {
     lat: 45.56,
     lng: -122.60,
     name: 'Example Name One',
+    short: 'EX1',
   );
   add(
     0xE0A10002,
@@ -133,6 +136,7 @@ void addExamplePublic(MeshtasticSession s, {DateTime? now}) {
     lat: 45.62,
     lng: -122.40,
     name: 'Example Name Two',
+    short: 'EX2',
   );
   add(0xE0A10003, ago: const Duration(hours: 1), snr: -12, rssi: -124, hops: 3);
   add(0xE0A10004, ago: const Duration(hours: 3));
@@ -261,7 +265,8 @@ void main() {
   });
 
   group('the list', () {
-    test('ID, signal, hops and distance; no names, newest first', () async {
+    test('name, ID, signal, hops and distance; no locations, newest first',
+        () async {
       final s = await up(radioOn(withPublic: true));
       addTearDown(s.close);
       final now = DateTime(2026, 11, 6, 9);
@@ -278,7 +283,9 @@ void main() {
         0xE0A10003,
         0xE0A10004,
       ]);
-      expect(p.nodes.first.label, 'Public radio !e0a10001');
+      expect(p.nodes.first.label, 'Example Name One (EX1)');
+      expect(p.nodes.first.idLabel, '!e0a10001');
+      expect(p.nodes[2].label, 'Public radio !e0a10003');
       final l1 = publicNodeLine(p.nodes[0], now: now, imperial: false);
       expect(l1, startsWith('heard 2 min ago · SNR 6.3 dB · RSSI -94 dBm'));
       expect(l1, contains('direct'));
@@ -291,8 +298,7 @@ void main() {
       expect(l4, contains('hops unknown'));
       expect(l4, contains('distance unknown'));
       for (final n in p.nodes) {
-        final text = '${n.label} ${publicNodeLine(n, now: now)}';
-        expect(text, isNot(contains('Example Name')));
+        final text = '${n.label} ${n.idLabel} ${publicNodeLine(n, now: now)}';
         expect(text, isNot(contains('45.')));
         expect(text, isNot(contains('122')));
       }
@@ -498,13 +504,14 @@ void main() {
       expect(find.byKey(const Key('rs-prec-card-2')), findsNothing);
       expect(c.loraTransport.meshIndexOf!(meshPublicRef), isNull);
       expect(state(t), contains('No public radios heard yet'));
-      // Heard: shown after the next redraw, without names.
+      // Heard: shown after the next redraw, with names when known.
       addExamplePublic(s);
       s.handle(heard(0xE0A10005, ch: 2));
       await t.pump(const Duration(seconds: 6));
       expect(state(t), 'Public radios heard: 5');
-      expect(find.text('Public radio !e0a10001'), findsOneWidget);
-      expect(find.textContaining('Example Name'), findsNothing);
+      expect(find.text('Example Name One (EX1)'), findsOneWidget);
+      expect(find.textContaining('!e0a10001'), findsWidgets);
+      expect(find.text('Public radio !e0a10003'), findsOneWidget);
       // Off: the channel is taken off.
       await tapKey(t, 'rs-public');
       expect(find.text(radioPublicConfirmOff), findsOneWidget);
