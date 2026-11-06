@@ -2872,8 +2872,13 @@ class TripController extends ChangeNotifier {
     _event(host.localId, 'You sent an SOS', 'sos');
     unawaited(_updateLocationNeed());
     if (!fresh) {
+      // v2.6.7: an SOS always asks the phone for one fix when there is no
+      // fresh one, whatever the Location source (safety first).
       final g = await host.locateOnce();
-      if (g != null) onFix(g);
+      if (g != null && g.pos.valid) {
+        phoneFix = g;
+        _applyFix(g);
+      }
     }
     notifyListeners();
   }

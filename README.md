@@ -1525,6 +1525,43 @@ Tests: `test/v195_gateway_test.dart`, `test/v195_quiet_test.dart`.
 Tests: `test/v197_meshtastic_import_test.dart` (vectors from the official
 apps and the Python library), `test/v195_quiet_test.dart`.
 
+## v2.6.7: Radio GPS as location source
+
+**Settings > Long-range radio (Meshtastic) > Location source** (under Radio
+settings): **Auto** (default), **Phone GPS only** or **Radio GPS only**.
+
+- **Auto:** when the connected radio (Bluetooth, USB or Wi-Fi) has its own GPS
+  and a good, recent fix, the app uses the radio's position as "where I am"
+  for Trip mode sharing, friends' map, Talk and check-ins. It falls back to the
+  phone's GPS by itself when the radio is disconnected, has no fix, sends a
+  fixed (home) or phone-supplied position, sends a blurred one (Location
+  precision not Full), or its fix is too old. Navigation, Drive, SOS, a
+  recorded trail, range logging and Driving mode use the phone's faster GPS.
+- **Too old:** 2 minutes. With smart position broadcast on, the radio sends
+  again as soon as it moves about 100 m, so a quiet radio has not moved: its
+  fix then counts up to its broadcast interval plus a minute (at most 16 min).
+- **Only the radio's own broadcasts are used:** the copy of the position the
+  radio already sends is read; the app never asks the radio for a position.
+  The radio must share a location on a channel (Radio settings > Location
+  sharing) or it sends none.
+- **Battery:** while the radio's GPS is used, the phone's GPS is off (the main
+  saving: Trip mode in the background no longer polls the phone's GPS). Radio
+  GPS only never turns the phone's GPS on; an SOS still asks the phone for one
+  fix when there is no fresh one. The radio's own GPS uses the radio's
+  battery, as before.
+- **Range logging** still pairs each sample with the phone's exact GPS fix.
+  With **Radio GPS only** it pairs with the radio's fix instead (a point is
+  only logged within 30 s of a radio position, so set the radio to broadcast
+  its position often while logging).
+- **Shows which source is in use** in the connection sheet (tap the chip on
+  Talk): "Location: Radio GPS (Bluetooth)" or "Location: Phone GPS" with the
+  reason. Problems are plain errors with a fix button (Connect radio, Radio
+  settings, Use Auto).
+- **Search:** gps, location source, radio gps, phone gps.
+
+Tests: `test/v267_radio_gps_test.dart` (fake radio, example positions).
+Screenshots: `V267_SHOTS=/workspace flutter test test/v267_radio_gps_test.dart`.
+
 ## v2.6.6: Set home location
 
 **Radio settings > Set home location** (right under Location sharing): type

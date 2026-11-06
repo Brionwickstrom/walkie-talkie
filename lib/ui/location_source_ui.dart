@@ -84,9 +84,13 @@ class LocationSourceSection extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.only(top: 4),
             child: Text(
-              "Battery: while the radio's GPS is used, the phone's GPS is "
-              "off. Navigation, Drive, SOS, a recorded trail and range "
-              "logging still turn the phone's GPS on in Auto.",
+              setting == LocationSource.radio
+                  ? "Battery: the phone's GPS stays off. Only an SOS asks the "
+                        "phone once, when the radio has no fresh fix. Range "
+                        "logging uses the radio's fix."
+                  : "Battery: while the radio's GPS is used, the phone's GPS "
+                        'is off. Navigation, Drive, SOS, a recorded trail and '
+                        "range logging still turn the phone's GPS on.",
               key: const Key('location-source-battery'),
               style: theme.textTheme.bodySmall,
             ),
