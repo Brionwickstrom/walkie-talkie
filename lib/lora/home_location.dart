@@ -96,16 +96,20 @@ class HomeParse {
 HomeParse parseHomeLocation(String raw) {
   var s = raw.trim();
   if (s.isEmpty) return const HomeParse.fail('Type a latitude and longitude.');
-  // Allow "lat: … lon: …" / "latitude=… longitude=…".
-  s = s
-      .replaceAll(
-        RegExp(
-          r'(?i)\b(lat(itude)?|lon(gitude)?|long|alt(itude)?)\s*[:=]?\s*',
-        ),
-        ' ',
-      )
-      .replaceAll(RegExp(r'[;|/]+'), ',')
-      .trim();
+  // Drop common labels (longest first) and punctuation separators.
+  for (final label in [
+    'latitude',
+    'longitude',
+    'altitude',
+    'long',
+    'lat',
+    'lon',
+    'alt',
+  ]) {
+    s = s.replaceAll(RegExp(label, caseSensitive: false), ' ');
+  }
+  s = s.replaceAll(RegExp(r'[=:;|/]+'), ' ').trim();
+
   // Split on comma or whitespace; keep a leading minus with its number.
   final parts = s
       .split(RegExp(r'[\s,]+'))

@@ -1525,6 +1525,30 @@ Tests: `test/v195_gateway_test.dart`, `test/v195_quiet_test.dart`.
 Tests: `test/v197_meshtastic_import_test.dart` (vectors from the official
 apps and the Python library), `test/v195_quiet_test.dart`.
 
+## v2.6.6: Set home location
+
+**Radio settings > Set home location** (right under Location sharing): type
+latitude and longitude (optionally altitude in metres) for a fixed base radio
+with no GPS, such as Skunk Ape. Saving writes Meshtastic
+`set_fixed_position` to the **connected** radio (with confirm, backup of the
+previous position settings, read-back and Restore), matching the v2.6.1 Fix
+pattern. **Clear fixed position** turns it off again (`remove_fixed_position`).
+
+- **Paste:** one box accepts `45.5868, -122.2901` or `45.5868, -122.2901, 120`.
+- **Use my current location:** fills the box from this device's GPS fix when
+  one is available (Trip map / phone GPS).
+- **Distances:** the app stores the saved home coordinates and uses them for
+  public-node distance, Radios nearby distance and range-logging distance to
+  home when the radio (or home node) has no GPS fix of its own.
+- **Search:** home, base, coordinates, lat, long, fixed position.
+- **Android:** same controls when a radio is connected; desktop is the main
+  target for a USB base radio.
+- Nothing is written to a radio until you tap Save (or Clear) and confirm.
+  Keys / channel URLs are never printed.
+
+Tests: `test/v266_home_location_test.dart` (fake radio). Screenshots:
+`V266_SHOTS=/workspace flutter test test/v266_home_location_test.dart`.
+
 ## v2.6.5: Public-node names
 
 **Radio settings > Show public nodes** now shows each public radio's **name**

@@ -84,8 +84,6 @@ class Fw implements MeshtasticWire {
   /// The raw bytes of what was sent per set.
   Uint8List? sentOwner, sentLora, sentPosition, sentFixed;
   bool? pendingRemoveFixed;
-  bool? _pRemoveFixed;
-  Uint8List? _pFixed;
   final packets = <MeshPacketPb>[];
   int commits = 0;
   bool _open = false;
@@ -203,8 +201,6 @@ class Fw implements MeshtasticWire {
         log.add('begin');
         _open = true;
         _pLora = _pPos = _pOwner = null;
-        _pFixed = null;
-        _pRemoveFixed = null;
         _pChannels.clear();
       case 32:
         log.add('set_owner');
@@ -234,15 +230,12 @@ class Fw implements MeshtasticWire {
       case 41:
         log.add('set_fixed');
         sentFixed = Uint8List.fromList(first.asBytes);
-        _pFixed = sentFixed;
-        _pRemoveFixed = false;
         // Mirror firmware: PositionConfig.fixed_position = true.
         _pPos = patchVarints(position, {3: 1});
       case 42:
         log.add('remove_fixed');
         pendingRemoveFixed = true;
-        _pRemoveFixed = true;
-        _pFixed = null;
+        sentFixed = null;
         _pPos = patchVarints(position, {3: 0});
       case 65:
         log.add('commit');
@@ -839,8 +832,8 @@ void main() {
     Future<void> tapKey(WidgetTester t, String k) async {
       final f = find.byKey(Key(k));
       await t.ensureVisible(f);
-      await t.pump();
-      await t.tap(f);
+      await t.pumpAndSettle();
+      await t.tap(f, warnIfMissed: false);
       await t.pump();
     }
 
@@ -1167,7 +1160,7 @@ void main() {
       expect(fw.commits, 1);
       // Restore with the same confirm (the radio still refuses: it fails
       // clearly again, nothing hangs).
-      await t.tap(find.byKey(const Key('rs-restore-failed')));
+      await tapKey(t, 'rs-restore-failed');
       await t.pumpAndSettle();
       expect(find.byKey(const Key('rs-confirm-text')), findsOneWidget);
       await t.tap(find.byKey(const Key('rs-cancel')));
