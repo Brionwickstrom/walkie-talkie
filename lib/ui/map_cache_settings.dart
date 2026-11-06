@@ -177,29 +177,33 @@ class _MapCacheSettingsState extends State<MapCacheSettings> {
         ),
         SettingAnchor(
           id: 'map-warm-home',
-          child: SwitchListTile(
-            key: const Key('map-warm-home'),
-            contentPadding: EdgeInsets.zero,
-            secondary: const Icon(Icons.home_work_outlined),
-            title: const Text('Keep home area ready'),
-            subtitle: Text(
-              'Saves the map within about '
-              '${(HomeWarmer.radiusM / 1000).toStringAsFixed(1)} km of home (the home '
-              'location, else where the map was last left) so it opens at '
-              'once. Only on Wi-Fi or while charging, about 1-3 MB once a '
-              'week. Not for Street (OpenStreetMap), which does not allow '
-              'saving ahead.'
-              '${t.settings.warmHome && t.warmStatus != null ? ' Now: ${t.warmStatus}' : ''}'
-              '${lockedNote(t, BatterySetting.warmHome) == null ? '' : ' ${lockedNote(t, BatterySetting.warmHome)}'}',
+          // v2.6.12: follows Battery mode changes made elsewhere.
+          child: ListenableBuilder(
+            listenable: t,
+            builder: (context, _) => SwitchListTile(
+              key: const Key('map-warm-home'),
+              contentPadding: EdgeInsets.zero,
+              secondary: const Icon(Icons.home_work_outlined),
+              title: const Text('Keep home area ready'),
+              subtitle: Text(
+                'Saves the map within about '
+                '${(HomeWarmer.radiusM / 1000).toStringAsFixed(1)} km of home (the home '
+                'location, else where the map was last left) so it opens at '
+                'once. Only on Wi-Fi or while charging, about 1-3 MB once a '
+                'week. Not for Street (OpenStreetMap), which does not allow '
+                'saving ahead.'
+                '${t.settings.warmHome && t.warmStatus != null ? ' Now: ${t.warmStatus}' : ''}'
+                '${lockedNote(t, BatterySetting.warmHome) == null ? '' : ' ${lockedNote(t, BatterySetting.warmHome)}'}',
+              ),
+              value: t.settings.warmHome,
+              onChanged: lockedNote(t, BatterySetting.warmHome) != null
+                  ? null
+                  : (v) async {
+                      await t.update((x) => x.warmHome = v);
+                      if (!v) t.warmer.cancel();
+                      if (mounted) setState(() {});
+                    },
             ),
-            value: t.settings.warmHome,
-            onChanged: lockedNote(t, BatterySetting.warmHome) != null
-                ? null
-                : (v) async {
-                    await t.update((x) => x.warmHome = v);
-                    if (!v) t.warmer.cancel();
-                    if (mounted) setState(() {});
-                  },
           ),
         ),
       ],
