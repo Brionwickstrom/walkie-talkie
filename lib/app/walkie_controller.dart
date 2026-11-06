@@ -52,6 +52,7 @@ import '../lora/lora_transport.dart';
 import '../lora/meshtastic_ble.dart';
 import '../lora/meshtastic_admin.dart';
 import '../lora/meshtastic_channels.dart';
+import '../lora/home_location.dart';
 import '../lora/meshtastic_settings.dart';
 import '../lora/radio_clip.dart';
 import '../lora/radio_match.dart';
@@ -3236,7 +3237,15 @@ class WalkieController extends ChangeNotifier {
     }
     final cur = t.rangeLog.radio;
     if (cur is SessionRangeRadio && identical(cur.s, s)) return;
-    t.rangeLog.bind(SessionRangeRadio(s));
+    t.rangeLog.bind(
+      SessionRangeRadio(
+        s,
+        fallbackOf: (node) {
+          if (node != t.range.homeNode) return null;
+          return homeLocation?.point;
+        },
+      ),
+    );
   }
 
   /// Tests: run the "remember the connected radio" step now.
@@ -3552,15 +3561,36 @@ class WalkieController extends ChangeNotifier {
     radioEditing = true;
     notifyListeners();
     try {
+      final sess = radioDevice.session;
+      final me = sess?.myNodeNum;
+      final node = me == null ? null : sess?.nodes[me];
+      HomeCoords? nodePos;
+      if (node?.lat != null && node?.lng != null) {
+        nodePos = HomeCoords(node!.lat!, node.lng!);
+      }
       await radioSettingsWriterFactory().apply(
         change,
         previousBackup: radioBackup,
+        currentNodePos: nodePos,
         saveBackup: (b) async {
           settings.radioBackup = b.encode();
           await settingsStore.save(settings);
         },
         onStep: onStep,
       );
+      // v2.6.6: keep the typed home coords for distance when the radio
+      // has no GPS fix of its own.
+      if (change.fixedPosition != null) {
+        settings.homeLat = change.fixedPosition!.lat;
+        settings.homeLng = change.fixedPosition!.lng;
+        settings.homeAlt = change.fixedPosition!.alt;
+        await settingsStore.save(settings);
+      } else if (change.clearFixed) {
+        settings.homeLat = null;
+        settings.homeLng = null;
+        settings.homeAlt = null;
+        await settingsStore.save(settings);
+      }
       debugLog.add('radio', 'settings saved: ${change.what}');
       return null;
     } on MeshWriteException catch (e) {
@@ -3582,7 +3612,32 @@ class WalkieController extends ChangeNotifier {
   }) async {
     final b = radioBackup;
     if (b == null) return 'There is nothing saved to restore.';
-    return changeRadioSettings(RadioChange.restore(b.previous), onStep: onStep);
+    return changeRadioSettings(
+      RadioChange.restore(b.previous, full: b),
+      onStep: onStep,
+    );
+  }
+
+  /// v2.6.6: stored home / base coordinates, when set.
+  HomeCoords? get homeLocation {
+    final la = settings.homeLat, lo = settings.homeLng;
+    if (la == null || lo == null) return null;
+    return HomeCoords(la, lo, alt: settings.homeAlt);
+  }
+
+  /// Position to use for distance when the radio (or home node) has no
+  /// GPS fix: the radio's own node position, else the stored home
+  /// location, else the phone GPS.
+  GeoPoint? distanceOrigin({GeoPoint? phone}) {
+    final sess = radioDevice.session;
+    final me = sess?.myNodeNum;
+    final own = me == null ? null : sess?.nodes[me];
+    if (own?.lat != null && own?.lng != null) {
+      return GeoPoint(own!.lat!, own.lng!);
+    }
+    final home = homeLocation;
+    if (home != null) return home.point;
+    return phone;
   }
 
   /// Link open Walkie channel [ch] to [ref]; [name] names a new channel

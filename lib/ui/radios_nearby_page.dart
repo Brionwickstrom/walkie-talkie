@@ -238,7 +238,7 @@ RadiosNearby radiosNearbyOf(WalkieController c) => computeRadiosNearby(
     return c.groupForScope(scope) == null ? null : c.reachOfScope(scope);
   },
   openByNumber: c.reachOfScope,
-  phone: c.trip?.myFix?.pos,
+  phone: c.distanceOrigin(phone: c.trip?.myFix?.pos),
 );
 
 /// The signal line: "heard 5 min ago · SNR 6.5 dB · RSSI -92 dBm · direct ·

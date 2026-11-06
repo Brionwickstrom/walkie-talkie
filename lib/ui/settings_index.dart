@@ -576,6 +576,27 @@ const settingsIndex = <SettingEntry>[
     home: SettingsHome.radio,
   ),
   SettingEntry(
+    id: 'radio-home-location',
+    title: 'Set home location',
+    section: 'Radio settings',
+    about:
+        'Type latitude and longitude for a fixed base radio (no GPS).',
+    words: [
+      'home',
+      'base',
+      'coordinates',
+      'lat',
+      'long',
+      'longitude',
+      'latitude',
+      'fixed position',
+      'fixed',
+      'skunk ape',
+      'altitude',
+    ],
+    home: SettingsHome.radio,
+  ),
+  SettingEntry(
     id: 'radio-precision',
     title: 'Location precision',
     section: 'Radio settings',

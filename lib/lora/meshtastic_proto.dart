@@ -300,21 +300,39 @@ DeviceMetricsPb? decodeTelemetryDeviceMetrics(Uint8List b) {
 }
 
 /// `Position` (mesh.proto): latitude_i=1, longitude_i=2 (sfixed32, degrees
-/// x 1e7), altitude=3. A (0, 0) fix means "no position".
+/// x 1e7), altitude=3 (int32 metres). A (0, 0) fix means "no position".
 class PositionPb {
-  PositionPb(this.lat, this.lng);
+  PositionPb(this.lat, this.lng, {this.alt});
   final double lat, lng;
 
+  /// Metres above sea level; null when the radio did not send one.
+  final int? alt;
+
   static PositionPb? decode(Uint8List b) {
-    var la = 0, lo = 0;
+    var la = 0, lo = 0, alt = 0;
+    var hasAlt = false;
     for (final f in pbDecode(b)) {
-      if (f.wireType != 5) continue;
-      if (f.number == 1) la = f.asSFixed32;
-      if (f.number == 2) lo = f.asSFixed32;
+      if (f.wireType == 5) {
+        if (f.number == 1) la = f.asSFixed32;
+        if (f.number == 2) lo = f.asSFixed32;
+      } else if (f.wireType == 0 && f.number == 3) {
+        alt = f.asInt32;
+        hasAlt = true;
+      }
     }
     if (la == 0 && lo == 0) return null;
     if (la.abs() > 900000000 || lo.abs() > 1800000000) return null;
-    return PositionPb(la / 1e7, lo / 1e7);
+    return PositionPb(la / 1e7, lo / 1e7, alt: hasAlt ? alt : null);
+  }
+
+  /// Encode for AdminMessage.set_fixed_position (v2.6.6). Uses sfixed32
+  /// for lat/lng (wire type 5) and a varint altitude when set.
+  Uint8List encode() {
+    final w = PbWriter()
+      ..fixed32(1, (lat * 1e7).round())
+      ..fixed32(2, (lng * 1e7).round());
+    if (alt != null && alt != 0) w.uint(3, alt);
+    return w.toBytes();
   }
 }
 

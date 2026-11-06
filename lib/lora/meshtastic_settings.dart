@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'meshtastic_admin.dart';
 import 'meshtastic_channels.dart';
 import 'meshtastic_proto.dart';
+import 'home_location.dart';
 import 'meshtastic_session.dart';
 import 'protobuf.dart';
 
@@ -549,6 +550,9 @@ class RadioSnapshot {
   bool? get sharing =>
       position == null ? null : locationSharingOn(positionSecs, positionSmart);
 
+  /// PositionConfig.fixed_position (v2.6.6).
+  bool get fixedPosition => positionConfigIsFixed(position);
+
   Map<String, Object?> toJson() => {
     'node': node,
     'at': at.toUtc().toIso8601String(),
@@ -592,6 +596,7 @@ class RadioSnapshot {
     if (longName != null && longName!.isNotEmpty)
       'name $longName${(shortName ?? '').isEmpty ? '' : ' ($shortName)'}',
     if (sharing != null) 'location sharing ${sharing! ? 'on' : 'off'}',
+    if (position != null && fixedPosition) 'fixed position',
     if (channelPrecisions.isNotEmpty)
       'location precision ${channelPrecisions.values.map(radioPrecisionText).join(', ')}',
   ].join(', ');
@@ -602,16 +607,39 @@ class RadioSnapshot {
 /// interval it had while sharing was on (so turning sharing on again puts
 /// that back).
 class RadioBackup {
-  RadioBackup({required this.previous, this.sharingSecs, this.sharingSmart});
+  RadioBackup({
+    required this.previous,
+    this.sharingSecs,
+    this.sharingSmart,
+    this.wasFixed,
+    this.fixedLat,
+    this.fixedLng,
+    this.fixedAlt,
+  });
   final RadioSnapshot previous;
   final int? sharingSecs;
   final bool? sharingSmart;
+
+  /// Whether PositionConfig.fixed_position was on before the last change
+  /// (v2.6.6). Null when the last change was not about fixed position.
+  final bool? wasFixed;
+  final double? fixedLat;
+  final double? fixedLng;
+  final int? fixedAlt;
+
+  HomeCoords? get fixedCoords => fixedLat != null && fixedLng != null
+      ? HomeCoords(fixedLat!, fixedLng!, alt: fixedAlt)
+      : null;
 
   String encode() => jsonEncode({
     'v': 1,
     'previous': previous.toJson(),
     'sharingSecs': ?sharingSecs,
     'sharingSmart': ?sharingSmart,
+    'wasFixed': ?wasFixed,
+    'fixedLat': ?fixedLat,
+    'fixedLng': ?fixedLng,
+    'fixedAlt': ?fixedAlt,
   });
 
   static RadioBackup? tryDecode(String? s) {
@@ -624,6 +652,10 @@ class RadioBackup {
         previous: p,
         sharingSecs: (j['sharingSecs'] as num?)?.toInt(),
         sharingSmart: j['sharingSmart'] as bool?,
+        wasFixed: j['wasFixed'] as bool?,
+        fixedLat: (j['fixedLat'] as num?)?.toDouble(),
+        fixedLng: (j['fixedLng'] as num?)?.toDouble(),
+        fixedAlt: (j['fixedAlt'] as num?)?.toInt(),
       );
     } catch (_) {
       return null;
@@ -641,6 +673,8 @@ class RadioChange {
     this.lora = const {},
     this.position = const {},
     this.channelPrecision = const {},
+    this.fixedPosition,
+    this.clearFixed = false,
     this.what = 'settings',
   });
 
@@ -655,6 +689,12 @@ class RadioChange {
   /// Channel slot -> location precision to set on that channel (v2.5.7).
   final Map<int, int> channelPrecision;
 
+  /// v2.6.6: write these as AdminMessage.set_fixed_position.
+  final HomeCoords? fixedPosition;
+
+  /// v2.6.6: AdminMessage.remove_fixed_position.
+  final bool clearFixed;
+
   /// "region", "speed", ... for the progress text.
   final String what;
 
@@ -662,8 +702,13 @@ class RadioChange {
   bool get touchesLora => lora.isNotEmpty;
   bool get touchesPosition => position.isNotEmpty;
   bool get touchesChannels => channelPrecision.isNotEmpty;
+  bool get touchesFixed => fixedPosition != null || clearFixed;
   bool get isEmpty =>
-      !touchesOwner && !touchesLora && !touchesPosition && !touchesChannels;
+      !touchesOwner &&
+      !touchesLora &&
+      !touchesPosition &&
+      !touchesChannels &&
+      !touchesFixed;
 
   /// The radio restarts for LoRa changes (and maybe others: the writer
   /// waits and asks again if it does not).
@@ -712,28 +757,42 @@ class RadioChange {
     what: 'location precision',
   );
 
+  /// Set a fixed home / base position on the connected radio (v2.6.6).
+  static RadioChange setHome(HomeCoords c) =>
+      RadioChange(fixedPosition: c, what: 'home location');
+
+  /// Clear the radio's fixed position (v2.6.6).
+  static RadioChange clearHome() =>
+      const RadioChange(clearFixed: true, what: 'home location');
+
   /// Put back what [b] had (only the fields this page changes, on top of
-  /// what the radio has now).
-  static RadioChange restore(RadioSnapshot b) => RadioChange(
-    longName: b.longName != null && b.longName!.isNotEmpty ? b.longName : null,
-    shortName: b.shortName != null && b.shortName!.isNotEmpty
-        ? b.shortName
-        : null,
-    lora: b.lora == null
-        ? const {}
-        : {
-            1: rawInt(b.lora, 1),
-            2: rawInt(b.lora, 2),
-            7: rawInt(b.lora, 7),
-            8: rawInt(b.lora, 8),
-            11: rawInt(b.lora, 11),
-          },
-    position: b.position == null
-        ? const {}
-        : {1: rawInt(b.position, 1), 2: rawInt(b.position, 2)},
-    channelPrecision: b.channelPrecisions,
-    what: 'previous settings',
-  );
+  /// what the radio has now). When [full] carries a fixed-position backup
+  /// (v2.6.6), that is restored too.
+  static RadioChange restore(RadioSnapshot b, {RadioBackup? full}) =>
+      RadioChange(
+        longName: b.longName != null && b.longName!.isNotEmpty
+            ? b.longName
+            : null,
+        shortName: b.shortName != null && b.shortName!.isNotEmpty
+            ? b.shortName
+            : null,
+        lora: b.lora == null
+            ? const {}
+            : {
+                1: rawInt(b.lora, 1),
+                2: rawInt(b.lora, 2),
+                7: rawInt(b.lora, 7),
+                8: rawInt(b.lora, 8),
+                11: rawInt(b.lora, 11),
+              },
+        position: b.position == null
+            ? const {}
+            : {1: rawInt(b.position, 1), 2: rawInt(b.position, 2)},
+        channelPrecision: b.channelPrecisions,
+        fixedPosition: full?.wasFixed == true ? full!.fixedCoords : null,
+        clearFixed: full?.wasFixed == false,
+        what: 'previous settings',
+      );
 }
 
 class RadioWriteResult {
@@ -859,6 +918,9 @@ class RadioSettingsWriter {
     RadioChange change, {
     required Future<void> Function(RadioBackup backup) saveBackup,
     RadioBackup? previousBackup,
+    /// The connected radio's last known lat/lng (for the fixed-position
+    /// backup), from the session node DB. Null when unknown.
+    HomeCoords? currentNodePos,
     void Function(MeshWriteStep step)? onStep,
   }) async {
     if (change.isEmpty) {
@@ -908,6 +970,10 @@ class RadioSettingsWriter {
             }),
       sharingSecs: onSecs,
       sharingSmart: onSmart,
+      wasFixed: change.touchesFixed ? before.fixedPosition : null,
+      fixedLat: change.touchesFixed ? currentNodePos?.lat : null,
+      fixedLng: change.touchesFixed ? currentNodePos?.lng : null,
+      fixedAlt: change.touchesFixed ? currentNodePos?.alt : null,
     );
     await saveBackup(backup);
     final key = (await _ask(
@@ -965,6 +1031,28 @@ class RadioSettingsWriter {
         wantResponse: false,
       );
     }
+    if (change.fixedPosition != null) {
+      final err = validateHomeCoords(change.fixedPosition);
+      if (err != null) throw MeshWriteException(err);
+      await _gap();
+      await s.sendAdmin(
+        AdminPb.setFixedPosition(
+          PositionPb(
+            change.fixedPosition!.lat,
+            change.fixedPosition!.lng,
+            alt: change.fixedPosition!.alt,
+          ).encode(),
+          passkey: key,
+        ),
+        wantResponse: false,
+      );
+    } else if (change.clearFixed) {
+      await _gap();
+      await s.sendAdmin(
+        AdminPb.removeFixedPosition(passkey: key),
+        wantResponse: false,
+      );
+    }
     await _gap();
     await s.sendAdmin(AdminPb.commitEdit(passkey: key), wantResponse: false);
     onStep?.call(MeshWriteStep.restarting);
@@ -1012,6 +1100,15 @@ class RadioSettingsWriter {
         (e) => rawInt(now.position, e.key) != (e.value ?? 0),
       )) {
         bad.add('location sharing');
+      }
+    }
+    if (c.touchesFixed) {
+      if (now.position == null) {
+        bad.add('home location (not readable)');
+      } else if (c.fixedPosition != null && !now.fixedPosition) {
+        bad.add('the fixed home location');
+      } else if (c.clearFixed && now.fixedPosition) {
+        bad.add('clearing the fixed home location');
       }
     }
     for (final e in c.channelPrecision.entries) {

@@ -82,7 +82,10 @@ class Fw implements MeshtasticWire {
   final log = <String>[];
 
   /// The raw bytes of what was sent per set.
-  Uint8List? sentOwner, sentLora, sentPosition;
+  Uint8List? sentOwner, sentLora, sentPosition, sentFixed;
+  bool? pendingRemoveFixed;
+  bool? _pRemoveFixed;
+  Uint8List? _pFixed;
   final packets = <MeshPacketPb>[];
   int commits = 0;
   bool _open = false;
@@ -200,6 +203,8 @@ class Fw implements MeshtasticWire {
         log.add('begin');
         _open = true;
         _pLora = _pPos = _pOwner = null;
+        _pFixed = null;
+        _pRemoveFixed = null;
         _pChannels.clear();
       case 32:
         log.add('set_owner');
@@ -226,6 +231,19 @@ class Fw implements MeshtasticWire {
             _pPos = sentPosition;
           }
         }
+      case 41:
+        log.add('set_fixed');
+        sentFixed = Uint8List.fromList(first.asBytes);
+        _pFixed = sentFixed;
+        _pRemoveFixed = false;
+        // Mirror firmware: PositionConfig.fixed_position = true.
+        _pPos = patchVarints(position, {3: 1});
+      case 42:
+        log.add('remove_fixed');
+        pendingRemoveFixed = true;
+        _pRemoveFixed = true;
+        _pFixed = null;
+        _pPos = patchVarints(position, {3: 0});
       case 65:
         log.add('commit');
         _open = false;

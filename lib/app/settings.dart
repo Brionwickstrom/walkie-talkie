@@ -68,6 +68,9 @@ class AppSettings {
     this.wxShare = true,
     Map<String, String>? wxTrusted,
     this.radioBackup,
+    this.homeLat,
+    this.homeLng,
+    this.homeAlt,
     this.joinAlertPrivate = true,
     this.joinAlertPublic = false,
     this.shareRadio = true,
@@ -260,6 +263,12 @@ class AppSettings {
   /// Radio settings (v2.5.3), for "Restore previous settings". JSON, see
   /// RadioBackup; null = nothing saved.
   String? radioBackup;
+
+  /// v2.6.6: last fixed home location written to a radio (or typed).
+  /// Used for distance when the home radio has no GPS fix.
+  double? homeLat;
+  double? homeLng;
+  int? homeAlt;
 
   /// Paired Meshtastic LoRa radio (Bluetooth id / name), v1.7.0.
   String? radioId;
@@ -482,6 +491,9 @@ class SharedPrefsSettingsStore implements SettingsStore {
   static const _kWxShare = 'wx_share';
   static const _kWxTrusted = 'wx_trusted';
   static const _kRadioBackup = 'radio_backup';
+  static const _kHomeLat = 'home_lat';
+  static const _kHomeLng = 'home_lng';
+  static const _kHomeAlt = 'home_alt';
   static const _kJoinPrivate = 'join_alert_private';
   static const _kJoinPublic = 'join_alert_public';
   static const _kShareRadio = 'share_radio';
@@ -569,6 +581,9 @@ class SharedPrefsSettingsStore implements SettingsStore {
       wxShare: prefs?.getBool(_kWxShare) ?? true,
       wxTrusted: _decodeTrusted(prefs?.getString(_kWxTrusted)),
       radioBackup: prefs?.getString(_kRadioBackup),
+      homeLat: prefs?.getDouble(_kHomeLat),
+      homeLng: prefs?.getDouble(_kHomeLng),
+      homeAlt: prefs?.getInt(_kHomeAlt),
       joinAlertPrivate: prefs?.getBool(_kJoinPrivate) ?? true,
       joinAlertPublic: prefs?.getBool(_kJoinPublic) ?? false,
       shareRadio: prefs?.getBool(_kShareRadio) ?? true,
@@ -628,6 +643,21 @@ class SharedPrefsSettingsStore implements SettingsStore {
         await prefs.remove(_kRadioBackup);
       } else {
         await prefs.setString(_kRadioBackup, s.radioBackup!);
+      }
+      if (s.homeLat == null) {
+        await prefs.remove(_kHomeLat);
+      } else {
+        await prefs.setDouble(_kHomeLat, s.homeLat!);
+      }
+      if (s.homeLng == null) {
+        await prefs.remove(_kHomeLng);
+      } else {
+        await prefs.setDouble(_kHomeLng, s.homeLng!);
+      }
+      if (s.homeAlt == null) {
+        await prefs.remove(_kHomeAlt);
+      } else {
+        await prefs.setInt(_kHomeAlt, s.homeAlt!);
       }
       await prefs.setBool(_kJoinPrivate, s.joinAlertPrivate);
       await prefs.setBool(_kJoinPublic, s.joinAlertPublic);

@@ -72,6 +72,18 @@ class AdminPb {
     final cfg = (PbWriter()..message(6, lora)).toBytes();
     return _with((w) => w.message(34, cfg), passkey);
   }
+
+  /// set_fixed_position=41 (Position): the radio stores these coordinates
+  /// and turns PositionConfig.fixed_position on (v2.6.6).
+  static Uint8List setFixedPosition(
+    Uint8List position, {
+    List<int>? passkey,
+  }) => _with((w) => w.message(41, position), passkey);
+
+  /// remove_fixed_position=42: clear the fixed coordinates and turn
+  /// PositionConfig.fixed_position off (v2.6.6).
+  static Uint8List removeFixedPosition({List<int>? passkey}) =>
+      _with((w) => w.boolean(42, true), passkey);
 }
 
 /// A decoded answer from our radio's admin module.

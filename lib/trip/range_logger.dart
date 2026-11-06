@@ -31,8 +31,12 @@ abstract class RangeRadio {
 }
 
 class SessionRangeRadio implements RangeRadio {
-  SessionRangeRadio(this.s);
+  SessionRangeRadio(this.s, {this.fallbackOf});
   final MeshtasticSession s;
+
+  /// When a node has no GPS fix, optionally supply one (v2.6.6 home
+  /// location for the home radio).
+  final GeoPoint? Function(int node)? fallbackOf;
 
   @override
   Stream<RadioHeard> get heard => s.heard;
@@ -60,8 +64,10 @@ class SessionRangeRadio implements RangeRadio {
   @override
   GeoPoint? positionOf(int node) {
     final n = s.nodes[node];
-    if (n?.lat == null || n?.lng == null) return null;
-    return GeoPoint(n!.lat!, n.lng!);
+    if (n?.lat != null && n?.lng != null) {
+      return GeoPoint(n!.lat!, n.lng!);
+    }
+    return fallbackOf?.call(node);
   }
 
   @override

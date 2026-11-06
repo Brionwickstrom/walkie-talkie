@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../app/walkie_controller.dart';
+import '../lora/home_location.dart';
 import '../lora/meshtastic_admin.dart';
 import '../lora/meshtastic_channels.dart';
 import '../lora/meshtastic_session.dart';
@@ -136,7 +137,8 @@ class RadioSettingsPage extends StatefulWidget {
 class _RadioSettingsPageState extends State<RadioSettingsPage> {
   late final TextEditingController _long;
   late final TextEditingController _short;
-  String? _longError, _shortError;
+  late final TextEditingController _home;
+  String? _longError, _shortError, _homeError;
   int _hop = 3;
   int _region = 0;
   int _preset = 0;
@@ -160,6 +162,7 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
     super.initState();
     _long = TextEditingController();
     _short = TextEditingController();
+    _home = TextEditingController();
     _loadFields();
   }
 
@@ -167,6 +170,7 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
   void dispose() {
     _long.dispose();
     _short.dispose();
+    _home.dispose();
     super.dispose();
   }
 
@@ -184,6 +188,16 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
       ..addAll({
         for (final ch in c.radioChannels) ch.index: ch.positionPrecision,
       });
+    final home = c.homeLocation;
+    if (home != null) {
+      _home.text = home.pasteLine;
+    } else {
+      final me2 = s.myNodeNum == null ? null : s.nodes[s.myNodeNum];
+      if (me2?.lat != null && me2?.lng != null) {
+        _home.text = HomeCoords(me2!.lat!, me2.lng!).pasteLine;
+      }
+    }
+    _homeError = null;
   }
 
   Future<void> _run(RadioChange change, String savedText) async {
@@ -328,6 +342,62 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
       on ? 'Location sharing is on.' : 'Location sharing is off.',
     );
   }
+  Future<void> _saveHome() async {
+    final parsed = parseHomeLocation(_home.text);
+    setState(() => _homeError = parsed.error);
+    if (!parsed.ok) return;
+    final coords = parsed.coords!;
+    final ok = await _confirm(
+      title: 'Set home location on this radio?',
+      intro:
+          'The radio will use these coordinates as a fixed position (no GPS). '
+          'Only this connected radio changes.',
+      lines: [
+        'Latitude ${coords.lat.toStringAsFixed(6)}',
+        'Longitude ${coords.lng.toStringAsFixed(6)}',
+        if (coords.alt != null) 'Altitude ${coords.alt} m',
+      ],
+    );
+    if (ok != true || !mounted) return;
+    await _run(
+      RadioChange.setHome(coords),
+      'Home location saved: ${coords.summary}.',
+    );
+  }
+
+  Future<void> _clearHome() async {
+    final ok = await _confirm(
+      title: 'Clear fixed position?',
+      intro:
+          'The radio will stop using a fixed home location. It can use GPS '
+          'again if it has one. Only this connected radio changes.',
+      lines: const [
+        'Fixed position will be turned off.',
+      ],
+    );
+    if (ok != true || !mounted) return;
+    await _run(
+      RadioChange.clearHome(),
+      'Fixed home location cleared.',
+    );
+  }
+
+  void _useCurrentLocation() {
+    final fix = c.trip?.myFix?.pos;
+    if (fix == null) {
+      setState(
+        () => _homeError =
+            'No GPS fix on this device yet. Type the coordinates, or open '
+            'the Trip map first.',
+      );
+      return;
+    }
+    setState(() {
+      _home.text = HomeCoords(fix.lat, fix.lng).pasteLine;
+      _homeError = null;
+    });
+  }
+
 
   String _slotText(int n) => n == 0 ? 'automatic' : '$n';
 
@@ -440,6 +510,86 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
         for (final ch in todo) ch.index,
       ], precisionFull),
       'All channels share your exact spot (Full).',
+    );
+  }
+
+
+  Widget _homeSection(
+    ThemeData theme,
+    MeshtasticSession? s,
+    bool canEdit,
+    Widget Function(String) head,
+    TextStyle? small,
+  ) {
+    final stored = c.homeLocation;
+    final me = s?.myNodeNum == null ? null : s!.nodes[s.myNodeNum];
+    final hasNodePos = me?.lat != null && me?.lng != null;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        head('Set home location'),
+        Text(
+          'For a base radio with no GPS (like Skunk Ape): type its latitude '
+          'and longitude. Saving writes a fixed position to this connected '
+          'radio. The app also uses it for distances when the radio has no '
+          'GPS fix. Paste works: 45.5868, -122.2901',
+          key: const Key('rs-home-note'),
+          style: small,
+        ),
+        const SizedBox(height: 8),
+        if (stored != null)
+          Text(
+            'Saved home location: ${stored.summary}',
+            key: const Key('rs-home-status'),
+            style: small?.copyWith(fontWeight: FontWeight.w600),
+          )
+        else if (hasNodePos)
+          Text(
+            'Radio last reported: '
+            '${me!.lat!.toStringAsFixed(5)}, ${me.lng!.toStringAsFixed(5)}',
+            key: const Key('rs-home-status'),
+            style: small,
+          ),
+        TextField(
+          key: const Key('rs-home-coords'),
+          controller: _home,
+          enabled: canEdit,
+          keyboardType: const TextInputType.numberWithOptions(
+            decimal: true,
+            signed: true,
+          ),
+          decoration: InputDecoration(
+            labelText: 'Latitude, longitude',
+            hintText: '45.5868, -122.2901',
+            helperText: 'Optional altitude: 45.5868, -122.2901, 120',
+            errorText: _homeError,
+          ),
+          onChanged: (_) {
+            if (_homeError != null) setState(() => _homeError = null);
+          },
+        ),
+        Wrap(
+          spacing: 8,
+          runSpacing: 4,
+          children: [
+            TextButton(
+              key: const Key('rs-home-use-gps'),
+              onPressed: canEdit ? _useCurrentLocation : null,
+              child: const Text('Use my current location'),
+            ),
+            FilledButton(
+              key: const Key('rs-home-save'),
+              onPressed: canEdit ? _saveHome : null,
+              child: const Text('Save home location'),
+            ),
+            OutlinedButton(
+              key: const Key('rs-home-clear'),
+              onPressed: canEdit ? _clearHome : null,
+              child: const Text('Clear fixed position'),
+            ),
+          ],
+        ),
+      ],
     );
   }
 
@@ -672,7 +822,7 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
             final data = computePublicNodes(
               session: s,
               onPublicSlot: _relayInfo(s).on,
-              phone: c.trip?.myFix?.pos,
+              phone: c.distanceOrigin(phone: c.trip?.myFix?.pos),
             );
             final now = DateTime.now();
             return Column(
@@ -1034,6 +1184,10 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
                         ),
                       ],
                     ),
+                  ),
+                  SettingAnchor(
+                    id: 'radio-home-location',
+                    child: _homeSection(theme, s, canEdit, head, small),
                   ),
                   SettingAnchor(
                     id: 'radio-precision',
