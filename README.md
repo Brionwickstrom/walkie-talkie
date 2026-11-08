@@ -2770,3 +2770,34 @@ Rules:
 - The older **Battery saver** (Normal / Saver for the phone links, now
   under "Connection battery saver") and **Offline power save** are separate
   and work as before; they stack with any Battery mode.
+
+## v2.6.13: Guided radio setup
+
+A step-by-step setup for a Meshtastic radio that is new or out of step
+with the others (Yeti, Sasquatch, a fresh unit), so the settings do not
+have to be typed in one by one.
+
+**Radio settings > Guided radio setup** (search "guided", "wizard",
+"setup" or "new radio").
+
+1. **Connect.** Pick a saved radio or connect the one to set up.
+2. **Name.** Long name and short name.
+3. **Region, frequency slot and hop limit.** Hop limit starts at 4, or at
+   whatever your other radios already use when they agree. The frequency
+   slot starts at theirs too, otherwise the public LongFast slot (20 in
+   the US).
+4. **BigfootNet** at Full location precision (exact).
+5. **Location sharing.** The radio's own position broadcast.
+6. **Listen to public radios** (optional). The same listen-only public
+   LongFast channel as Show public nodes. Nothing is sent on it.
+7. **Review.** Each setting that will change, in words. A backup of the
+   radio's current settings is saved before anything is written.
+8. **Apply.** Each setting is read back. If one did not stick, the sentence
+   says which, with Try again and Restore. Restore puts the backup back,
+   including whether the public channel was on.
+9. **Done.** The radio is added or updated in Saved radios, and you can
+   send one short test ping (repeated at most once).
+
+Nothing is sent until Apply, and the ping is only when you tap it. The
+channel key is not shown. A failure is one plain sentence with a button
+that does the fix.
