@@ -434,8 +434,15 @@ void main() {
     });
   });
 
-  test('version 2.6.12+72', () {
+  test('version is 2.6.12+72 or later', () {
     final p = File('pubspec.yaml').readAsStringSync();
-    expect(p, contains('version: 2.6.12+72'));
+    final m = RegExp(r'\nversion: 2\.6\.(\d+)\+(\d+)\n').firstMatch(p)!;
+    final patch = int.parse(m.group(1)!);
+    final build = int.parse(m.group(2)!);
+    expect(
+      patch > 12 || (patch == 12 && build >= 72),
+      isTrue,
+      reason: 'pubspec is ${m.group(0)}',
+    );
   });
 }

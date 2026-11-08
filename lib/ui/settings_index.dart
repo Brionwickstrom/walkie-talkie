@@ -661,6 +661,28 @@ const settingsIndex = <SettingEntry>[
   ),
   // --- Radio settings page ------------------------------------------------
   SettingEntry(
+    id: 'radio-guided-setup',
+    title: 'Guided radio setup',
+    section: 'Radio settings',
+    about:
+        'Step through name, region, BigfootNet and location so this radio '
+        'matches your others.',
+    words: [
+      'guided',
+      'wizard',
+      'setup',
+      'set up',
+      'new radio',
+      'out of sync',
+      'align',
+      'bigfoot',
+      'bigfootnet',
+      'step by step',
+      'match radios',
+    ],
+    home: SettingsHome.radio,
+  ),
+  SettingEntry(
     id: 'radio-match',
     title: 'Radio match check',
     section: 'Radio settings',

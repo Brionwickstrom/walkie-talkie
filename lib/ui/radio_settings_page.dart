@@ -9,6 +9,7 @@ import '../lora/meshtastic_settings.dart';
 import '../lora/radio_match.dart';
 import 'adaptive_layout.dart';
 import 'friendly_error.dart';
+import 'guided_setup_page.dart';
 import 'public_nodes.dart';
 import 'radio_match_card.dart';
 import 'settings_index.dart';
@@ -342,6 +343,7 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
       on ? 'Location sharing is on.' : 'Location sharing is off.',
     );
   }
+
   Future<void> _saveHome() async {
     final parsed = parseHomeLocation(_home.text);
     setState(() => _homeError = parsed.error);
@@ -371,15 +373,10 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
       intro:
           'The radio will stop using a fixed home location. It can use GPS '
           'again if it has one. Only this connected radio changes.',
-      lines: const [
-        'Fixed position will be turned off.',
-      ],
+      lines: const ['Fixed position will be turned off.'],
     );
     if (ok != true || !mounted) return;
-    await _run(
-      RadioChange.clearHome(),
-      'Fixed home location cleared.',
-    );
+    await _run(RadioChange.clearHome(), 'Fixed home location cleared.');
   }
 
   void _useCurrentLocation() {
@@ -397,7 +394,6 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
       _homeError = null;
     });
   }
-
 
   String _slotText(int n) => n == 0 ? 'automatic' : '$n';
 
@@ -512,7 +508,6 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
       'All channels share your exact spot (Full).',
     );
   }
-
 
   Widget _homeSection(
     ThemeData theme,
@@ -844,7 +839,7 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
                     subtitle: Text(
                       n.hasName
                           ? '${n.idLabel}\n'
-                              '${publicNodeLine(n, now: now, imperial: imperial)}'
+                                '${publicNodeLine(n, now: now, imperial: imperial)}'
                           : publicNodeLine(n, now: now, imperial: imperial),
                     ),
                   ),
@@ -1054,6 +1049,31 @@ class _RadioSettingsPageState extends State<RadioSettingsPage> {
                         ),
                       ),
                     ),
+                  SettingAnchor(
+                    id: 'radio-guided-setup',
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        head('Guided radio setup'),
+                        Text(
+                          'Walk through name, region, frequency slot, hop '
+                          'limit, the BigfootNet channel and location '
+                          'sharing so this radio matches your others. A '
+                          'backup is saved before anything is written.',
+                          style: small,
+                        ),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: FilledButton.icon(
+                            key: const Key('rs-guided'),
+                            onPressed: () => openGuidedSetup(context, c),
+                            icon: const Icon(Icons.assistant_direction),
+                            label: const Text('Set up this radio'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                   SettingAnchor(
                     id: 'radio-match',
                     child: RadioMatchCard(

@@ -615,6 +615,7 @@ class RadioBackup {
     this.fixedLat,
     this.fixedLng,
     this.fixedAlt,
+    this.publicListen,
   });
   final RadioSnapshot previous;
   final int? sharingSecs;
@@ -626,6 +627,10 @@ class RadioBackup {
   final double? fixedLat;
   final double? fixedLng;
   final int? fixedAlt;
+
+  /// Whether the listen-only public channel was on before a guided setup
+  /// (v2.6.13). Null for backups that did not record it.
+  final bool? publicListen;
 
   HomeCoords? get fixedCoords => fixedLat != null && fixedLng != null
       ? HomeCoords(fixedLat!, fixedLng!, alt: fixedAlt)
@@ -640,6 +645,7 @@ class RadioBackup {
     'fixedLat': ?fixedLat,
     'fixedLng': ?fixedLng,
     'fixedAlt': ?fixedAlt,
+    'publicListen': ?publicListen,
   });
 
   static RadioBackup? tryDecode(String? s) {
@@ -656,6 +662,7 @@ class RadioBackup {
         fixedLat: (j['fixedLat'] as num?)?.toDouble(),
         fixedLng: (j['fixedLng'] as num?)?.toDouble(),
         fixedAlt: (j['fixedAlt'] as num?)?.toInt(),
+        publicListen: j['publicListen'] as bool?,
       );
     } catch (_) {
       return null;
@@ -918,10 +925,16 @@ class RadioSettingsWriter {
     RadioChange change, {
     required Future<void> Function(RadioBackup backup) saveBackup,
     RadioBackup? previousBackup,
+
     /// The connected radio's last known lat/lng (for the fixed-position
     /// backup), from the session node DB. Null when unknown.
     HomeCoords? currentNodePos,
     void Function(MeshWriteStep step)? onStep,
+
+    /// Listen-only public channel before this change (v2.6.13). Stored on
+    /// the backup so Restore can put that channel back too. Null when this
+    /// change does not know.
+    bool? publicListen,
   }) async {
     if (change.isEmpty) {
       throw MeshWriteException('Nothing to change.');
@@ -974,6 +987,7 @@ class RadioSettingsWriter {
       fixedLat: change.touchesFixed ? currentNodePos?.lat : null,
       fixedLng: change.touchesFixed ? currentNodePos?.lng : null,
       fixedAlt: change.touchesFixed ? currentNodePos?.alt : null,
+      publicListen: publicListen,
     );
     await saveBackup(backup);
     final key = (await _ask(

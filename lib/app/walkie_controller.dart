@@ -52,6 +52,7 @@ import '../lora/lora_transport.dart';
 import '../lora/meshtastic_ble.dart';
 import '../lora/meshtastic_admin.dart';
 import '../lora/meshtastic_channels.dart';
+import '../lora/guided_setup.dart';
 import '../lora/home_location.dart';
 import '../lora/meshtastic_settings.dart';
 import '../lora/radio_clip.dart';
@@ -3642,6 +3643,7 @@ class WalkieController extends ChangeNotifier {
   Future<String?> changeRadioSettings(
     RadioChange change, {
     void Function(MeshWriteStep step)? onStep,
+    bool? publicListenBefore,
   }) async {
     if (radioEditing) return 'Another change is still being saved.';
     if (radioEditBlocked) {
@@ -3661,6 +3663,7 @@ class WalkieController extends ChangeNotifier {
         change,
         previousBackup: radioBackup,
         currentNodePos: nodePos,
+        publicListen: publicListenBefore,
         saveBackup: (b) async {
           settings.radioBackup = b.encode();
           await settingsStore.save(settings);
@@ -3696,16 +3699,218 @@ class WalkieController extends ChangeNotifier {
   }
 
   /// "Restore previous settings": writes back what was saved before the
-  /// last change.
+  /// last change. A guided-setup backup also puts the listen-only public
+  /// channel back to what it was.
   Future<String?> restoreRadioSettings({
     void Function(MeshWriteStep step)? onStep,
   }) async {
     final b = radioBackup;
     if (b == null) return 'There is nothing saved to restore.';
-    return changeRadioSettings(
+    final wantPublic = b.publicListen;
+    final err = await changeRadioSettings(
       RadioChange.restore(b.previous, full: b),
       onStep: onStep,
     );
+    if (err != null) return err;
+    if (wantPublic != null && publicListenOn != wantPublic) {
+      return setPublicListen(wantPublic, onStep: onStep);
+    }
+    return null;
+  }
+
+  /// The saved-radio list follows the radio that is connected now (names,
+  /// node number and the match-check reading). No extra radio traffic.
+  void refreshSavedRadio() => _noteRadio();
+
+  GuidedNow _guidedNow() => guidedFromRadio(
+    ready: radioDevice.ready,
+    radioId: radioDevice.deviceId,
+    radioTitle: radioDevice.deviceName,
+    session: radioDevice.session,
+  );
+
+  String? _guidedGate() {
+    if (radioEditing) return 'Another change is still being saved.';
+    if (radioEditBlocked) {
+      return 'A talk is going on. Try again when it is over.';
+    }
+    final s = radioDevice.session;
+    if (!radioDevice.ready ||
+        s == null ||
+        !s.configured ||
+        s.myNodeNum == null) {
+      return 'Connect your radio first.';
+    }
+    return null;
+  }
+
+  /// Read the radio and store it as the undo backup, without writing.
+  /// Used when guided setup only changes the public channel.
+  Future<String?> _backupRadioNow({required bool publicListen}) async {
+    final why = _guidedGate();
+    if (why != null) return why;
+    radioEditing = true;
+    notifyListeners();
+    try {
+      final before = await radioSettingsWriterFactory().read();
+      if (before.lora == null ||
+          before.position == null ||
+          before.owner == null) {
+        return 'Your radio did not send its settings, so nothing was '
+            'changed.';
+      }
+      final prev = radioBackup;
+      var secs = prev?.sharingSecs;
+      var smart = prev?.sharingSmart;
+      if (before.sharing == true) {
+        secs = before.positionSecs;
+        smart = before.positionSmart;
+      }
+      settings.radioBackup = RadioBackup(
+        previous: before,
+        sharingSecs: secs,
+        sharingSmart: smart,
+        publicListen: publicListen,
+      ).encode();
+      await settingsStore.save(settings);
+      return null;
+    } on MeshWriteException catch (e) {
+      debugLog.add('radio', 'guided setup backup failed: ${e.message}');
+      return e.message;
+    } catch (_) {
+      debugLog.add('radio', 'guided setup backup failed');
+      return 'Your radio did not send its settings, so nothing was changed.';
+    } finally {
+      radioEditing = false;
+      notifyListeners();
+    }
+  }
+
+  Future<String?> _applyPublic(
+    GuidedPlan plan, {
+    void Function(MeshWriteStep step)? onStep,
+  }) async {
+    if (plan.publicReset) {
+      final off = await setPublicListen(false, onStep: onStep);
+      if (off != null) return off;
+      return setPublicListen(true, onStep: onStep);
+    }
+    if (plan.publicListen != null) {
+      return setPublicListen(plan.publicListen!, onStep: onStep);
+    }
+    return null;
+  }
+
+  /// Put [want] on the connected radio. A backup of the current settings
+  /// is saved before the first write. Null [GuidedApplyResult.error] means
+  /// every setting read back as asked.
+  Future<GuidedApplyResult> applyGuidedSetup(
+    GuidedChoice want, {
+    void Function(MeshWriteStep step)? onStep,
+  }) async {
+    final why = _guidedGate();
+    if (why != null) return GuidedApplyResult(error: why);
+    final invalid =
+        validateLongName(want.longName) ??
+        validateShortName(want.shortName) ??
+        validateGuidedRegion(want.region) ??
+        validateFrequencySlot(want.slot, want.region) ??
+        validateHopLimit(want.hop);
+    if (invalid != null) return GuidedApplyResult(error: invalid);
+    final now = _guidedNow();
+    final prev = radioBackup;
+    final plan = buildGuidedPlan(
+      now,
+      want,
+      sharingSecs: prev?.sharingSecs,
+      sharingSmart: prev?.sharingSmart,
+    );
+    if (plan.missingChannel) {
+      return const GuidedApplyResult(error: guidedMissingChannelText);
+    }
+    if (!plan.writes) {
+      _rememberGuidedRadio(want);
+      debugLog.add('radio', 'guided setup: already matched');
+      return GuidedApplyResult(
+        checks: checkGuided(now, want),
+        alreadyMatched: true,
+      );
+    }
+    var backupSaved = false;
+    final encodedBefore = settings.radioBackup;
+    Future<GuidedApplyResult> fail(String message) {
+      debugLog.add('radio', 'guided setup failed: $message');
+      return Future.value(
+        GuidedApplyResult(
+          checks: checkGuided(_guidedNow(), want),
+          error: message,
+          backupSaved: backupSaved,
+        ),
+      );
+    }
+
+    if (!plan.change.isEmpty) {
+      final err = await changeRadioSettings(
+        plan.change,
+        onStep: onStep,
+        publicListenBefore: now.publicListen,
+      );
+      backupSaved =
+          settings.radioBackup != null && settings.radioBackup != encodedBefore;
+      if (err != null) return fail(err);
+      backupSaved = true;
+    } else {
+      final err = await _backupRadioNow(publicListen: now.publicListen);
+      if (err != null) return fail(err);
+      backupSaved = true;
+    }
+    final pub = await _applyPublic(plan, onStep: onStep);
+    if (pub != null) return fail(pub);
+    final checks = checkGuided(_guidedNow(), want);
+    if (checks.any((c) => !c.ok)) {
+      return fail(guidedMismatchMessage(checks));
+    }
+    _rememberGuidedRadio(want);
+    debugLog.add('radio', 'guided setup saved');
+    return GuidedApplyResult(checks: checks, backupSaved: backupSaved);
+  }
+
+  /// The radio that was just set up, added or updated in Saved radios.
+  /// Names come from the wizard; the match-check reading comes from the
+  /// settings the radio already sent. No extra radio traffic.
+  void _rememberGuidedRadio(GuidedChoice want) {
+    final id = radioDevice.deviceId;
+    if (id == null) return;
+    final r = _savedRadio(id) ?? _addSaved(id, want.longName.trim());
+    final long = want.longName.trim();
+    final short = want.shortName.trim();
+    if (long.isNotEmpty) r.name = long;
+    if (short.isNotEmpty) r.shortName = short;
+    r.lastConnected = DateTime.now();
+    final s = radioDevice.session;
+    if (s != null) {
+      r.nodeId = s.myNodeNum ?? r.nodeId;
+      final rd = readingFromSession(s, DateTime.now());
+      if (rd != null) r.reading = rd;
+    }
+    if (long.isNotEmpty) settings.radioName = long;
+    unawaited(settingsStore.save(settings));
+    notifyListeners();
+  }
+
+  /// The Done step: one short test ping. Null when the radio took it.
+  Future<String?> sendGuidedPing() async {
+    final err = await sendGuidedTestPing(
+      radioDevice.session,
+      ready: radioDevice.ready,
+    );
+    debugLog.add(
+      'radio',
+      err == null
+          ? 'guided setup test ping sent'
+          : 'guided setup test ping failed',
+    );
+    return err;
   }
 
   /// v2.6.8: feed the fixed home position into Trip geofences.
