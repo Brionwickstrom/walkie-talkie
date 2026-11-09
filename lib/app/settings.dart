@@ -66,6 +66,7 @@ class AppSettings {
     this.wxWifiOnly = false,
     this.wxExtremeSound = false,
     this.wxShare = true,
+    this.wxMapAreas = true,
     Map<String, String>? wxTrusted,
     this.radioBackup,
     this.homeLat,
@@ -264,6 +265,11 @@ class AppSettings {
   /// Share the alerts this device reads from the NWS with other phones
   /// (relay rooms and the radio), v2.5.2. Receiving needs only [wxAlerts].
   bool wxShare;
+
+  /// Draw active alert areas on the Trip map (v2.6.14). On by default.
+  /// Off: no shaded areas and no badges on map markers. The Alerts page
+  /// is unchanged.
+  bool wxMapAreas;
 
   /// Devices whose weather alerts are trusted anywhere (v2.5.2): the key
   /// id (what the friend's phone shows) -> the name it had when trusted.
@@ -499,6 +505,7 @@ class SharedPrefsSettingsStore implements SettingsStore {
   static const _kWxWifi = 'wx_wifi_only';
   static const _kWxExtreme = 'wx_extreme_sound';
   static const _kWxShare = 'wx_share';
+  static const _kWxMap = 'wx_map_areas';
   static const _kWxTrusted = 'wx_trusted';
   static const _kRadioBackup = 'radio_backup';
   static const _kHomeLat = 'home_lat';
@@ -592,6 +599,7 @@ class SharedPrefsSettingsStore implements SettingsStore {
       wxWifiOnly: prefs?.getBool(_kWxWifi) ?? false,
       wxExtremeSound: prefs?.getBool(_kWxExtreme) ?? false,
       wxShare: prefs?.getBool(_kWxShare) ?? true,
+      wxMapAreas: prefs?.getBool(_kWxMap) ?? true,
       wxTrusted: _decodeTrusted(prefs?.getString(_kWxTrusted)),
       radioBackup: prefs?.getString(_kRadioBackup),
       homeLat: prefs?.getDouble(_kHomeLat),
@@ -654,6 +662,7 @@ class SharedPrefsSettingsStore implements SettingsStore {
       await prefs.setBool(_kWxWifi, s.wxWifiOnly);
       await prefs.setBool(_kWxExtreme, s.wxExtremeSound);
       await prefs.setBool(_kWxShare, s.wxShare);
+      await prefs.setBool(_kWxMap, s.wxMapAreas);
       await prefs.setString(_kWxTrusted, jsonEncode(s.wxTrusted));
       if (s.radioBackup == null) {
         await prefs.remove(_kRadioBackup);

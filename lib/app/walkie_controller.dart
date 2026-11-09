@@ -83,9 +83,12 @@ import '../trip/range_logger.dart';
 import '../trip/sos.dart';
 import '../trip/trip_controller.dart';
 import '../trip/trip_route.dart';
+import '../trip/battery_mode.dart';
 import '../weather/alert_store.dart';
 import '../weather/nws_client.dart';
 import '../weather/weather_alerts.dart';
+import '../weather/wx_areas.dart';
+import '../weather/wx_geom.dart';
 import '../weather/wx_alert.dart';
 import '../weather/wx_keys.dart';
 import '../weather/wx_mesh.dart';
@@ -2369,13 +2372,15 @@ class WalkieController extends ChangeNotifier {
       try {
         ver = (await PackageInfo.fromPlatform()).version;
       } catch (_) {}
-      final file = File('${(await _messageDir()).parent.path}/alerts.json');
+      final dir = (await _messageDir()).parent;
+      final file = File('${dir.path}/alerts.json');
+      final client = NwsClient(
+        userAgent:
+            'WalkieTalkie/$ver (+https://github.com/Brionwickstrom/walkie-talkie)',
+      );
       final w = WeatherAlerts(
         store: AlertStore(file: file),
-        client: NwsClient(
-          userAgent:
-              'WalkieTalkie/$ver (+https://github.com/Brionwickstrom/walkie-talkie)',
-        ),
+        client: client,
         points: _wxPoints,
         enabled: () => settings.wxAlerts,
         networkOk: _wxNetworkOk,
@@ -2385,6 +2390,9 @@ class WalkieController extends ChangeNotifier {
         onRead: (got, zones) async {
           await wxMesh?.onNwsRead(got, zones);
         },
+        zoneCache: WxZoneCache(file: File('${dir.path}/wx_zones.json')),
+        fetchZone: client.zoneOutline,
+        allowZoneFetch: _wxZoneFetchOk,
       );
       await w.load();
       w.addListener(notifyListeners);
@@ -2564,6 +2572,15 @@ class WalkieController extends ChangeNotifier {
     ];
   }
 
+  /// Zone outlines are an extra download. Not in Battery Saver, not with
+  /// the map layer off, and not when weather checks themselves are blocked.
+  bool _wxZoneFetchOk() => wxZoneFetchAllowed(
+    layerOn: settings.wxMapAreas,
+    alertsOn: settings.wxAlerts,
+    saver: trip?.batteryMode == BatteryMode.saver,
+    networkOk: _wxNetworkOk(),
+  );
+
   /// Wi-Fi only: not on mobile data; nothing without a connection.
   bool _wxNetworkOk() {
     final n = phoneNet;
@@ -2599,6 +2616,13 @@ class WalkieController extends ChangeNotifier {
       // Windows: in-app only, while the app is running.
       _notice('${text.title}: ${text.short}');
     }
+  }
+
+  Future<void> setWxMapAreas(bool on) async {
+    settings.wxMapAreas = on;
+    notifyListeners();
+    await settingsStore.save(settings);
+    if (on) unawaited(weatherAlerts?.fillZones());
   }
 
   Future<void> setWxAlerts(bool on) async {

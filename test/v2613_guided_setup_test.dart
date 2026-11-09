@@ -202,13 +202,21 @@ void main() {
       expect(older.publicListen, isNull);
     });
 
-    test('version 2.6.13+73 is described in the changelog', () {
+    test('version 2.6.13+73 or later is described in the changelog', () {
+      final p = File('pubspec.yaml').readAsStringSync();
+      final m = RegExp(r'\nversion: 2\.6\.(\d+)\+(\d+)\n').firstMatch(p)!;
+      final patch = int.parse(m.group(1)!);
+      final build = int.parse(m.group(2)!);
       expect(
-        File('pubspec.yaml').readAsStringSync(),
-        contains('version: 2.6.13+73'),
+        patch > 13 || (patch == 13 && build >= 73),
+        isTrue,
+        reason: 'pubspec is ${m.group(0)}',
       );
       final readme = File('README.md').readAsStringSync();
-      final section = readme.substring(readme.indexOf('## v2.6.13:'));
+      final start = readme.indexOf('## v2.6.13:');
+      expect(start, greaterThanOrEqualTo(0));
+      final next = readme.indexOf('\n## ', start + 4);
+      final section = readme.substring(start, next < 0 ? readme.length : next);
       expect(section, contains('Guided radio setup'));
       expect(section, contains('Listen to public radios'));
       expect(section.toLowerCase(), isNot(contains('psk')));

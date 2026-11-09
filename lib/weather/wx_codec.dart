@@ -3,6 +3,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'wx_alert.dart';
+import 'wx_geom.dart';
 import 'wx_keys.dart';
 
 /// The signed weather alert wire formats (v2.5.2, [FrameType.alert]).
@@ -30,6 +31,9 @@ import 'wx_keys.dart';
 ///   ```
 ///   Fixed 112 bytes + 12 byte frame header: 124. With 64 bytes of text 4
 ///   zones fit exactly in the 200 byte radio budget; more zones go in:
+///   A polygon does not fit in that budget, and this layout is unchanged
+///   so older apps still read it. The map draws a saved zone outline from
+///   the zone codes, or nothing until that outline is on the phone.
 /// * [WxKind.zones] (LoRa, only when needed): event, office, etn, issued
 ///   (they name the alert), more zones, the sender's key id (10 bytes, not
 ///   the whole key: the receiver has it from the compact packet), signature.
@@ -394,6 +398,10 @@ Future<Uint8List> wxEncodeFull(
     if (a.ends != null) 'en': a.ends!.millisecondsSinceEpoch,
     if (a.ugc.isNotEmpty) 'z': a.ugc.take(80).toList(),
     if (a.sender.isNotEmpty) 'by': cut(a.sender, 80),
+    // Optional simplified shape (v2.6.14). Older apps ignore unknown
+    // fields, so this does not change what they store. A radio packet
+    // never carries it: the compact format is unchanged. Null omits it.
+    'g': ?wxWireGeometry(a.polygons),
   };
   final body =
       (BytesBuilder(copy: false)
@@ -405,7 +413,7 @@ Future<Uint8List> wxEncodeFull(
 
 const _fullFields = [
   'k', 'id', 'ev', 'sv', 'ur', 'h', 'd', 'i', 'a', 't', 'r', 'on', 'ex',
-  'en', 'z', 'by', //
+  'en', 'z', 'by', 'g', //
 ];
 
 /// A packet read from the wire, not yet checked.

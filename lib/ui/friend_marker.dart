@@ -5,6 +5,7 @@ import 'package:latlong2/latlong.dart';
 import '../trip/friend_motion.dart';
 import '../trip/trip_controller.dart';
 import 'home_view.dart';
+import 'wx_map_layer.dart';
 
 /// A friend on the Trip map (v2.5.6): the dot at its guessed place between
 /// updates, faded by how old the fix is, a small arrow for the direction of
@@ -15,6 +16,7 @@ Marker friendMarker(
   String name, {
   VoidCallback? onTap,
   DateTime? now,
+  String? alertNote,
 }) {
   final t = now ?? DateTime.now();
   final age = t.difference(pp.at);
@@ -69,6 +71,15 @@ Marker friendMarker(
                     ),
                   ),
                 ),
+                if (alertNote != null && alertNote.isNotEmpty)
+                  Positioned(
+                    left: -6,
+                    top: -6,
+                    child: WxAlertBadge(
+                      key: Key('wx-badge-${pp.id}'),
+                      tip: alertNote,
+                    ),
+                  ),
                 Positioned(
                   right: -8,
                   bottom: -4,

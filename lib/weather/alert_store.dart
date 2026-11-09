@@ -199,7 +199,12 @@ class AlertStore {
           (a.isExtreme && !old.isExtreme) ||
           a.severity.index > old.severity.index;
       final alarmNow = upgraded && a.alarms && !old.alarmed;
-      final n = a.copyWith(
+      // A radio or relay copy often has no storm shape. Keep the one we
+      // already saved so a shorter message does not wipe the map area.
+      final kept = a.polygons.isNotEmpty || old.polygons.isEmpty
+          ? a
+          : a.copyWith(polygons: old.polygons);
+      final n = kept.copyWith(
         notified: old.notified && !worse && !alarmNow,
         alarmed: old.alarmed,
         firstSeen: old.firstSeen,

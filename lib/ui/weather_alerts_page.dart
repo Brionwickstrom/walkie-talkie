@@ -342,6 +342,23 @@ class WeatherAlertsSettings extends StatelessWidget {
                   ),
                 ),
               SettingAnchor(
+                id: 'wx-map',
+                child: SwitchListTile(
+                  key: const Key('wx-map'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Show alert areas on the map'),
+                  subtitle: const Text(
+                    'Draw warning, watch and advisory areas on the Trip map, '
+                    'and mark people inside them. A warning that already '
+                    'includes a shape needs no extra download. County '
+                    'outlines are saved on this phone. Battery mode Saver '
+                    'does not download them.',
+                  ),
+                  value: c.settings.wxMapAreas,
+                  onChanged: c.setWxMapAreas,
+                ),
+              ),
+              SettingAnchor(
                 id: 'wx-share',
                 child: SwitchListTile(
                   key: const Key('wx-share'),
