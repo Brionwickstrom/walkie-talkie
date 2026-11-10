@@ -2854,3 +2854,75 @@ warning.
   that redraw was already how friend markers stay current.
 
 Tests: `test/v2614_wx_map_test.dart`.
+
+## v2.6.15: MQTT bridge
+
+Meshtastic radios that cannot hear each other over LoRa (a van on Starlink,
+Skunk Ape at home) exchange channel-encrypted packets through a Mosquitto
+broker on the Synology. The phone does not subscribe and does not poll.
+The public Meshtastic broker is not used. JSON is left off, so the broker
+never gets a decoded payload. Channel keys and the MQTT password are not
+shown, logged, or written into SharedPreferences.
+
+**Settings > MQTT bridge** (search "mqtt", "bridge", "broker", "internet"
+or "uplink").
+
+- Broker address, username, topic root (empty means `msh/stalkie`), and an
+  on/off switch. The password is typed once, sealed with AES-GCM in the
+  app's private folder (not SharedPreferences, not the debug log), and the
+  box is cleared. The key sits in that same private folder, so it is
+  protected like the rest of the app's files, not by the Android Keystore.
+- **Check now** opens one MQTT sign-in and closes it. Nothing checks on a
+  timer. Battery mode Saver and Offline power save do not check unless you
+  tap it.
+- The status line says whether that check reached the broker, and when the
+  radio last delivered a packet marked as coming over MQTT.
+- **Configure this radio for my broker** shows a preview (address, TLS,
+  username, "password saved, not shown", root, encryption on, JSON off,
+  and uplink/downlink per channel). The listen-only public LongFast
+  channel is left alone. Cancel writes nothing. Write to radio sends the
+  settings, the radio restarts, and the app reads them back.
+- A failure is one sentence with a button: Enter password, Check again,
+  Connect radio, or Try again.
+
+**Reaching the broker.** Home internet is Starlink CGNAT, so nothing can
+dial in except through Tailscale. The relay already uses Tailscale Funnel
+on port 443 (`wss://walkie-relay.tail1700cf.ts.net/ws`). The broker uses
+the other Funnel port, **8443**, on the same node. Funnel terminates TLS
+with the public `*.ts.net` certificate and forwards to Mosquitto on
+`127.0.0.1:1883`. Radios and the app use
+`walkie-relay.tail1700cf.ts.net:8443` with TLS on. A radio on the home
+Wi-Fi can instead use `192.168.68.64:1883` with TLS off; the password is
+still required. Do not open 1883 on the router.
+
+Tailnet-only (`tailscale serve`, no Funnel) would hide the broker from the
+internet, and a van radio that is not on Tailscale could not reach it.
+Funnel matches how the relay is already exposed. The broker still refuses
+anonymous clients.
+
+**On the NAS** (someone with sudo, from a checkout of this repo):
+
+```
+sudo mqtt/deploy.sh
+sudo tailscale funnel --bg --tcp=8443 tcp://127.0.0.1:1883
+sudo tailscale funnel status
+```
+
+`deploy.sh` generates per-device passwords under
+`/volume1/docker/walkie-mqtt/secrets/` (mode 600) and does not print them.
+Containers `walkie-mqtt` and `walkie-mqtt-log` restart unless stopped.
+Mosquitto listens on **1883**. The logger has no port of its own; it
+writes `/volume1/docker/walkie-mqtt/log/nodes.json` (node log) and
+`range.jsonl` (SNR, RSSI, hops, gateway, channel name). Positions stay
+inside the encrypted payload, so they are not in the range file. Full
+steps: `mqtt/README.md`.
+
+**Battery.** No new timer and no background connection on the phone.
+Check now is one short sign-in. The radio, not the phone, holds the MQTT
+session, so a radio with Wi-Fi uses its own power for the bridge. The
+phone proxy option is left off on purpose.
+
+The debug-only sample weather from v2.6.14 is unchanged: it still runs
+only in a debug build started with `--dart-define=SAMPLE_WX=true`.
+
+Tests: `test/v2615_mqtt_bridge_test.dart`.

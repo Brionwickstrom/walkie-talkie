@@ -602,9 +602,16 @@ void main() {
       expect(page, contains(entry.label));
     });
 
-    test('version is 2.6.14+74', () {
+    test('version is 2.6.14+74 or later', () {
       final p = File('pubspec.yaml').readAsStringSync();
-      expect(p, contains('version: 2.6.14+74'));
+      final m = RegExp(r'\nversion: 2\.6\.(\d+)\+(\d+)\n').firstMatch(p)!;
+      final patch = int.parse(m.group(1)!);
+      final build = int.parse(m.group(2)!);
+      expect(
+        patch > 14 || (patch == 14 && build >= 74),
+        isTrue,
+        reason: 'pubspec is ${m.group(0)}',
+      );
       final readme = File('README.md').readAsStringSync();
       expect(readme, contains('## v2.6.14: Weather on the Trip map'));
       expect(readme, contains('No active alerts'));

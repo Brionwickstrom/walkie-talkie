@@ -180,6 +180,10 @@ class MeshtasticSession {
 
   /// Our own radio's newest position (v2.6.7), null until it sent one.
   RadioOwnPosition? ownPosition;
+
+  /// When a packet arrived with via_mqtt set (v2.6.15). The radio already
+  /// delivered it; nothing is asked for.
+  DateTime? lastViaMqtt;
   final Map<int, RadioNode> nodes = {};
   int sent = 0;
   int received = 0;
@@ -448,12 +452,14 @@ class MeshtasticSession {
   }
 
   bool _onPacket(MeshPacketPb p) {
+    final bridged = p.viaMqtt;
+    if (bridged) lastViaMqtt = _clock();
     final d = p.decoded;
     if (d != null &&
         (d.portnum == PortNum.admin || d.portnum == PortNum.routing) &&
         (p.from == myNodeNum || p.from == 0)) {
       if (!_admin.isClosed) _admin.add(p);
-      return false;
+      return bridged;
     }
     if (p.from == myNodeNum) {
       // v2.6.7: the position our radio just broadcast (the radio copies it
@@ -466,7 +472,7 @@ class MeshtasticSession {
             return true;
           }
         } catch (_) {}
-        return false;
+        return bridged;
       }
       // Our own radio's telemetry (battery).
       if (d != null && d.portnum == PortNum.telemetry) {
@@ -480,7 +486,7 @@ class MeshtasticSession {
           }
         } catch (_) {}
       }
-      return false;
+      return bridged;
     }
     final now = _clock();
     if (p.rxSnr != 0 || p.rxRssi != 0) {

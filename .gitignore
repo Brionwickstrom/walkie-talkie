@@ -36,6 +36,10 @@ migrate_working_dir/
 # Symbolication related
 app.*.symbols
 
+# MQTT broker secrets generated on the NAS. Never commit these.
+mqtt/secrets/
+**/CREDENTIALS.txt
+
 # Obfuscation related
 app.*.map.json
 

@@ -1,0 +1,38 @@
+# Private MQTT broker and the mesh logger. Started by mqtt/deploy.sh.
+# Host network, same as walkie-gateway, so localhost:1883 is the broker
+# and Tailscale Funnel can forward to it. No anonymous access.
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: walkie-mqtt
+    restart: unless-stopped
+    network_mode: host
+    user: "0:0"
+    volumes:
+      - /volume1/docker/walkie-mqtt/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - /volume1/docker/walkie-mqtt/data:/mosquitto/data
+      - /volume1/docker/walkie-mqtt/secrets:/mosquitto/config/secrets:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "2m"
+        max-file: "3"
+
+  mesh-log:
+    image: walkie-mqtt-log:latest
+    container_name: walkie-mqtt-log
+    restart: unless-stopped
+    network_mode: host
+    user: "0:0"
+    depends_on:
+      - mosquitto
+    env_file:
+      - /volume1/docker/walkie-mqtt/secrets/logger.env
+    volumes:
+      - /volume1/docker/walkie-mqtt/log:/data
+      - /volume1/docker/walkie-mqtt/secrets:/secrets:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "2m"
+        max-file: "3"

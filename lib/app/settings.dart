@@ -78,6 +78,11 @@ class AppSettings {
     this.radioShareLocal = false,
     this.radioSharePort = 4403,
     this.radioShareFull = false,
+    this.mqttEnabled = false,
+    this.mqttAddress = '',
+    this.mqttUser = '',
+    this.mqttRoot = '',
+    this.mqttLastBridgedMs = 0,
     QuietHours? quiet,
     this.radioId,
     this.radioName,
@@ -146,6 +151,23 @@ class AppSettings {
   bool radioShareLocal;
   int radioSharePort;
   bool radioShareFull;
+
+  /// v2.6.15: bridge mesh traffic through the user's own MQTT broker.
+  /// The password is not a field here.
+  bool mqttEnabled;
+  String mqttAddress;
+  String mqttUser;
+  String mqttRoot;
+
+  /// Milliseconds since epoch, 0 = none. A packet the radio marked via MQTT.
+  int mqttLastBridgedMs;
+
+  DateTime? get mqttLastBridged => mqttLastBridgedMs <= 0
+      ? null
+      : DateTime.fromMillisecondsSinceEpoch(mqttLastBridgedMs);
+
+  set mqttLastBridged(DateTime? t) =>
+      mqttLastBridgedMs = t?.millisecondsSinceEpoch ?? 0;
 
   /// v1.9.5: mute (hold to mute) and programmable quiet hours.
   final QuietHours quiet;
@@ -525,6 +547,11 @@ class SharedPrefsSettingsStore implements SettingsStore {
   static const _kSavedRadios = 'saved_radios';
   static const _kTrip = 'trip_settings';
   static const _kMeshLinks = 'mesh_links';
+  static const _kMqttOn = 'mqtt_bridge';
+  static const _kMqttAddr = 'mqtt_address';
+  static const _kMqttUser = 'mqtt_user';
+  static const _kMqttRoot = 'mqtt_root';
+  static const _kMqttLast = 'mqtt_last_bridged';
 
   @override
   Future<AppSettings> load({required int defaultChannel}) async {
@@ -611,6 +638,11 @@ class SharedPrefsSettingsStore implements SettingsStore {
       radioShareLocal: prefs?.getBool(_kShareLocal) ?? false,
       radioSharePort: prefs?.getInt(_kSharePort) ?? 4403,
       radioShareFull: prefs?.getBool(_kShareFull) ?? false,
+      mqttEnabled: prefs?.getBool(_kMqttOn) ?? false,
+      mqttAddress: prefs?.getString(_kMqttAddr) ?? '',
+      mqttUser: prefs?.getString(_kMqttUser) ?? '',
+      mqttRoot: prefs?.getString(_kMqttRoot) ?? '',
+      mqttLastBridgedMs: prefs?.getInt(_kMqttLast) ?? 0,
       quiet: QuietHours.decode(prefs?.getString(_kQuiet)),
       radioId: prefs?.getString(_kRadioId),
       radioName: prefs?.getString(_kRadioName),
@@ -690,6 +722,11 @@ class SharedPrefsSettingsStore implements SettingsStore {
       await prefs.setBool(_kShareLocal, s.radioShareLocal);
       await prefs.setInt(_kSharePort, s.radioSharePort);
       await prefs.setBool(_kShareFull, s.radioShareFull);
+      await prefs.setBool(_kMqttOn, s.mqttEnabled);
+      await prefs.setString(_kMqttAddr, s.mqttAddress);
+      await prefs.setString(_kMqttUser, s.mqttUser);
+      await prefs.setString(_kMqttRoot, s.mqttRoot);
+      await prefs.setInt(_kMqttLast, s.mqttLastBridgedMs);
       await prefs.setString(_kQuiet, s.quiet.encode());
       if (s.radioId == null) {
         await prefs.remove(_kRadioId);

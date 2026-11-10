@@ -98,7 +98,9 @@ class MeshData {
 
 /// `MeshPacket`: from=1 fixed32, to=2 fixed32, channel=3, decoded=4,
 /// encrypted=5, id=6 fixed32, rx_time=7 fixed32, rx_snr=8 float,
-/// hop_limit=9, want_ack=10, priority=11, rx_rssi=12 int32, hop_start=15.
+/// hop_limit=9, want_ack=10, priority=11, rx_rssi=12 int32,
+/// via_mqtt=14, hop_start=15. via_mqtt is the same protobufs note as
+/// hop_start (master, Oct 2026).
 class MeshPacketPb {
   MeshPacketPb({
     this.from = 0,
@@ -113,6 +115,7 @@ class MeshPacketPb {
     this.wantAck = false,
     this.priority = 0,
     this.rxRssi = 0,
+    this.viaMqtt = false,
     this.hopStart = 0,
   });
 
@@ -133,6 +136,9 @@ class MeshPacketPb {
   /// 100 = HIGH, 110 = ALERT, 120 = ACK.
   final int priority;
   final int rxRssi;
+
+  /// The radio says this packet arrived over MQTT (mesh.proto via_mqtt).
+  final bool viaMqtt;
   final int hopStart;
 
   /// LoRa hops it took to reach our radio (0 = heard directly), when the
@@ -170,7 +176,7 @@ class MeshPacketPb {
     var from = 0, to = 0, channel = 0, id = 0, rxTime = 0, hopLimit = 0;
     var hopStart = 0, rssi = 0, prio = 0;
     var snr = 0.0;
-    var wantAck = false, encrypted = false;
+    var wantAck = false, encrypted = false, viaMqtt = false;
     MeshData? decoded;
     for (final f in pbDecode(b)) {
       switch (f.number) {
@@ -198,6 +204,8 @@ class MeshPacketPb {
           prio = f.asInt;
         case 12:
           rssi = f.asInt32;
+        case 14:
+          viaMqtt = f.asBool;
         case 15:
           hopStart = f.asInt;
       }
@@ -215,6 +223,7 @@ class MeshPacketPb {
       wantAck: wantAck,
       priority: prio,
       rxRssi: rssi,
+      viaMqtt: viaMqtt,
       hopStart: hopStart,
     );
   }
@@ -701,6 +710,7 @@ class ChannelPb {
     this.psk,
     this.role, {
     this.uplink = false,
+    this.downlink = false,
     this.positionPrecision = 0,
     this.rawSettings,
   });
@@ -709,6 +719,9 @@ class ChannelPb {
   final Uint8List psk;
   final int role;
   final bool uplink;
+
+  /// ChannelSettings.downlink_enabled (v2.6.15).
+  final bool downlink;
 
   /// ChannelSettings.module_settings.position_precision (v2.5.7): 0 = no
   /// position shared on this channel, 10-19 = a circle, 32 = exact.
@@ -732,7 +745,7 @@ class ChannelPb {
     var index = 0, role = 0, prec = 0;
     var name = '';
     var psk = Uint8List(0);
-    var up = false;
+    var up = false, down = false;
     Uint8List? raw;
     for (final f in pbDecode(b)) {
       switch (f.number) {
@@ -744,6 +757,7 @@ class ChannelPb {
             if (s.number == 2) psk = Uint8List.fromList(s.asBytes);
             if (s.number == 3) name = s.asString;
             if (s.number == 5) up = s.asBool;
+            if (s.number == 6) down = s.asBool;
             if (s.number == 7 && s.wireType == 2) {
               for (final m in pbDecode(s.asBytes)) {
                 if (m.number == 1 && m.wireType == 0) prec = m.asInt;
@@ -760,6 +774,7 @@ class ChannelPb {
       psk,
       role,
       uplink: up,
+      downlink: down,
       positionPrecision: prec,
       rawSettings: raw,
     );

@@ -16,6 +16,7 @@ analyzer:
     - ios/**
     - relay/**
     - gateway/**
+    - mqtt/**
     - windows/**
 
 linter:

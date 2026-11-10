@@ -53,6 +53,9 @@ Future<void> runFix(
         callbacks.restoreBackup?.call();
       case FixAction.turnOnLocationSharing:
         callbacks.turnOnLocationSharing?.call();
+      case FixAction.checkBroker:
+      case FixAction.enterMqttPassword:
+        callbacks.retry?.call();
       default:
         break;
     }
@@ -149,6 +152,9 @@ Future<void> runFix(
     case FixAction.useNormalMode:
       await _useMode(context, c, BatteryMode.normal);
       callbacks.afterFix?.call();
+    case FixAction.checkBroker:
+    case FixAction.enterMqttPassword:
+      callbacks.retry?.call();
   }
 }
 
@@ -223,6 +229,7 @@ bool _available(FixAction f, FixCallbacks cb, bool hasController) =>
       FixAction.retry => cb.retry != null,
       FixAction.restoreBackup => cb.restoreBackup != null,
       FixAction.turnOnLocationSharing => cb.turnOnLocationSharing != null,
+      FixAction.checkBroker || FixAction.enterMqttPassword => true,
       _ => hasController,
     };
 

@@ -419,6 +419,15 @@ const settingsIndex = <SettingEntry>[
     words: ['radio', 'channel', 'link', 'qr', 'import', 'unlink', 'key'],
   ),
   SettingEntry(
+    id: 'mqtt-bridge',
+    title: 'MQTT bridge',
+    section: 'MQTT bridge',
+    about:
+        'Send mesh traffic between radios over your own broker. Packets stay '
+        'channel-encrypted.',
+    words: ['mqtt', 'bridge', 'broker', 'internet', 'uplink'],
+  ),
+  SettingEntry(
     id: 'quiet',
     title: 'Mute & quiet hours',
     section: 'Mute & quiet hours',

@@ -20,6 +20,9 @@ class AdminPb {
   static const configLora = 5; // AdminMessage.ConfigType.LORA_CONFIG
   static const configSessionKey = 8; // SESSIONKEY_CONFIG
 
+  /// ModuleConfigType.MQTT_CONFIG. Zero is sent explicitly (proto3).
+  static const moduleMqtt = 0;
+
   static Uint8List _with(void Function(PbWriter w) f, List<int>? passkey) {
     final w = PbWriter();
     f(w);
@@ -75,15 +78,22 @@ class AdminPb {
 
   /// set_fixed_position=41 (Position): the radio stores these coordinates
   /// and turns PositionConfig.fixed_position on (v2.6.6).
-  static Uint8List setFixedPosition(
-    Uint8List position, {
-    List<int>? passkey,
-  }) => _with((w) => w.message(41, position), passkey);
+  static Uint8List setFixedPosition(Uint8List position, {List<int>? passkey}) =>
+      _with((w) => w.message(41, position), passkey);
 
   /// remove_fixed_position=42: clear the fixed coordinates and turn
   /// PositionConfig.fixed_position off (v2.6.6).
   static Uint8List removeFixedPosition({List<int>? passkey}) =>
       _with((w) => w.boolean(42, true), passkey);
+
+  /// get_module_config_request=7 (ModuleConfigType). MQTT is 0, so [type]
+  /// is always written.
+  static Uint8List getModuleConfig(int type) =>
+      _with((w) => w.uint(7, type, always: true), null);
+
+  /// set_module_config=35 (ModuleConfig).
+  static Uint8List setModuleConfig(Uint8List module, {List<int>? passkey}) =>
+      _with((w) => w.message(35, module), passkey);
 }
 
 /// A decoded answer from our radio's admin module.

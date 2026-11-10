@@ -125,7 +125,14 @@ String redactLog(String line, {Iterable<String> secrets = const []}) {
     (m) => '${m[1]}[redacted]',
   );
   s = s.replaceAllMapped(
-    RegExp(r'(passcode|psk|key)(\s*[:=]\s*)\S+', caseSensitive: false),
+    RegExp(r'mqtts?://[^:\s/@]+:[^@\s]+@', caseSensitive: false),
+    (_) => 'mqtt://[redacted]@',
+  );
+  s = s.replaceAllMapped(
+    RegExp(
+      r'(passcode|password|psk|key|mqtt[_\s-]?pass)(\s*[:=]\s*)\S+',
+      caseSensitive: false,
+    ),
     (m) => '${m[1]}${m[2]}[redacted]',
   );
   s = s.replaceAllMapped(

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'app/setup.dart';
+import 'mqtt/mqtt_secret.dart';
 import 'platform/platform_caps.dart';
 import 'app/walkie_controller.dart';
 import 'ui/home_page.dart';
@@ -13,7 +14,12 @@ import 'weather/wx_sample.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   if (PlatformCaps.desktop) _keepErrorLog();
-  final controller = await WalkieController.load();
+  final support = await getApplicationSupportDirectory();
+  final controller = await WalkieController.load(
+    mqttSecrets: SecureMqttSecretStore(
+      Directory('${support.path}/mqtt-secret'),
+    ),
+  );
   // Sample weather is a debug screenshot aid. Skip the first-run wizard so
   // the Trip map is reachable. A release build never takes this branch.
   if (sampleWeatherActive()) {
