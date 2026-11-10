@@ -6,6 +6,8 @@ import '../trip/geo.dart';
 import 'alert_store.dart';
 import 'nws_client.dart';
 import 'wx_alert.dart';
+import 'wx_areas.dart';
+import 'wx_geom.dart';
 
 /// A place the phone keeps an eye on.
 class WxWatchPoint {
@@ -59,6 +61,9 @@ class WeatherAlerts extends ChangeNotifier {
     this.onNotify,
     this.onCleared,
     this.onRead,
+    this.zoneCache,
+    this.fetchZone,
+    this.allowZoneFetch = _yes,
     DateTime Function()? clock,
     this.initialDelay = const Duration(seconds: 20),
   }) : _clock = clock ?? DateTime.now;
@@ -87,6 +92,17 @@ class WeatherAlerts extends ChangeNotifier {
   /// (v2.5.2: the hook that shares them over the relay and the radio, and
   /// that decides which states' relay rooms to join).
   final Future<void> Function(List<WxAlert> got, Set<String> zones)? onRead;
+
+  /// Saved county / zone outlines (v2.6.14). Null in tests that do not
+  /// draw the map.
+  final WxZoneCache? zoneCache;
+
+  /// One zone outline. Null when this build does not download them.
+  final Future<WxZoneRecord?> Function(String code)? fetchZone;
+
+  /// False in Battery Saver, with the map layer off, or when the network
+  /// is not allowed. Checked each time; there is no extra timer.
+  final bool Function() allowZoneFetch;
   final DateTime Function() _clock;
   final Duration initialDelay;
 
@@ -97,10 +113,17 @@ class WeatherAlerts extends ChangeNotifier {
 
   Timer? _timer;
   bool _polling = false;
+  bool _filling = false;
   bool _stopped = true;
   int _failures = 0;
   int polls = 0;
+
+  /// Zone-outline requests this run (not a poll). Tests read it.
+  int zoneFetches = 0;
   String? lastError;
+
+  /// A zone outline was asked for and did not come back.
+  String? zoneError;
   List<WxWatchPoint> _watched = const [];
   bool _noArea = false;
 
@@ -127,15 +150,29 @@ class WeatherAlerts extends ChangeNotifier {
         : backed;
   }
 
+  /// Zone outlines that are still fresh enough to draw.
+  Map<String, List<WxPolygon>> zoneOutlines([DateTime? now]) =>
+      zoneCache?.outlines(now ?? _clock()) ?? const {};
+
+  /// An active alert still needs a zone outline we have not saved.
+  bool get outlinesPending {
+    final cache = zoneCache;
+    if (cache == null) return false;
+    return wxOutlinesPending(alerts: active, cache: cache, now: _clock());
+  }
+
   Future<void> load() async {
     await store.load();
+    await zoneCache?.load();
     notifyListeners();
   }
 
-  /// Start the schedule (first check after [initialDelay]).
+  /// Start the schedule (first check after [initialDelay]). One look at
+  /// saved zone outlines, in case a radio alert is already on the phone.
   void start() {
     _stopped = false;
     _schedule(initialDelay);
+    unawaited(fillZones());
   }
 
   void stop() {
@@ -322,7 +359,80 @@ class WeatherAlerts extends ChangeNotifier {
     }
     await store.save();
     if (r.changed) notifyListeners();
+    await fillZones();
     return r;
+  }
+
+  /// Download zone outlines for active alerts that have no shape of their
+  /// own. At most eight, one at a time, and only when [allowZoneFetch]
+  /// says so. Not a timer: the existing alert check and a tap on Try again
+  /// are what call this.
+  static const maxZoneFetches = 8;
+
+  /// Put [incoming] in the store without sounding a notification. Used for
+  /// the debug sample alerts and for taking them back out. Watch and
+  /// advisory are accepted for that one ingest, then the usual set
+  /// (warnings) is restored.
+  Future<void> replaceSamples(Iterable<WxAlert> incoming) async {
+    final prev = store.kinds;
+    store.kinds = {...prev, WxKind.warning, WxKind.watch, WxKind.advisory};
+    try {
+      final r = store.ingest(incoming);
+      for (final a in [...r.added, ...r.updated]) {
+        store.markNotified(a.key);
+      }
+      await store.save();
+      if (r.changed) notifyListeners();
+    } finally {
+      store.kinds = prev;
+    }
+  }
+
+  Future<void> fillZones() async {
+    final fetch = fetchZone;
+    final cache = zoneCache;
+    if (fetch == null || cache == null || _filling) return;
+    if (!allowZoneFetch()) return;
+    final now = _clock();
+    final need = <String>[];
+    for (final a in active) {
+      if (a.polygons.isNotEmpty) continue;
+      for (final z in a.ugc) {
+        if (cache.lookup(z, now) == null && !need.contains(z)) need.add(z);
+      }
+    }
+    if (need.isEmpty) {
+      if (zoneError != null) {
+        zoneError = null;
+        notifyListeners();
+      }
+      return;
+    }
+    _filling = true;
+    var failed = 0;
+    try {
+      for (final z in need.take(maxZoneFetches)) {
+        zoneFetches++;
+        WxZoneRecord? got;
+        try {
+          got = await fetch(z);
+        } catch (_) {
+          got = null;
+        }
+        if (got == null) {
+          failed++;
+          continue;
+        }
+        cache.put(got);
+      }
+      await cache.save();
+    } finally {
+      _filling = false;
+    }
+    zoneError = failed > 0
+        ? 'Some alert areas could not be downloaded. The warning is still listed.'
+        : null;
+    notifyListeners();
   }
 
   Future<void> _expire() async {

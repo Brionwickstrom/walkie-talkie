@@ -9,7 +9,9 @@ import '../lora/meshtastic_channels.dart';
 import '../lora/meshtastic_proto.dart';
 import '../lora/meshtastic_session.dart';
 import '../trip/geo.dart';
+import '../weather/wx_areas.dart';
 import 'adaptive_layout.dart';
+import 'wx_map_layer.dart';
 import 'reach.dart';
 import 'reach_of.dart';
 
@@ -354,6 +356,7 @@ class _RadiosNearbyPageState extends State<RadiosNearbyPage> {
           _RadioTile(
             r,
             line: nearbyRadioLine(r, now: now, imperial: imperial),
+            alertLine: _radioAlertLine(c, r.num),
           ),
         );
       }
@@ -406,6 +409,26 @@ class _RadiosNearbyPageState extends State<RadiosNearbyPage> {
   }
 }
 
+/// Badge line when this radio's shared position sits in an active alert.
+/// Public radios are skipped: their location is never shown.
+String? _radioAlertLine(WalkieController c, int num) {
+  if (!c.settings.wxAlerts) return null;
+  final w = c.weatherAlerts;
+  final sess = c.radioDevice.session;
+  if (w == null || sess == null) return null;
+  final n = sess.nodes[num];
+  if (n == null || sess.isPublicNode(n)) return null;
+  if (n.lat == null || n.lng == null || (n.lat == 0 && n.lng == 0)) return null;
+  final now = DateTime.now();
+  final areas = wxMapAreas(
+    alerts: w.active,
+    zones: w.zoneOutlines(now),
+    now: now,
+  );
+  final line = wxInAlertLine(wxAreasAt(GeoPoint(n.lat!, n.lng!), areas));
+  return line.isEmpty ? null : line;
+}
+
 class _Note extends StatelessWidget {
   const _Note(this.text);
   final String text;
@@ -435,9 +458,10 @@ class _ThisRadio extends StatelessWidget {
 }
 
 class _RadioTile extends StatelessWidget {
-  const _RadioTile(this.r, {required this.line});
+  const _RadioTile(this.r, {required this.line, this.alertLine});
   final NearbyRadio r;
   final String line;
+  final String? alertLine;
 
   @override
   Widget build(BuildContext context) {
@@ -486,6 +510,17 @@ class _RadioTile extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (line.isNotEmpty) Text(line),
+          if (alertLine != null && alertLine!.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Row(
+                children: [
+                  WxAlertBadge(key: Key('wx-radio-badge-${r.num}')),
+                  const SizedBox(width: 6),
+                  Expanded(child: Text(alertLine!)),
+                ],
+              ),
+            ),
           if (!ch.isEmpty || extra.isNotEmpty)
             Wrap(
               spacing: 8,

@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'wx_geom.dart';
+
 /// Weather alerts (v2.5.0, stage 1).
 ///
 /// One alert model for every way an alert can reach the phone, so the next
@@ -131,6 +133,7 @@ class WxAlert {
     this.expires,
     this.ends,
     this.ugc = const [],
+    this.polygons = const [],
     this.refs = const [],
     this.sender = '',
     this.messageType = 'alert',
@@ -169,6 +172,10 @@ class WxAlert {
 
   /// Zones it covers (UGC codes: `ORZ006`, `ORC051`).
   final List<String> ugc;
+
+  /// Storm shape from the alert itself (v2.6.14). Empty when the product
+  /// only named zones: the map then uses a saved zone outline, if it has one.
+  final List<WxPolygon> polygons;
 
   /// Ids of the messages this one replaces.
   final List<String> refs;
@@ -255,6 +262,7 @@ class WxAlert {
     String? messageType,
     String? fromDevice,
     String? fromName,
+    List<WxPolygon>? polygons,
   }) => WxAlert(
     key: key,
     nwsId: nwsId,
@@ -271,6 +279,7 @@ class WxAlert {
     expires: expires,
     ends: ends,
     ugc: ugc,
+    polygons: polygons ?? this.polygons,
     refs: refs,
     sender: sender,
     messageType: messageType ?? this.messageType,
@@ -299,6 +308,7 @@ class WxAlert {
     if (expires != null) 'ex': expires!.millisecondsSinceEpoch,
     if (ends != null) 'en': ends!.millisecondsSinceEpoch,
     if (ugc.isNotEmpty) 'z': ugc,
+    if (polygons.isNotEmpty) 'g': wxPolygonsToJson(polygons),
     if (refs.isNotEmpty) 'rf': refs,
     if (sender.isNotEmpty) 'by': sender,
     if (messageType != 'alert') 'mt': messageType,
@@ -345,6 +355,7 @@ class WxAlert {
         expires: ms(j['ex']),
         ends: ms(j['en']),
         ugc: strs(j['z']),
+        polygons: wxPolygonsFromJson(j['g']),
         refs: strs(j['rf']),
         sender: (j['by'] as String?) ?? '',
         messageType: (j['mt'] as String?) ?? 'alert',
@@ -427,6 +438,7 @@ class WxAlert {
             for (final z in geo['UGC'] as List)
               if (z is String) z,
         ],
+        polygons: wxPolygonsFromGeoJson(feature['geometry']),
         refs: refs,
         sender: _clean(p['senderName']),
         messageType: type,

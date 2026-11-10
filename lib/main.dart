@@ -8,11 +8,21 @@ import 'app/setup.dart';
 import 'platform/platform_caps.dart';
 import 'app/walkie_controller.dart';
 import 'ui/home_page.dart';
+import 'weather/wx_sample.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   if (PlatformCaps.desktop) _keepErrorLog();
   final controller = await WalkieController.load();
+  // Sample weather is a debug screenshot aid. Skip the first-run wizard so
+  // the Trip map is reachable. A release build never takes this branch.
+  if (sampleWeatherActive()) {
+    controller.settings
+      ..setupDone = true
+      ..setupPromptShown = true
+      ..batteryPromptShown = true;
+    await controller.settingsStore.save(controller.settings);
+  }
   runApp(WalkieApp(controller: controller));
   // Normally the home screen starts the controller. When Android starts the
   // app with no screen (after a reboot, or after it was killed while

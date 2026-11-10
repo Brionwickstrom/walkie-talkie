@@ -5,6 +5,7 @@ import 'dart:io';
 import '../trip/geo.dart';
 import 'alert_store.dart';
 import 'wx_alert.dart';
+import 'wx_geom.dart';
 
 /// An HTTP answer (status 0 = no connection).
 class WxResponse {
@@ -88,6 +89,45 @@ class NwsClient {
     final r = await _fetch(alertsUrl(zones), _headers);
     if (r.status != 200) return null;
     return parseNwsAlerts(r.body);
+  }
+
+  /// The outline of one zone code. Null when the NWS could not be reached
+  /// (try again later). A code it does not know is a miss, cached by the
+  /// caller so it is not asked again for a week. Not used for alerts that
+  /// already brought their own polygon.
+  Future<WxZoneRecord?> zoneOutline(String code, {DateTime? now}) async {
+    final at = now ?? DateTime.now();
+    final url = wxZoneUrl(code);
+    if (url == null) {
+      return WxZoneRecord(
+        code: code,
+        at: at,
+        polygons: const [],
+        missing: true,
+      );
+    }
+    final r = await _fetch(url, _headers);
+    if (r.status == 404) {
+      return WxZoneRecord(
+        code: code,
+        at: at,
+        polygons: const [],
+        missing: true,
+      );
+    }
+    if (r.status != 200) return null;
+    List<WxPolygon> polys;
+    try {
+      polys = wxPolygonsFromFeature(jsonDecode(r.body));
+    } catch (_) {
+      return null;
+    }
+    return WxZoneRecord(
+      code: code,
+      at: at,
+      polygons: polys,
+      missing: polys.isEmpty,
+    );
   }
 }
 

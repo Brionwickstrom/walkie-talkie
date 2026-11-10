@@ -2801,3 +2801,56 @@ have to be typed in one by one.
 Nothing is sent until Apply, and the ping is only when you tap it. The
 channel key is not shown. A failure is one plain sentence with a button
 that does the fix.
+
+## v2.6.14: Weather on the Trip map
+
+Active weather alerts are drawn on the Trip map, and a person or radio
+standing inside one gets a badge.
+
+**Trip map > map style (layers button) > Weather alert areas** (on by
+default). The same switch is **Settings > Weather alerts > Show alert
+areas on the map**. Search finds it with weather, alerts, storm or
+warning.
+
+- **Shapes.** When a warning already includes a polygon, that shape is
+  drawn (it comes from the same National Weather Service alert the app
+  already downloads, or from a relay copy that carried a simplified
+  outline). Warning, watch and advisory each have their own colour; an
+  extreme warning is a darker red. The fill is light so the map still
+  shows through.
+- **Zone codes only.** If the alert only names a county or forecast zone,
+  the outline is fetched once from the National Weather Service zones
+  service and kept on the phone for 30 days. Offline, the saved outline
+  is used. If it was never saved, the warning stays on the Alerts page
+  and is not shaded. A sentence on the layer switch says so, with Try
+  again when a download can be attempted.
+- **Tap an area.** The sheet says the headline, whether it is a warning,
+  watch or advisory (and how severe), when it ends, and the description
+  in plain language.
+- **Badges.** A friend already on the map, your own dot, and a private
+  radio that is sharing a position get a small storm mark when they are
+  inside an active area. The same line is on their info sheet (a friend's
+  map sheet, a radio's sheet, and Radios nearby). Public radios are never
+  placed on the map. Badges follow positions and alerts; when an alert
+  ends it leaves the map and the badges go with it.
+- **Nothing active.** With the layer on and no alert in force, the switch
+  says "No active alerts".
+- **Sample data, debug only.** A debug build started with
+  `--dart-define=SAMPLE_WX=true` draws three sample alerts on real
+  Multnomah, Washington and Clackamas county outlines, with a banner that
+  says they are not a live warning. A release build ignores that flag.
+- **Radio and relay.** The radio packet is unchanged (older apps still
+  read it). It is too small for a polygon: it carries the zone codes and
+  a short area name. The map shades the saved zone outline when this
+  phone has one, and otherwise lists the warning without a shape. A relay
+  copy may include a simplified outline in an extra field that older apps
+  ignore.
+- **Battery.** No new timer and no new radio traffic. Zone outlines are
+  downloaded only when the layer is on, on the alert check the app
+  already does (or when you tap Try again), at most eight zones, one at
+  a time, and never in Battery mode Saver. Outlines already inside a
+  warning are free. While you are looking at the Trip map, it redraws
+  every couple of seconds if an area is on screen so an expiry disappears;
+  that redraw was already how friend markers stay current.
+
+Tests: `test/v2614_wx_map_test.dart`.

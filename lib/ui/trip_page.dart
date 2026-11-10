@@ -32,6 +32,9 @@ import '../trip/trip_controller.dart';
 import '../trip/trip_packet.dart';
 import '../trip/trip_settings.dart';
 import '../trip/weather.dart';
+import '../weather/wx_areas.dart';
+import '../weather/wx_sample.dart';
+import 'wx_map_layer.dart';
 import 'battery_mode_ui.dart' show lockedNote;
 import 'home_view.dart';
 import 'map_import.dart';
@@ -136,6 +139,10 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
   /// v2.6.11: imported layers are rebuilt only when they change.
   final ImportedLayersCache _imported = ImportedLayersCache();
 
+  /// v2.6.14: the last frame drew a weather area, so the 2 s tick keeps
+  /// going until an expiry takes it off.
+  bool _wxDrew = false;
+
   /// Why the map opened where it did (tests, the "last view" chip).
   MapStartFrom? startFrom;
 
@@ -149,11 +156,15 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _tick = Timer.periodic(const Duration(seconds: 2), (_) {
       final tc = t;
-      if (mounted && _fg && tc != null && tc.people.isNotEmpty) {
-        setState(() {});
-      }
+      // Friends age out, and a weather area drops off when it expires.
+      // No network: this only redraws a map that is already on screen.
+      final watching = tc != null && (tc.people.isNotEmpty || _wxDrew);
+      if (mounted && _fg && watching) setState(() {});
     });
     t?.setVisible(true);
+    // Sample weather opens on a fixed view. Following a GPS fix would
+    // leave the counties.
+    if (sampleWeatherActive()) _follow = false;
     if (Platform.isWindows) {
       unawaited(_importPcRange());
       _rangePc = Timer.periodic(
@@ -243,6 +254,7 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
         trip.rangeLog,
         trip.rangeRun,
         trip.geofences,
+        if (c.weatherAlerts != null) c.weatherAlerts!,
       ]),
       builder: (context, _) {
         final me = trip.myFix;
@@ -272,6 +284,8 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
           controls: _mapControls(context, trip),
           fullControls: _zoomControls(),
           topLeft: [
+            if (c.sampleWeatherOn)
+              _SampleWeatherBanner(onClear: () => c.clearSampleWeather()),
             if (trip.rangeRun.running)
               RangeRunStrip(actions: rangeRunActions(trip)),
             if (_drawShape != null)
@@ -363,6 +377,10 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
   Widget _mapView(BuildContext context, TripController trip) {
     final src = trip.mapSource;
     final me = trip.myFix;
+    final wxNow = DateTime.now();
+    final wxAll = _wxAllAreas(wxNow);
+    final wxDraw = c.settings.wxMapAreas ? wxAll : const <WxMapArea>[];
+    _wxDrew = wxDraw.isNotEmpty;
     // v2.6.11: no GPS fix yet? Open where the map was last left (not the
     // whole country), and move to me when the fix comes (follow mode).
     final view = mapStartView(
@@ -528,7 +546,25 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
           trip,
           pp,
           c.nameOf(pp.id),
+          alertNote: wxInAlertLine(
+            wxAreasAt(trip.friendEstimate(pp).pos, wxDraw),
+          ),
           onTap: () => _personSheet(context, trip, pp.id),
+        ),
+      for (final n in _wxNodes(wxDraw))
+        Marker(
+          key: Key('wx-node-${n.id}'),
+          point: ll(n.pos),
+          width: 120,
+          height: 52,
+          child: GestureDetector(
+            onTap: () => _wxNodeSheet(context, n, wxAreasAt(n.pos, wxDraw)),
+            child: WxNodeMarker(
+              name: n.name,
+              alertLine: wxInAlertLine(wxAreasAt(n.pos, wxDraw)),
+              badgeKey: Key('wx-badge-node-${n.id}'),
+            ),
+          ),
         ),
       if (me != null)
         Marker(
@@ -537,6 +573,7 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
           height: 44,
           child: Stack(
             alignment: Alignment.center,
+            clipBehavior: Clip.none,
             children: [
               Container(
                 width: 20,
@@ -552,6 +589,13 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
                   angleDeg: trip.heading!,
                   size: 40,
                   color: Colors.blue.withValues(alpha: 0.6),
+                ),
+              if (wxInAlertLine(wxAreasAt(me.pos, wxDraw)) case final note
+                  when note.isNotEmpty)
+                Positioned(
+                  right: 0,
+                  top: 0,
+                  child: WxAlertBadge(key: const Key('wx-badge-me'), tip: note),
                 ),
             ],
           ),
@@ -593,6 +637,8 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
             if (_layersReady) ..._importedLayers(context, trip),
             PolylineLayer(polylines: lines),
             if (_layersReady) ..._geofenceLayers(trip),
+            if (_layersReady && wxDraw.isNotEmpty)
+              PolygonLayer(polygons: wxPolygonsToDraw(wxDraw)),
             CircleLayer(circles: friendCircles(trip)),
             if (_layersReady) ...[
               CircleLayer(circles: rangeCircles(trip.range, _rangeSel)),
@@ -982,13 +1028,106 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
     ];
   }
 
+  List<WxMapArea> _wxAllAreas(DateTime now) {
+    final w = c.weatherAlerts;
+    if (w == null || !c.settings.wxAlerts) return const [];
+    return wxMapAreas(alerts: w.active, zones: w.zoneOutlines(now), now: now);
+  }
+
+  List<WxNodeSpot> _wxNodes(List<WxMapArea> areas) {
+    if (areas.isEmpty) return const [];
+    final sess = c.radioDevice.session;
+    if (sess == null) return const [];
+    final me = sess.myNodeNum;
+    final spots = <WxNodeSpot>[
+      for (final n in sess.nodes.values)
+        if (n.lat != null && n.lng != null && !(n.lat == 0 && n.lng == 0))
+          WxNodeSpot(
+            id: n.num,
+            name: n.longName.isNotEmpty
+                ? n.longName
+                : (n.shortName.isNotEmpty ? n.shortName : 'Radio'),
+            pos: GeoPoint(n.lat!, n.lng!),
+            public: sess.isPublicNode(n),
+            self: n.num == me,
+          ),
+    ];
+    final skip = <int>{
+      for (final s in c.loraTransport.peerSignals.values) s.node,
+    };
+    return wxNodesInside(nodes: spots, skipIds: skip, areas: areas);
+  }
+
+  Future<void> _wxSheet(BuildContext context, List<WxMapArea> hits) {
+    if (hits.isEmpty) return Future.value();
+    return showAppSheet<void>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: SingleChildScrollView(
+          child: WxAreaSheet(area: hits.first, also: hits.skip(1).toList()),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _wxNodeSheet(
+    BuildContext context,
+    WxNodeSpot n,
+    List<WxMapArea> hits,
+  ) {
+    final line = wxInAlertLine(hits);
+    return showAppSheet<void>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+                child: Text(
+                  n.name.isEmpty ? 'Radio' : n.name,
+                  style: Theme.of(ctx).textTheme.titleLarge,
+                ),
+              ),
+              if (line.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+                  child: Row(
+                    children: [
+                      WxAlertBadge(key: Key('wx-sheet-badge-${n.id}')),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text(line)),
+                    ],
+                  ),
+                ),
+              if (hits.isNotEmpty)
+                WxAreaSheet(area: hits.first, also: hits.skip(1).toList())
+              else
+                const Padding(
+                  padding: EdgeInsets.all(20),
+                  child: Text('No weather alert here.'),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _mapTap(
     BuildContext context,
     TripController trip,
     GeoPoint p,
   ) async {
     final shape = _drawShape;
-    if (shape == null) return;
+    if (shape == null) {
+      if (!c.settings.wxMapAreas || !c.settings.wxAlerts) return;
+      final hits = wxAreasAt(p, _wxAllAreas(DateTime.now()));
+      if (hits.isNotEmpty) await _wxSheet(context, hits);
+      return;
+    }
     if (shape == GeofenceShape.circle) {
       if (_drawCenter == null) {
         setState(() {
@@ -1691,6 +1830,37 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
                   Text(
                     'On top of any map. Tap to switch on or off.',
                     style: Theme.of(ctx).textTheme.bodySmall,
+                  ),
+                  ListenableBuilder(
+                    listenable: Listenable.merge([
+                      c,
+                      if (c.weatherAlerts != null) c.weatherAlerts!,
+                    ]),
+                    builder: (context, _) {
+                      final w = c.weatherAlerts;
+                      final saver = trip.batteryMode == BatteryMode.saver;
+                      final shown =
+                          c.settings.wxMapAreas && c.settings.wxAlerts;
+                      final pending = shown && (w?.outlinesPending ?? false);
+                      final failed = w?.zoneError != null;
+                      return WxMapLayerTile(
+                        on: c.settings.wxMapAreas,
+                        alertsEnabled: c.settings.wxAlerts,
+                        activeCount: w?.active.length ?? 0,
+                        hint: wxOutlineHint(
+                          layerOn: shown,
+                          saver: saver,
+                          pending: pending,
+                          fetchFailed: failed,
+                        ),
+                        onRetry: saver ? null : () => w?.fillZones(),
+                        onChanged: (on) async {
+                          await c.setWxMapAreas(on);
+                          if (mounted) setState(() {});
+                          set(() {});
+                        },
+                      );
+                    },
                   ),
                   for (final o in MapSource.overlays)
                     CheckboxListTile(
@@ -2409,6 +2579,23 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               TripPersonTile(id: id, name: c.nameOf(id), trip: trip),
+              if (wxInAlertLine(
+                    wxAreasAt(
+                      trip.friendEstimate(pp).pos,
+                      _wxAllAreas(DateTime.now()),
+                    ),
+                  )
+                  case final note when note.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Row(
+                    children: [
+                      WxAlertBadge(key: Key('wx-sheet-badge-$id')),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text(note)),
+                    ],
+                  ),
+                ),
               Text(
                 '${pp.pos.lat.toStringAsFixed(5)}, ${pp.pos.lng.toStringAsFixed(5)}'
                 '${pp.accuracyM != null ? ' (±${pp.accuracyM!.round()} m)' : ''}\n'
@@ -3086,3 +3273,45 @@ FriendlyError _forecastError(bool hasPlace) => hasPlace
         cause: ErrorCause.other,
         fix: FixAction.retry,
       );
+
+/// Yellow strip on the Trip map while debug sample alerts are showing.
+class _SampleWeatherBanner extends StatelessWidget {
+  const _SampleWeatherBanner({required this.onClear});
+  final Future<void> Function() onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: const Color(0xFFFFF3C4),
+      elevation: 3,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(10, 6, 4, 2),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Sample weather — not a live warning',
+              key: Key('sample-wx-banner'),
+              style: TextStyle(
+                color: Colors.black,
+                fontWeight: FontWeight.w700,
+                fontSize: 13,
+              ),
+            ),
+            TextButton(
+              key: const Key('sample-wx-clear'),
+              style: TextButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+              ),
+              onPressed: () => onClear(),
+              child: const Text('Clear samples'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

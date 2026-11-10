@@ -83,13 +83,17 @@ import '../trip/range_logger.dart';
 import '../trip/sos.dart';
 import '../trip/trip_controller.dart';
 import '../trip/trip_route.dart';
+import '../trip/battery_mode.dart';
 import '../weather/alert_store.dart';
 import '../weather/nws_client.dart';
 import '../weather/weather_alerts.dart';
+import '../weather/wx_areas.dart';
+import '../weather/wx_geom.dart';
 import '../weather/wx_alert.dart';
 import '../weather/wx_keys.dart';
 import '../weather/wx_mesh.dart';
 import '../weather/wx_notice.dart';
+import '../weather/wx_sample.dart';
 import 'friendly_error.dart';
 import 'call_signs.dart';
 import 'config.dart';
@@ -1371,10 +1375,12 @@ class WalkieController extends ChangeNotifier {
     return null;
   }
 
-  String nameOf(int peerId) =>
-      manager.peer(peerId)?.displayName ??
-      friendLinks.friend(peerId)?.name ??
-      callSignFor(peerId);
+  String nameOf(int peerId) {
+    if (sampleWeatherOn && peerId == sampleFriendId) return 'Casey (sample)';
+    return manager.peer(peerId)?.displayName ??
+        friendLinks.friend(peerId)?.name ??
+        callSignFor(peerId);
+  }
 
   Future<void> start() async {
     if (started || _starting) return;
@@ -1694,6 +1700,7 @@ class WalkieController extends ChangeNotifier {
     }
 
     await _startWeatherAlerts();
+    await _installSampleWeather();
     await applyBackgroundSettings();
     await _applyPttConfig();
     notifyListeners();
@@ -2362,6 +2369,44 @@ class WalkieController extends ChangeNotifier {
   /// it has saved. Null before start-up finished.
   WeatherAlerts? weatherAlerts;
 
+  /// Debug sample counties are on the map right now. Never true in a
+  /// release build (see [sampleWeatherActive]).
+  bool sampleWeatherOn = false;
+
+  /// Load the sample Oregon alerts, or drop any left over from a debug run.
+  Future<void> _installSampleWeather() async {
+    final w = weatherAlerts;
+    if (w == null) return;
+    if (!sampleWeatherActive()) {
+      await w.replaceSamples(sampleAlertCancels(DateTime.now()));
+      return;
+    }
+    await w.replaceSamples(sampleOregonAlerts(DateTime.now()));
+    final t = trip;
+    if (t != null) {
+      t.people[sampleFriendId] = PersonPos(
+        sampleFriendId,
+        sampleFriendPoint,
+        DateTime.now(),
+        TransportKind.lora,
+        0,
+      );
+      t.camera.remember(sampleMapCenter, sampleMapZoom);
+      t.notifyListeners();
+    }
+    sampleWeatherOn = true;
+    notifyListeners();
+  }
+
+  /// Take the sample alerts and the sample friend off the map.
+  Future<void> clearSampleWeather() async {
+    sampleWeatherOn = false;
+    trip?.people.remove(sampleFriendId);
+    await weatherAlerts?.replaceSamples(sampleAlertCancels(DateTime.now()));
+    trip?.notifyListeners();
+    notifyListeners();
+  }
+
   Future<void> _startWeatherAlerts() async {
     if (weatherAlerts != null) return;
     try {
@@ -2369,13 +2414,15 @@ class WalkieController extends ChangeNotifier {
       try {
         ver = (await PackageInfo.fromPlatform()).version;
       } catch (_) {}
-      final file = File('${(await _messageDir()).parent.path}/alerts.json');
+      final dir = (await _messageDir()).parent;
+      final file = File('${dir.path}/alerts.json');
+      final client = NwsClient(
+        userAgent:
+            'WalkieTalkie/$ver (+https://github.com/Brionwickstrom/walkie-talkie)',
+      );
       final w = WeatherAlerts(
         store: AlertStore(file: file),
-        client: NwsClient(
-          userAgent:
-              'WalkieTalkie/$ver (+https://github.com/Brionwickstrom/walkie-talkie)',
-        ),
+        client: client,
         points: _wxPoints,
         enabled: () => settings.wxAlerts,
         networkOk: _wxNetworkOk,
@@ -2385,6 +2432,9 @@ class WalkieController extends ChangeNotifier {
         onRead: (got, zones) async {
           await wxMesh?.onNwsRead(got, zones);
         },
+        zoneCache: WxZoneCache(file: File('${dir.path}/wx_zones.json')),
+        fetchZone: client.zoneOutline,
+        allowZoneFetch: _wxZoneFetchOk,
       );
       await w.load();
       w.addListener(notifyListeners);
@@ -2564,6 +2614,15 @@ class WalkieController extends ChangeNotifier {
     ];
   }
 
+  /// Zone outlines are an extra download. Not in Battery Saver, not with
+  /// the map layer off, and not when weather checks themselves are blocked.
+  bool _wxZoneFetchOk() => wxZoneFetchAllowed(
+    layerOn: settings.wxMapAreas,
+    alertsOn: settings.wxAlerts,
+    saver: trip?.batteryMode == BatteryMode.saver,
+    networkOk: _wxNetworkOk(),
+  );
+
   /// Wi-Fi only: not on mobile data; nothing without a connection.
   bool _wxNetworkOk() {
     final n = phoneNet;
@@ -2599,6 +2658,13 @@ class WalkieController extends ChangeNotifier {
       // Windows: in-app only, while the app is running.
       _notice('${text.title}: ${text.short}');
     }
+  }
+
+  Future<void> setWxMapAreas(bool on) async {
+    settings.wxMapAreas = on;
+    notifyListeners();
+    await settingsStore.save(settings);
+    if (on) unawaited(weatherAlerts?.fillZones());
   }
 
   Future<void> setWxAlerts(bool on) async {
