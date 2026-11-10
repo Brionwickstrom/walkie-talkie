@@ -33,7 +33,9 @@ enum FixAction {
   stopRadioShare('Turn off sharing'),
   stopRangeTest('Stop range test'),
   useTrackingMode('Switch to Tracking'),
-  useNormalMode('Switch to Normal');
+  useNormalMode('Switch to Normal'),
+  checkBroker('Check again'),
+  enterMqttPassword('Enter password');
 
   const FixAction(this.label);
   final String label;
@@ -246,6 +248,14 @@ FriendlyError mapCacheClearError(Object e) {
 /// web addresses.
 String scrubDetails(String raw) {
   var s = raw;
+  s = s.replaceAllMapped(
+    RegExp(r'mqtts?://[^:\s/@]+:[^@\s]+@', caseSensitive: false),
+    (_) => 'mqtt://[redacted]@',
+  );
+  s = s.replaceAllMapped(
+    RegExp(r'(password|mqtt[_\s-]?pass)(\s*[:=]\s*)\S+', caseSensitive: false),
+    (m) => '${m[1]}${m[2]}[redacted]',
+  );
   s = s.replaceAll(
     RegExp(r'https?://\S+|meshtastic\.org/\S+|walkietalkie://\S+'),
     '[link removed]',

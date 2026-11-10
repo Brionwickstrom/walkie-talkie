@@ -55,6 +55,9 @@ import '../lora/meshtastic_channels.dart';
 import '../lora/guided_setup.dart';
 import '../lora/home_location.dart';
 import '../lora/meshtastic_settings.dart';
+import '../mqtt/mqtt_config.dart';
+import '../mqtt/mqtt_client.dart';
+import '../mqtt/mqtt_secret.dart';
 import '../lora/radio_clip.dart';
 import '../lora/radio_match.dart';
 import '../lora/radio_share.dart';
@@ -149,7 +152,9 @@ class WalkieController extends ChangeNotifier {
     required this.settings,
     this.settingsStore = const SharedPrefsSettingsStore(),
     ChannelKey? channelKey,
+    MqttSecretStore? mqttSecrets,
   }) : nodeId = settings.nodeId,
+       mqttSecrets = mqttSecrets ?? MemoryMqttSecretStore(),
        _relay = MultiRelayTransport(
          serverUris: relayUrisFor(settings),
          connector: RelayConnector.platform(),
@@ -187,6 +192,7 @@ class WalkieController extends ChangeNotifier {
         _noteRadio();
         _bindRangeLog();
         _feedRadioGps();
+        _noteMqttBridge();
       }),
     );
     if (settings.radioId != null) ble?.ignoreDevices.add(settings.radioId!);
@@ -282,7 +288,10 @@ class WalkieController extends ChangeNotifier {
     );
     whosWhere.replyPresence = _replyPresence;
     whosWhere.addListener(notifyListeners);
-    debugLog.secrets = () => settings.groups.map((g) => g.secret);
+    debugLog.secrets = () => [
+      ...settings.groups.map((g) => g.secret),
+      ?_mqttSecret,
+    ];
     _relay.onRoleChange = _logRelayRole;
     _relay.direct!
       ..attach(manager)
@@ -687,7 +696,10 @@ class WalkieController extends ChangeNotifier {
   }
 
   Future<void> _attachDebugLog() async {
-    debugLog.secrets = () => settings.groups.map((g) => g.secret);
+    debugLog.secrets = () => [
+      ...settings.groups.map((g) => g.secret),
+      ?_mqttSecret,
+    ];
     try {
       final base = await bridge.filesDir();
       final root = base != null
@@ -1057,6 +1069,7 @@ class WalkieController extends ChangeNotifier {
   /// launch) and builds the controller.
   static Future<WalkieController> load({
     SettingsStore store = const SharedPrefsSettingsStore(),
+    MqttSecretStore? mqttSecrets,
   }) async {
     final s = await store.load(defaultChannel: AppConfig.defaultChannel);
     final g = s.currentGroup;
@@ -1068,7 +1081,12 @@ class WalkieController extends ChangeNotifier {
       // The key could not be made: do not pretend to be in the group.
       if (key == null) s.activeGroup = null;
     }
-    return WalkieController(settings: s, settingsStore: store, channelKey: key);
+    return WalkieController(
+      settings: s,
+      settingsStore: store,
+      channelKey: key,
+      mqttSecrets: mqttSecrets,
+    );
   }
 
   /// Ordered relay list: the saved override (comma separated, "off" =
@@ -1104,6 +1122,16 @@ class WalkieController extends ChangeNotifier {
 
   final AppSettings settings;
   final SettingsStore settingsStore;
+
+  /// Broker password. Not SharedPreferences. Tests use the memory store.
+  final MqttSecretStore mqttSecrets;
+
+  /// Held only so the debug log can blank it. Never written to the log.
+  String? _mqttSecret;
+  Timer? _mqttFlush;
+
+  /// Last one-shot broker check. Null until the user taps Check now.
+  BrokerProbe? mqttProbe;
   final int nodeId;
   late String name;
   late final TransportManager manager;
@@ -3369,6 +3397,67 @@ class WalkieController extends ChangeNotifier {
   /// Range logging (v2.5.9) listens to the connected radio's session.
   /// v2.6.7: the connected radio's own position (the one it broadcasts
   /// anyway; nothing is asked for) for the Location source choice.
+  /// A via-MQTT packet already arrived on the radio link. Remember when,
+  /// and write it down a couple of seconds later so a busy mesh does not
+  /// save on every packet. No timer runs until a packet shows up.
+  void _noteMqttBridge() {
+    final at = radioDevice.session?.lastViaMqtt;
+    if (at == null) return;
+    final prev = settings.mqttLastBridged;
+    if (prev != null && !at.isAfter(prev)) return;
+    settings.mqttLastBridged = at;
+    _mqttFlush?.cancel();
+    _mqttFlush = Timer(const Duration(seconds: 2), () {
+      unawaited(settingsStore.save(settings));
+    });
+  }
+
+  /// Read the saved password into memory so the debug log can blank it.
+  /// The value is not logged.
+  Future<bool> mqttPasswordSaved() async {
+    final p = await mqttSecrets.read();
+    _mqttSecret = (p == null || p.isEmpty) ? null : p;
+    return _mqttSecret != null;
+  }
+
+  Future<void> setMqttBridge({
+    required bool enabled,
+    required String address,
+    required String username,
+    required String root,
+    String? password,
+  }) async {
+    settings
+      ..mqttEnabled = enabled
+      ..mqttAddress = address.trim()
+      ..mqttUser = username.trim()
+      ..mqttRoot = root.trim();
+    if (password != null && password.isNotEmpty) {
+      await mqttSecrets.save(password);
+      _mqttSecret = password;
+    }
+    await settingsStore.save(settings);
+    notifyListeners();
+  }
+
+  Future<void> clearMqttPassword() async {
+    await mqttSecrets.clear();
+    _mqttSecret = null;
+    notifyListeners();
+  }
+
+  /// One sign-in, then the socket is closed. Not a loop. Skipped by the
+  /// screen until the user taps Check now.
+  Future<void> checkMqttBroker() async {
+    await mqttPasswordSaved();
+    mqttProbe = await probeSavedBroker(
+      address: settings.mqttAddress,
+      username: settings.mqttUser,
+      password: _mqttSecret ?? '',
+    );
+    notifyListeners();
+  }
+
   void _feedRadioGps() {
     final t = trip;
     if (t == null) return;
@@ -5810,6 +5899,7 @@ class WalkieController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _mqttFlush?.cancel();
     for (final s in _subs) {
       s.cancel();
     }

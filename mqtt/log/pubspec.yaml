@@ -1,0 +1,7 @@
+name: walkie_mqtt_log
+description: Logs channel-encrypted Meshtastic packets from the private broker. No channel keys.
+publish_to: 'none'
+version: 1.0.0
+
+environment:
+  sdk: ^3.5.0

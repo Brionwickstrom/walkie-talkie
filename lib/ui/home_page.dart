@@ -32,6 +32,7 @@ import 'messages_page.dart';
 import 'quiet_widgets.dart';
 import 'weather_alerts_page.dart';
 import 'friendly_error.dart';
+import 'mqtt_bridge_section.dart';
 import 'radio_settings.dart';
 import 'radio_settings_page.dart';
 import 'settings_index.dart';
@@ -1571,6 +1572,12 @@ class _HomePageState extends State<HomePage> {
                   child: _SectionTitle('Long-range radio (Meshtastic)'),
                 ),
                 RadioSettings(controller: c),
+                const Divider(height: 32),
+                const _SectionTitle('MQTT bridge'),
+                SettingAnchor(
+                  id: 'mqtt-bridge',
+                  child: MqttBridgeSection(controller: c),
+                ),
                 const Divider(height: 32),
                 SettingAnchor(
                   id: 'quiet',
