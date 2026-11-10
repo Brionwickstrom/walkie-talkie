@@ -33,6 +33,7 @@ import '../trip/trip_packet.dart';
 import '../trip/trip_settings.dart';
 import '../trip/weather.dart';
 import '../weather/wx_areas.dart';
+import '../weather/wx_sample.dart';
 import 'wx_map_layer.dart';
 import 'battery_mode_ui.dart' show lockedNote;
 import 'home_view.dart';
@@ -161,6 +162,9 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
       if (mounted && _fg && watching) setState(() {});
     });
     t?.setVisible(true);
+    // Sample weather opens on a fixed view. Following a GPS fix would
+    // leave the counties.
+    if (sampleWeatherActive()) _follow = false;
     if (Platform.isWindows) {
       unawaited(_importPcRange());
       _rangePc = Timer.periodic(
@@ -280,6 +284,8 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
           controls: _mapControls(context, trip),
           fullControls: _zoomControls(),
           topLeft: [
+            if (c.sampleWeatherOn)
+              _SampleWeatherBanner(onClear: () => c.clearSampleWeather()),
             if (trip.rangeRun.running)
               RangeRunStrip(actions: rangeRunActions(trip)),
             if (_drawShape != null)
@@ -3267,3 +3273,45 @@ FriendlyError _forecastError(bool hasPlace) => hasPlace
         cause: ErrorCause.other,
         fix: FixAction.retry,
       );
+
+/// Yellow strip on the Trip map while debug sample alerts are showing.
+class _SampleWeatherBanner extends StatelessWidget {
+  const _SampleWeatherBanner({required this.onClear});
+  final Future<void> Function() onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: const Color(0xFFFFF3C4),
+      elevation: 3,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(10, 6, 4, 2),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Sample weather — not a live warning',
+              key: Key('sample-wx-banner'),
+              style: TextStyle(
+                color: Colors.black,
+                fontWeight: FontWeight.w700,
+                fontSize: 13,
+              ),
+            ),
+            TextButton(
+              key: const Key('sample-wx-clear'),
+              style: TextButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+              ),
+              onPressed: () => onClear(),
+              child: const Text('Clear samples'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

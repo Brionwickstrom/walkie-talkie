@@ -369,6 +369,25 @@ class WeatherAlerts extends ChangeNotifier {
   /// are what call this.
   static const maxZoneFetches = 8;
 
+  /// Put [incoming] in the store without sounding a notification. Used for
+  /// the debug sample alerts and for taking them back out. Watch and
+  /// advisory are accepted for that one ingest, then the usual set
+  /// (warnings) is restored.
+  Future<void> replaceSamples(Iterable<WxAlert> incoming) async {
+    final prev = store.kinds;
+    store.kinds = {...prev, WxKind.warning, WxKind.watch, WxKind.advisory};
+    try {
+      final r = store.ingest(incoming);
+      for (final a in [...r.added, ...r.updated]) {
+        store.markNotified(a.key);
+      }
+      await store.save();
+      if (r.changed) notifyListeners();
+    } finally {
+      store.kinds = prev;
+    }
+  }
+
   Future<void> fillZones() async {
     final fetch = fetchZone;
     final cache = zoneCache;

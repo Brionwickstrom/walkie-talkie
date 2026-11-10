@@ -2835,6 +2835,10 @@ warning.
   ends it leaves the map and the badges go with it.
 - **Nothing active.** With the layer on and no alert in force, the switch
   says "No active alerts".
+- **Sample data, debug only.** A debug build started with
+  `--dart-define=SAMPLE_WX=true` draws three sample alerts on real
+  Multnomah, Washington and Clackamas county outlines, with a banner that
+  says they are not a live warning. A release build ignores that flag.
 - **Radio and relay.** The radio packet is unchanged (older apps still
   read it). It is too small for a polygon: it carries the zone codes and
   a short area name. The map shades the saved zone outline when this

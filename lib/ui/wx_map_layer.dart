@@ -116,8 +116,8 @@ List<Polygon> wxPolygonsToDraw(List<WxMapArea> areas) {
         Polygon(
           points: [for (final g in p.outer) LatLng(g.lat, g.lng)],
           holePointsList: holes.isEmpty ? null : holes,
-          color: col.withValues(alpha: 0.28),
-          borderStrokeWidth: 2,
+          color: col.withValues(alpha: 0.48),
+          borderStrokeWidth: 5,
           borderColor: col.withValues(alpha: 0.9),
         ),
       );

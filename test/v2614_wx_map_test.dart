@@ -21,6 +21,7 @@ import 'package:walkie_talkie/weather/wx_areas.dart';
 import 'package:walkie_talkie/weather/wx_codec.dart';
 import 'package:walkie_talkie/weather/wx_geom.dart';
 import 'package:walkie_talkie/weather/wx_keys.dart';
+import 'package:walkie_talkie/weather/wx_sample.dart';
 
 import 'home_layout_test.dart' show loadFonts;
 import 'v250_weather_test.dart' show feat;
@@ -517,6 +518,76 @@ void main() {
     );
   });
 
+  group('sample weather hook', () {
+    test('release and a normal debug run do not turn it on', () {
+      expect(sampleWeatherActive(debug: false, enabled: true), isFalse);
+      expect(sampleWeatherActive(debug: true, enabled: false), isFalse);
+      expect(sampleWeatherActive(debug: false, enabled: false), isFalse);
+      expect(sampleWeatherActive(debug: true, enabled: true), isTrue);
+      // This test binary was not built with SAMPLE_WX, so the default is off
+      // even though widget tests run as debug.
+      expect(sampleWeatherActive(), isFalse);
+    });
+
+    test(
+      'sample alerts sit on real Oregon counties and a friend is inside one',
+      () {
+        final now = DateTime.utc(2026, 11, 10, 16);
+        final alerts = sampleOregonAlerts(now);
+        expect(alerts.map((a) => a.event), [
+          'Winter Storm Warning',
+          'Wind Advisory',
+          'Flood Watch',
+        ]);
+        expect(alerts.map((a) => a.kind), [
+          WxKind.warning,
+          WxKind.advisory,
+          WxKind.watch,
+        ]);
+        expect(alerts.every((a) => a.key.startsWith('sample:')), isTrue);
+        expect(alerts.every((a) => a.polygons.length == 1), isTrue);
+        final areas = wxMapAreas(alerts: alerts, zones: const {}, now: now);
+        expect(areas, hasLength(3));
+        final here = wxAreasAt(sampleFriendPoint, areas);
+        expect(here.map((a) => a.event), ['Winter Storm Warning']);
+        expect(wxInAlertLine(here), contains('Winter Storm Warning'));
+        // Hillsboro is Washington County, not Multnomah.
+        expect(
+          wxAreasAt(const GeoPoint(45.5229, -122.9898), areas).single.event,
+          'Wind Advisory',
+        );
+      },
+    );
+
+    test('cancels remove the samples and they do not notify', () async {
+      final now = DateTime.utc(2026, 11, 10, 16);
+      final notified = <WxAlert>[];
+      final service = WeatherAlerts(
+        store: AlertStore(clock: () => now),
+        client: NwsClient(
+          userAgent: 'WalkieTalkie/test',
+          fetch: (_, _) async => const WxResponse(500, ''),
+        ),
+        points: () => const [],
+        onNotify: (a) async => notified.add(a),
+        clock: () => now,
+      );
+      await service.replaceSamples(sampleOregonAlerts(now));
+      expect(service.active.map((a) => a.event), [
+        'Winter Storm Warning',
+        'Flood Watch',
+        'Wind Advisory',
+      ]);
+      expect(notified, isEmpty);
+      expect(service.zoneFetches, 0);
+      await service.replaceSamples(
+        sampleAlertCancels(now.add(const Duration(seconds: 1))),
+      );
+      expect(service.active, isEmpty);
+      expect(notified, isEmpty);
+    });
+  });
+
   group('settings search', () {
     test('weather, alerts, storm and warning find the map switch', () {
       for (final q in ['weather', 'alerts', 'storm', 'warning']) {
@@ -568,19 +639,21 @@ void main() {
     testWidgets('the sheet says headline, severity, expiry and description', (
       t,
     ) async {
+      final now = DateTime.now().toUtc();
       final area = wxMapAreas(
         alerts: [
           sampleAlert(
             key: 'w',
-            event: 'Tornado Warning',
+            event: 'Severe Thunderstorm Warning',
             severity: WxSeverity.severe,
             headline: 'Sample tornado warning',
             description: 'This is sample text, not a real storm.',
             polygons: box(45.4, -122.7, 45.6, -122.5),
+            expires: now.add(const Duration(hours: 2)),
           ),
         ],
         zones: const {},
-        now: DateTime.now().toUtc(),
+        now: now,
       ).single;
       await t.pumpWidget(
         MaterialApp(

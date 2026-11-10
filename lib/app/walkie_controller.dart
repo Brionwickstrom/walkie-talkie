@@ -93,6 +93,7 @@ import '../weather/wx_alert.dart';
 import '../weather/wx_keys.dart';
 import '../weather/wx_mesh.dart';
 import '../weather/wx_notice.dart';
+import '../weather/wx_sample.dart';
 import 'friendly_error.dart';
 import 'call_signs.dart';
 import 'config.dart';
@@ -1374,10 +1375,12 @@ class WalkieController extends ChangeNotifier {
     return null;
   }
 
-  String nameOf(int peerId) =>
-      manager.peer(peerId)?.displayName ??
-      friendLinks.friend(peerId)?.name ??
-      callSignFor(peerId);
+  String nameOf(int peerId) {
+    if (sampleWeatherOn && peerId == sampleFriendId) return 'Casey (sample)';
+    return manager.peer(peerId)?.displayName ??
+        friendLinks.friend(peerId)?.name ??
+        callSignFor(peerId);
+  }
 
   Future<void> start() async {
     if (started || _starting) return;
@@ -1697,6 +1700,7 @@ class WalkieController extends ChangeNotifier {
     }
 
     await _startWeatherAlerts();
+    await _installSampleWeather();
     await applyBackgroundSettings();
     await _applyPttConfig();
     notifyListeners();
@@ -2364,6 +2368,44 @@ class WalkieController extends ChangeNotifier {
   /// National Weather Service alerts for where the phone is and the places
   /// it has saved. Null before start-up finished.
   WeatherAlerts? weatherAlerts;
+
+  /// Debug sample counties are on the map right now. Never true in a
+  /// release build (see [sampleWeatherActive]).
+  bool sampleWeatherOn = false;
+
+  /// Load the sample Oregon alerts, or drop any left over from a debug run.
+  Future<void> _installSampleWeather() async {
+    final w = weatherAlerts;
+    if (w == null) return;
+    if (!sampleWeatherActive()) {
+      await w.replaceSamples(sampleAlertCancels(DateTime.now()));
+      return;
+    }
+    await w.replaceSamples(sampleOregonAlerts(DateTime.now()));
+    final t = trip;
+    if (t != null) {
+      t.people[sampleFriendId] = PersonPos(
+        sampleFriendId,
+        sampleFriendPoint,
+        DateTime.now(),
+        TransportKind.lora,
+        0,
+      );
+      t.camera.remember(sampleMapCenter, sampleMapZoom);
+      t.notifyListeners();
+    }
+    sampleWeatherOn = true;
+    notifyListeners();
+  }
+
+  /// Take the sample alerts and the sample friend off the map.
+  Future<void> clearSampleWeather() async {
+    sampleWeatherOn = false;
+    trip?.people.remove(sampleFriendId);
+    await weatherAlerts?.replaceSamples(sampleAlertCancels(DateTime.now()));
+    trip?.notifyListeners();
+    notifyListeners();
+  }
 
   Future<void> _startWeatherAlerts() async {
     if (weatherAlerts != null) return;
