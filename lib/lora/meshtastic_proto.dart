@@ -313,6 +313,7 @@ DeviceMetricsPb? decodeTelemetryDeviceMetrics(Uint8List b) {
 /// v2.6.7 also reads time=4 (fixed32 epoch s), location_source=5,
 /// HDOP=12 (1/100), sats_in_view=19 and precision_bits=23, for using the
 /// radio's own GPS as the phone's location.
+/// v2.6.16 also reads ground_speed=15 when the radio sends it.
 class PositionPb {
   PositionPb(
     this.lat,
@@ -323,6 +324,7 @@ class PositionPb {
     this.hdop = 0,
     this.sats = 0,
     this.precisionBits = 0,
+    this.groundSpeedKmh,
   });
   final double lat, lng;
 
@@ -343,6 +345,16 @@ class PositionPb {
   /// Bits of precision kept (32 = exact, 10-19 = blurred), 0 = not sent.
   final int precisionBits;
 
+  /// Position.ground_speed (field 15), integer km/h. Null when the radio
+  /// did not send it. mesh.proto says "Ground speed in km/h", and the
+  /// firmware stores `reader.speed.kmph()` (GPS.cpp). Older generated
+  /// headers said m/s; the value on the air is km/h.
+  final int? groundSpeedKmh;
+
+  /// Metres per second, for the same speed labels as an app user.
+  double? get groundSpeedMps =>
+      groundSpeedKmh == null ? null : groundSpeedKmh! / 3.6;
+
   static const sourceUnset = 0;
   static const sourceManual = 1;
   static const sourceInternal = 2;
@@ -352,6 +364,7 @@ class PositionPb {
     var la = 0, lo = 0, alt = 0;
     var hasAlt = false;
     var time = 0, src = 0, hdop = 0, sats = 0, prec = 0;
+    int? groundKmh;
     for (final f in pbDecode(b)) {
       if (f.wireType == 5) {
         if (f.number == 1) la = f.asSFixed32;
@@ -366,6 +379,8 @@ class PositionPb {
             src = f.asInt;
           case 12:
             hdop = f.asInt;
+          case 15:
+            groundKmh = f.asInt;
           case 19:
             sats = f.asInt;
           case 23:
@@ -384,6 +399,7 @@ class PositionPb {
       hdop: hdop,
       sats: sats,
       precisionBits: prec,
+      groundSpeedKmh: groundKmh,
     );
   }
 

@@ -3,8 +3,10 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../trip/friend_motion.dart';
+import '../trip/speed_label.dart';
 import '../trip/trip_controller.dart';
 import 'home_view.dart';
+import 'speed_caption.dart';
 import 'wx_map_layer.dart';
 
 /// A friend on the Trip map (v2.5.6): the dot at its guessed place between
@@ -23,11 +25,19 @@ Marker friendMarker(
   final est = trip.friendEstimate(pp);
   final color = avatarColor(pp.id);
   final heading = pp.headingDeg;
+  final speed = speedLabelText(
+    name: name,
+    speedMps: pp.speedMps,
+    at: pp.at,
+    now: t,
+    imperial: trip.settings.imperial,
+    freshFor: speedFreshFor(pp.via),
+  );
   return Marker(
     key: Key('friend${pp.id}'),
     point: LatLng(est.pos.lat, est.pos.lng),
-    width: 130,
-    height: 66,
+    width: 140,
+    height: speed == null ? 66 : 92,
     child: Opacity(
       opacity: friendOpacity(age),
       child: GestureDetector(
@@ -113,6 +123,7 @@ Marker friendMarker(
                 ),
               ),
             ),
+            if (speed != null) SpeedCaption(speed, key: Key('speed${pp.id}')),
           ],
         ),
       ),

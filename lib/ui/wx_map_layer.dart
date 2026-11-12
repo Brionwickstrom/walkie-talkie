@@ -11,6 +11,7 @@ import '../app/friendly_error.dart';
 import '../weather/wx_alert.dart';
 import '../weather/wx_areas.dart';
 import '../weather/wx_notice.dart';
+import 'speed_caption.dart';
 
 /// Small storm mark on a person or radio that is inside an alert.
 class WxAlertBadge extends StatelessWidget {
@@ -36,23 +37,32 @@ class WxAlertBadge extends StatelessWidget {
   }
 }
 
-/// A radio that is not already drawn as a friend, shown only while it
-/// stands inside an alert.
+/// A radio that is not already drawn as a friend. Drawn wherever it has
+/// reported a position (v2.6.16). The storm badge and the red name border
+/// are added only while it stands inside an alert.
 class WxNodeMarker extends StatelessWidget {
   const WxNodeMarker({
     super.key,
     required this.name,
     this.alertLine,
     this.badgeKey,
+    this.speedLabel,
+    this.speedKey,
   });
 
   final String name;
   final String? alertLine;
   final Key? badgeKey;
 
+  /// "Yeti · 42 mph", already checked for a fresh speed. Null hides it.
+  final String? speedLabel;
+  final Key? speedKey;
+
   @override
   Widget build(BuildContext context) {
     final line = alertLine;
+    final inAlert = line != null && line.isNotEmpty;
+    final speed = speedLabel;
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -69,7 +79,7 @@ class WxNodeMarker extends StatelessWidget {
                 color: Colors.white,
               ),
             ),
-            if (line != null && line.isNotEmpty)
+            if (inAlert)
               Positioned(
                 right: -6,
                 top: -6,
@@ -82,7 +92,11 @@ class WxNodeMarker extends StatelessWidget {
           decoration: BoxDecoration(
             color: Colors.white.withValues(alpha: 0.92),
             borderRadius: BorderRadius.circular(4),
-            border: Border.all(color: const Color(0xFFB71C1C)),
+            border: Border.all(
+              color: inAlert
+                  ? const Color(0xFFB71C1C)
+                  : const Color(0xFF455A64),
+            ),
           ),
           child: Text(
             name.isEmpty ? 'Radio' : name,
@@ -95,6 +109,8 @@ class WxNodeMarker extends StatelessWidget {
             ),
           ),
         ),
+        if (speed != null && speed.isNotEmpty)
+          SpeedCaption(speed, key: speedKey),
       ],
     );
   }

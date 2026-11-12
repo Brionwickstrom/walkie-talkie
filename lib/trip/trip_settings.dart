@@ -26,6 +26,7 @@ class TripSettings {
     this.warmHome = true,
     this.batteryMode = BatteryMode.normal,
     this.batterySnapshot,
+    this.showMySpeed = false,
   }) : overlays = overlays ?? [],
        canned = canned ?? List.of(defaultCustomCanned);
 
@@ -88,6 +89,9 @@ class TripSettings {
   /// Your own values of the settings the mode controls, saved when leaving
   /// Normal (null in Normal).
   BatterySnapshot? batterySnapshot;
+
+  /// A small speed under my own blue dot (v2.6.16). Off until asked.
+  bool showMySpeed;
   static const radioTrailChoices = [0, 5, 10, 15];
 
   static const defaultCustomCanned = ['Lunch spot', 'Going ahead', 'Found it'];
@@ -114,6 +118,7 @@ class TripSettings {
     if (!warmHome) 'wh': false,
     if (batteryMode != BatteryMode.normal) 'bm': batteryMode.id,
     if (batterySnapshot != null) 'bs': batterySnapshot!.toJson(),
+    if (showMySpeed) 'sms': true,
   });
 
   static TripSettings decode(String? s) {
@@ -156,6 +161,7 @@ class TripSettings {
         warmHome: j['wh'] != false,
         batteryMode: BatteryMode.fromId(j['bm']),
         batterySnapshot: BatterySnapshot.fromJson(j['bs']),
+        showMySpeed: j['sms'] == true,
       );
     } catch (_) {
       return TripSettings();

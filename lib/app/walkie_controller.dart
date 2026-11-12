@@ -84,6 +84,7 @@ import '../trip/geo.dart';
 import '../trip/location_source.dart';
 import '../trip/range_logger.dart';
 import '../trip/sos.dart';
+import '../trip/speed_sample.dart';
 import '../trip/trip_controller.dart';
 import '../trip/trip_route.dart';
 import '../trip/battery_mode.dart';
@@ -1404,6 +1405,9 @@ class WalkieController extends ChangeNotifier {
   }
 
   String nameOf(int peerId) {
+    if (sampleSpeedOn && peerId == sampleSpeedFriendId) {
+      return sampleSpeedFriendName;
+    }
     if (sampleWeatherOn && peerId == sampleFriendId) return 'Casey (sample)';
     return manager.peer(peerId)?.displayName ??
         friendLinks.friend(peerId)?.name ??
@@ -1729,6 +1733,7 @@ class WalkieController extends ChangeNotifier {
 
     await _startWeatherAlerts();
     await _installSampleWeather();
+    _installSampleSpeed();
     await applyBackgroundSettings();
     await _applyPttConfig();
     notifyListeners();
@@ -2400,6 +2405,28 @@ class WalkieController extends ChangeNotifier {
   /// Debug sample counties are on the map right now. Never true in a
   /// release build (see [sampleWeatherActive]).
   bool sampleWeatherOn = false;
+
+  /// Debug sample speeds are on the map right now. Never true in a
+  /// release build (see [sampleSpeedActive]).
+  bool sampleSpeedOn = false;
+
+  /// A made-up friend and a wider camera, for screenshots. No GPS request.
+  void _installSampleSpeed() {
+    if (!sampleSpeedActive()) return;
+    final t = trip;
+    if (t == null) return;
+    final now = DateTime.now();
+    t.people[sampleSpeedFriendId] = PersonPos(
+      sampleSpeedFriendId,
+      sampleSpeedFriendPoint,
+      now,
+      TransportKind.ble,
+      1,
+    )..speedMps = sampleSpeedFriendMps;
+    t.camera.remember(sampleSpeedView, sampleSpeedZoom);
+    sampleSpeedOn = true;
+    t.notifyListeners();
+  }
 
   /// Load the sample Oregon alerts, or drop any left over from a debug run.
   Future<void> _installSampleWeather() async {

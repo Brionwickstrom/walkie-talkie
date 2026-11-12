@@ -2926,3 +2926,41 @@ The debug-only sample weather from v2.6.14 is unchanged: it still runs
 only in a debug build started with `--dart-define=SAMPLE_WX=true`.
 
 Tests: `test/v2615_mqtt_bridge_test.dart`.
+
+## v2.6.16: Speed labels on the Trip map
+
+A radio that has reported its own position (latitude and longitude) is
+drawn on the Trip map wherever it is. Before this, a plain Meshtastic
+radio was drawn only while it stood inside an active weather alert.
+Radios with no position are still not drawn; they stay on Radios nearby.
+Public radios are still never placed on the map. A radio that is already
+shown as an app user is not drawn a second time. The storm badge is
+unchanged: it appears on top only while that radio is inside an alert.
+
+**Speed under the name.** When the latest position included a speed and
+that position is still young, a small grey line sits under the name, with
+no box: "Yeti · 42 mph". The trip's miles / kilometres switch is the one
+already on the map settings. An app user's speed is the metres per second
+already in the live update. A radio's speed is Meshtastic
+`Position.ground_speed` (field 15), which the proto and the firmware both
+store as an integer number of km/h (`reader.speed.kmph()`). Young means
+under 2 minutes for a live app update, and under 10 minutes for a radio
+position or an app position that arrived over LoRa.
+
+**Show my speed on my dot.** Off until you turn it on. It sits in the
+Trip map panel under "Share my location with the group", and Settings
+search finds it ("speed", "my speed", "dot"). When it is on, your blue
+dot uses the same line from your latest fix. The choice is saved with
+the other trip settings.
+
+**Battery.** No new GPS polling, no new timer and no new radio traffic.
+The labels use positions that are already arriving. The map's existing
+redraw drops a label once the fix is no longer young.
+
+**Sample data, debug only.** A debug build started with
+`--dart-define=SAMPLE_SPEED=true` places a sample friend and a sample
+radio (outside the sample weather counties when those are also on). A
+release build ignores that flag. Sample weather is still
+`--dart-define=SAMPLE_WX=true`.
+
+Tests: `test/v2616_speed_label_test.dart`.

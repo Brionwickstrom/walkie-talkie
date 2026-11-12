@@ -202,6 +202,8 @@ class WxNodeSpot {
     required this.pos,
     this.public = false,
     this.self = false,
+    this.speedMps,
+    this.posAt,
   });
 
   final int id;
@@ -209,6 +211,60 @@ class WxNodeSpot {
   final GeoPoint pos;
   final bool public;
   final bool self;
+
+  /// Latest ground speed in m/s, when the position included one (v2.6.16).
+  final double? speedMps;
+
+  /// When that position was taken.
+  final DateTime? posAt;
+}
+
+/// A radio node as a map spot, or null when it has not reported a position.
+/// (0, 0) is Meshtastic's empty fix and is not a position.
+WxNodeSpot? spotForRadio({
+  required int id,
+  required String longName,
+  required String shortName,
+  required double? lat,
+  required double? lng,
+  required bool public,
+  required bool self,
+  double? speedMps,
+  DateTime? posAt,
+}) {
+  if (lat == null || lng == null || (lat == 0 && lng == 0)) return null;
+  final name = longName.isNotEmpty
+      ? longName
+      : (shortName.isNotEmpty ? shortName : 'Radio');
+  return WxNodeSpot(
+    id: id,
+    name: name,
+    pos: GeoPoint(lat, lng),
+    public: public,
+    self: self,
+    speedMps: speedMps,
+    posAt: posAt,
+  );
+}
+
+/// Radios that have reported a GPS position, drawn on the Trip map
+/// everywhere (v2.6.16). Weather does not decide this list: a storm badge
+/// is added later, only while the radio stands inside an alert. Public
+/// nodes stay off the map. A node already drawn as a friend is skipped.
+/// No position means it is not here.
+List<WxNodeSpot> radioSpotsToDraw({
+  required Iterable<WxNodeSpot> nodes,
+  required Set<int> skipIds,
+}) {
+  final out = <WxNodeSpot>[];
+  final seen = <int>{};
+  for (final n in nodes) {
+    if (n.public || n.self || skipIds.contains(n.id)) continue;
+    if (!n.pos.valid || (n.pos.lat == 0 && n.pos.lng == 0)) continue;
+    if (!seen.add(n.id)) continue;
+    out.add(n);
+  }
+  return out;
 }
 
 /// Nodes that should gain a map marker because they are inside an alert
