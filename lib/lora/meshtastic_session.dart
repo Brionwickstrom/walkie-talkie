@@ -35,6 +35,13 @@ class RadioNode {
   /// Where it shares its position (v2.4.2), null if it does not.
   double? lat, lng;
 
+  /// Latest position's ground speed in m/s (v2.6.16). Null when that
+  /// position did not include Position.ground_speed.
+  double? speedMps;
+
+  /// When that position was taken (its time, or when we heard it).
+  DateTime? posAt;
+
   /// The radio's channel slot it was heard on (decoded traffic only).
   int? channel;
   int hwModel = 0;
@@ -369,15 +376,14 @@ class MeshtasticSession {
         node.role = n.role;
         if (n.channel != null) node.channel = n.channel;
       }
-      final pos = n.position;
-      if (pos != null) {
-        node.lat = pos.lat;
-        node.lng = pos.lng;
-      }
       if (n.lastHeard > 0) {
         node.lastHeard = DateTime.fromMillisecondsSinceEpoch(
           n.lastHeard * 1000,
         );
+      }
+      final pos = n.position;
+      if (pos != null) {
+        _applyNodePosition(node, pos, node.lastHeard ?? _clock());
       }
       final bat = n.metrics?.batteryLevel;
       if (bat != null) node.battery = bat;
@@ -519,10 +525,7 @@ class MeshtasticSession {
     try {
       if (d.portnum == PortNum.position) {
         final pos = PositionPb.decode(d.payload);
-        if (pos != null) {
-          node.lat = pos.lat;
-          node.lng = pos.lng;
-        }
+        if (pos != null) _applyNodePosition(node, pos, now);
       } else if (d.portnum == PortNum.telemetry) {
         final dm = decodeTelemetryDeviceMetrics(d.payload);
         if (dm?.batteryLevel != null) node.battery = dm!.batteryLevel;
@@ -548,6 +551,17 @@ class MeshtasticSession {
     received++;
     if (!_packets.isClosed) _packets.add(p);
     return true;
+  }
+
+  /// Store a position the node already sent. Nothing is asked for.
+  /// Speed is cleared when this position did not include one.
+  void _applyNodePosition(RadioNode node, PositionPb pos, DateTime heard) {
+    node.lat = pos.lat;
+    node.lng = pos.lng;
+    node.speedMps = pos.groundSpeedMps;
+    node.posAt = pos.time > 0
+        ? DateTime.fromMillisecondsSinceEpoch(pos.time * 1000)
+        : heard;
   }
 
   void _noteOwn(PositionPb pos, {required bool live}) {

@@ -11,6 +11,8 @@ import '../app/walkie_controller.dart';
 import '../lora/meshtastic_session.dart' show RadioNode;
 import '../trip/friend_motion.dart';
 import '../trip/geo.dart';
+import '../trip/speed_label.dart';
+import '../trip/speed_sample.dart';
 import '../trip/geofence.dart';
 import '../trip/imports/map_layers.dart';
 import '../trip/imports/map_packs.dart';
@@ -34,6 +36,8 @@ import '../trip/trip_settings.dart';
 import '../trip/weather.dart';
 import '../weather/wx_areas.dart';
 import '../weather/wx_sample.dart';
+import 'settings_search.dart' show SettingAnchor;
+import 'speed_caption.dart';
 import 'wx_map_layer.dart';
 import 'battery_mode_ui.dart' show lockedNote;
 import 'home_view.dart';
@@ -143,6 +147,12 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
   /// going until an expiry takes it off.
   bool _wxDrew = false;
 
+  /// v2.6.16: a speed label is on screen, so the same tick can drop it
+  /// when the fix is no longer young. Not a new timer.
+  bool _speedOnMap = false;
+
+  final GlobalKey _showMySpeedKey = GlobalKey();
+
   /// Why the map opened where it did (tests, the "last view" chip).
   MapStartFrom? startFrom;
 
@@ -158,13 +168,14 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
       final tc = t;
       // Friends age out, and a weather area drops off when it expires.
       // No network: this only redraws a map that is already on screen.
-      final watching = tc != null && (tc.people.isNotEmpty || _wxDrew);
+      final watching =
+          tc != null && (tc.people.isNotEmpty || _wxDrew || _speedOnMap);
       if (mounted && _fg && watching) setState(() {});
     });
     t?.setVisible(true);
     // Sample weather opens on a fixed view. Following a GPS fix would
     // leave the counties.
-    if (sampleWeatherActive()) _follow = false;
+    if (sampleWeatherActive() || sampleSpeedActive()) _follow = false;
     if (Platform.isWindows) {
       unawaited(_importPcRange());
       _rangePc = Timer.periodic(
@@ -286,6 +297,7 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
           topLeft: [
             if (c.sampleWeatherOn)
               _SampleWeatherBanner(onClear: () => c.clearSampleWeather()),
+            if (c.sampleSpeedOn) const _SampleSpeedBanner(),
             if (trip.rangeRun.running)
               RangeRunStrip(actions: rangeRunActions(trip)),
             if (_drawShape != null)
@@ -461,6 +473,37 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
           pattern: StrokePattern.dotted(),
         ),
     ];
+    if (sampleSpeedActive()) {
+      // Debug sample only: keep the made-up fix young across redraws.
+      // No timer and no GPS. A release build never takes this branch.
+      final sample = trip.people[sampleSpeedFriendId];
+      if (sample != null) sample.at = wxNow;
+    }
+    final radios = _radioNodes();
+    final ownSpeed = me == null || !trip.settings.showMySpeed
+        ? null
+        : speedLabelText(
+            name: c.settings.name,
+            speedMps: me.speedMps,
+            at: me.at,
+            now: wxNow,
+            imperial: trip.settings.imperial,
+            freshFor: speedLabelFreshLive,
+          );
+    var speedOn = ownSpeed != null;
+    String? radioSpeed(WxNodeSpot n) {
+      final s = speedLabelText(
+        name: n.name,
+        speedMps: n.speedMps,
+        at: n.posAt,
+        now: wxNow,
+        imperial: trip.settings.imperial,
+        freshFor: speedLabelFreshRadio,
+      );
+      if (s != null) speedOn = true;
+      return s;
+    }
+
     final markers = <Marker>[
       if (drive != null)
         Marker(
@@ -551,56 +594,65 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
           ),
           onTap: () => _personSheet(context, trip, pp.id),
         ),
-      for (final n in _wxNodes(wxDraw))
+      for (final n in radios)
         Marker(
           key: Key('wx-node-${n.id}'),
           point: ll(n.pos),
-          width: 120,
-          height: 52,
+          width: 150,
+          height: radioSpeed(n) == null ? 52 : 72,
           child: GestureDetector(
             onTap: () => _wxNodeSheet(context, n, wxAreasAt(n.pos, wxDraw)),
             child: WxNodeMarker(
               name: n.name,
               alertLine: wxInAlertLine(wxAreasAt(n.pos, wxDraw)),
               badgeKey: Key('wx-badge-node-${n.id}'),
+              speedLabel: radioSpeed(n),
+              speedKey: Key('speed-radio-${n.id}'),
             ),
           ),
         ),
       if (me != null)
         Marker(
+          key: const Key('my-dot'),
           point: ll(me.pos),
-          width: 44,
-          height: 44,
-          child: Stack(
-            alignment: Alignment.center,
-            clipBehavior: Clip.none,
-            children: [
-              Container(
-                width: 20,
-                height: 20,
-                decoration: BoxDecoration(
-                  color: Colors.blue,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white, width: 3),
+          width: ownSpeed == null ? 44 : 150,
+          height: ownSpeed == null ? 44 : 72,
+          child: ownSpeed == null
+              ? _ownDot(trip, me, wxDraw)
+              : Stack(
+                  alignment: Alignment.center,
+                  clipBehavior: Clip.none,
+                  children: [
+                    SizedBox(
+                      width: 44,
+                      height: 44,
+                      child: _ownDot(trip, me, wxDraw),
+                    ),
+                    Positioned(
+                      bottom: 0,
+                      left: 0,
+                      right: 0,
+                      child: SpeedCaption(ownSpeed, key: const Key('my-speed')),
+                    ),
+                  ],
                 ),
-              ),
-              if (trip.heading != null)
-                BearingArrow(
-                  angleDeg: trip.heading!,
-                  size: 40,
-                  color: Colors.blue.withValues(alpha: 0.6),
-                ),
-              if (wxInAlertLine(wxAreasAt(me.pos, wxDraw)) case final note
-                  when note.isNotEmpty)
-                Positioned(
-                  right: 0,
-                  top: 0,
-                  child: WxAlertBadge(key: const Key('wx-badge-me'), tip: note),
-                ),
-            ],
-          ),
         ),
     ];
+    for (final pp in trip.people.values) {
+      if (speedLabelText(
+            name: c.nameOf(pp.id),
+            speedMps: pp.speedMps,
+            at: pp.at,
+            now: wxNow,
+            imperial: trip.settings.imperial,
+            freshFor: speedFreshFor(pp.via),
+          ) !=
+          null) {
+        speedOn = true;
+        break;
+      }
+    }
+    _speedOnMap = speedOn;
     return Stack(
       children: [
         FlutterMap(
@@ -887,6 +939,17 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
     ),
   );
 
+  /// Scrolls the Trip panel to "Show my speed on my dot" (Settings search).
+  void revealMySpeedSetting() {
+    if (!mounted) return;
+    setFullScreen(false);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = _showMySpeedKey.currentContext;
+      if (ctx == null || !ctx.mounted) return;
+      Scrollable.ensureVisible(ctx, alignment: 0.2);
+    });
+  }
+
   /// Opens the Range test page (from the Settings search, v2.6.2).
   void openRangeTest() {
     final tc = t;
@@ -1034,28 +1097,64 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
     return wxMapAreas(alerts: w.active, zones: w.zoneOutlines(now), now: now);
   }
 
-  List<WxNodeSpot> _wxNodes(List<WxMapArea> areas) {
-    if (areas.isEmpty) return const [];
-    final sess = c.radioDevice.session;
-    if (sess == null) return const [];
-    final me = sess.myNodeNum;
-    final spots = <WxNodeSpot>[
-      for (final n in sess.nodes.values)
-        if (n.lat != null && n.lng != null && !(n.lat == 0 && n.lng == 0))
-          WxNodeSpot(
-            id: n.num,
-            name: n.longName.isNotEmpty
-                ? n.longName
-                : (n.shortName.isNotEmpty ? n.shortName : 'Radio'),
-            pos: GeoPoint(n.lat!, n.lng!),
-            public: sess.isPublicNode(n),
-            self: n.num == me,
+  Widget _ownDot(TripController trip, Fix me, List<WxMapArea> wxDraw) {
+    return Stack(
+      alignment: Alignment.center,
+      clipBehavior: Clip.none,
+      children: [
+        Container(
+          width: 20,
+          height: 20,
+          decoration: BoxDecoration(
+            color: Colors.blue,
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white, width: 3),
           ),
-    ];
+        ),
+        if (trip.heading != null)
+          BearingArrow(
+            angleDeg: trip.heading!,
+            size: 40,
+            color: Colors.blue.withValues(alpha: 0.6),
+          ),
+        if (wxInAlertLine(wxAreasAt(me.pos, wxDraw)) case final note
+            when note.isNotEmpty)
+          Positioned(
+            right: 0,
+            top: 0,
+            child: WxAlertBadge(key: const Key('wx-badge-me'), tip: note),
+          ),
+      ],
+    );
+  }
+
+  /// Radios with their own GPS position, everywhere on the map. A weather
+  /// area is not required. Radios with no position stay on Radios nearby.
+  List<WxNodeSpot> _radioNodes() {
+    final sess = c.radioDevice.session;
+    final spots = <WxNodeSpot>[];
+    if (sess != null) {
+      final me = sess.myNodeNum;
+      for (final n in sess.nodes.values) {
+        final s = spotForRadio(
+          id: n.num,
+          longName: n.longName,
+          shortName: n.shortName,
+          lat: n.lat,
+          lng: n.lng,
+          public: sess.isPublicNode(n),
+          self: n.num == me,
+          speedMps: n.speedMps,
+          posAt: n.posAt,
+        );
+        if (s != null) spots.add(s);
+      }
+    }
+    if (sampleSpeedActive()) spots.add(sampleRadioSpot(DateTime.now()));
     final skip = <int>{
       for (final s in c.loraTransport.peerSignals.values) s.node,
     };
-    return wxNodesInside(nodes: spots, skipIds: skip, areas: areas);
+    return radioSpotsToDraw(nodes: spots, skipIds: skip);
   }
 
   Future<void> _wxSheet(BuildContext context, List<WxMapArea> hits) {
@@ -2717,6 +2816,11 @@ class TripPageState extends State<TripPage> with WidgetsBindingObserver {
               ? null
               : (v) => trip.update((s) => s.tripMode = v),
         ),
+        ShowMySpeedTile(
+          key: _showMySpeedKey,
+          value: trip.settings.showMySpeed,
+          onChanged: (v) => trip.update((s) => s.showMySpeed = v),
+        ),
         SwitchListTile(
           key: const Key('tripOfflineSaver'),
           contentPadding: EdgeInsets.zero,
@@ -3275,6 +3379,61 @@ FriendlyError _forecastError(bool hasPlace) => hasPlace
       );
 
 /// Yellow strip on the Trip map while debug sample alerts are showing.
+/// "Show my speed on my dot" (v2.6.16). Default off. The same label the
+/// other dots use, from this phone's latest fix.
+class ShowMySpeedTile extends StatelessWidget {
+  const ShowMySpeedTile({
+    super.key,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return SettingAnchor(
+      id: 'show-my-speed',
+      child: SwitchListTile(
+        key: const Key('showMySpeed'),
+        contentPadding: EdgeInsets.zero,
+        title: const Text('Show my speed on my dot'),
+        subtitle: const Text(
+          'A small speed under your blue dot when your latest fix has one.',
+        ),
+        value: value,
+        onChanged: onChanged,
+      ),
+    );
+  }
+}
+
+class _SampleSpeedBanner extends StatelessWidget {
+  const _SampleSpeedBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: const Color(0xFFE3F2FD),
+      elevation: 3,
+      borderRadius: BorderRadius.circular(8),
+      child: const Padding(
+        padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        child: Text(
+          'Sample speeds — not a live position',
+          key: Key('sample-speed-banner'),
+          style: TextStyle(
+            color: Colors.black,
+            fontWeight: FontWeight.w700,
+            fontSize: 13,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _SampleWeatherBanner extends StatelessWidget {
   const _SampleWeatherBanner({required this.onClear});
   final Future<void> Function() onClear;

@@ -963,4 +963,22 @@ const settingsIndex = <SettingEntry>[
     home: SettingsHome.trip,
     needs: SettingNeeds.trip,
   ),
+  SettingEntry(
+    id: 'show-my-speed',
+    title: 'Show my speed on my dot',
+    section: 'Location',
+    about: 'A small speed under your blue dot, from your latest fix.',
+    words: [
+      'speed',
+      'mph',
+      'kmh',
+      'km/h',
+      'dot',
+      'label',
+      'my speed',
+      'own speed',
+    ],
+    home: SettingsHome.trip,
+    needs: SettingNeeds.trip,
+  ),
 ];

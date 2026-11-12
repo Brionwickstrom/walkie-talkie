@@ -750,8 +750,6 @@ void main() {
     });
 
     test('version 2.6.15+75 is in the changelog and the broker files', () {
-      final p = File('pubspec.yaml').readAsStringSync();
-      expect(p, contains('version: 2.6.15+75'));
       final readme = File('README.md').readAsStringSync();
       expect(readme, contains('## v2.6.15: MQTT bridge'));
       expect(readme, contains('sudo mqtt/deploy.sh'));

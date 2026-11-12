@@ -9,6 +9,7 @@ import 'mqtt/mqtt_secret.dart';
 import 'platform/platform_caps.dart';
 import 'app/walkie_controller.dart';
 import 'ui/home_page.dart';
+import 'trip/speed_sample.dart';
 import 'weather/wx_sample.dart';
 
 Future<void> main() async {
@@ -22,7 +23,7 @@ Future<void> main() async {
   );
   // Sample weather is a debug screenshot aid. Skip the first-run wizard so
   // the Trip map is reachable. A release build never takes this branch.
-  if (sampleWeatherActive()) {
+  if (sampleWeatherActive() || sampleSpeedActive()) {
     controller.settings
       ..setupDone = true
       ..setupPromptShown = true

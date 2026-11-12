@@ -1305,7 +1305,9 @@ class _HomePageState extends State<HomePage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final trip = _tripKey.currentState;
       if (trip == null) return;
-      if (id.startsWith('geofence')) {
+      if (id == 'show-my-speed') {
+        trip.revealMySpeedSetting();
+      } else if (id.startsWith('geofence')) {
         trip.openGeofences();
       } else {
         trip.openRangeTest();
