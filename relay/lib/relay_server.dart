@@ -32,8 +32,79 @@ import 'dart:io';
 /// Hardening: max message size, per-connection rate limit (messages and
 /// bytes per second, token bucket), sockets that stay silent for
 /// [idleTimeout] are dropped, room name / count limits.
+///
+/// v1.4.1 connection log (behaviour unchanged): one line on stdout (the
+/// container log) for every WebSocket that opens, every refused upgrade,
+/// every close (by the relay or by the client / proxy, with the close code
+/// and reason) and rate-limited frames, with the client's claimed id, room,
+/// socket peer address, X-Forwarded-For / X-Real-IP (set by Tailscale
+/// Funnel and other proxies), User-Agent and app version (`&v=`) when sent.
 /// Bump with every relay change so `/healthz` shows which deploy is live.
-const String relayVersion = '1.4.0';
+const String relayVersion = '1.4.1';
+
+/// Who is connecting, for the connection log (v1.4.1).
+class RelayPeer {
+  RelayPeer({
+    required this.remote,
+    this.forwardedFor = '',
+    this.realIp = '',
+    this.userAgent = '',
+    this.appVersion = '',
+    this.id = '',
+    this.room = '',
+    this.path = '',
+  });
+
+  /// Peer address and port of the TCP socket ("-" if unknown).
+  final String remote;
+  final String forwardedFor;
+  final String realIp;
+  final String userAgent;
+  final String appVersion;
+  final String id;
+  final String room;
+  final String path;
+
+  factory RelayPeer.of(HttpRequest req) {
+    String h(String name) => _clean(req.headers.value(name) ?? '');
+    final ci = req.connectionInfo;
+    final q = req.uri.queryParameters;
+    return RelayPeer(
+      remote: ci == null ? '-' : '${ci.remoteAddress.address}:${ci.remotePort}',
+      forwardedFor: h('x-forwarded-for'),
+      realIp: h('x-real-ip'),
+      userAgent: h('user-agent'),
+      appVersion: _clean(q['v'] ?? q['app'] ?? ''),
+      id: _clean(q['id'] ?? ''),
+      room: _clean(q['ch'] ?? ''),
+      path: _clean(req.uri.path),
+    );
+  }
+
+  /// Log values are single line and bounded (headers are client input).
+  static String _clean(String v) {
+    final s = v.replaceAll(RegExp(r'[\x00-\x1f\x7f"]'), '?');
+    return s.length > 120 ? '${s.substring(0, 120)}...' : s;
+  }
+
+  String describe() {
+    final b = StringBuffer('remote=$remote');
+    if (forwardedFor.isNotEmpty) b.write(' xff="$forwardedFor"');
+    if (realIp.isNotEmpty) b.write(' xrealip="$realIp"');
+    b.write(' id="$id" room="$room"');
+    if (path.isNotEmpty && path != '/ws') b.write(' path="$path"');
+    if (appVersion.isNotEmpty) b.write(' app="$appVersion"');
+    b.write(' ua="$userAgent"');
+    return b.toString();
+  }
+}
+
+/// Default connection log sink: UTC timestamp + line on stdout.
+void _stdoutLog(String line) {
+  try {
+    stdout.writeln('${DateTime.now().toUtc().toIso8601String()} $line');
+  } catch (_) {}
+}
 
 /// e.g. "relay 1.3.1 commit 1a2b3c4 rooms 2 clients 3" (Render sets
 /// RENDER_GIT_COMMIT for the running deploy).
@@ -53,9 +124,13 @@ class RelayServer {
     required this.rosterInterval,
     required this.silentGrace,
     required this.silentAfter,
+    required this.log,
   });
 
   final HttpServer _server;
+
+  /// Connection log sink (v1.4.1). Defaults to stdout.
+  final void Function(String line) log;
   final int maxMessageBytes;
   final int maxMessagesPerSecond;
   final int maxBytesPerSecond;
@@ -104,6 +179,7 @@ class RelayServer {
     Duration rosterInterval = const Duration(seconds: 5),
     Duration silentGrace = const Duration(seconds: 10),
     Duration silentAfter = const Duration(seconds: 90),
+    void Function(String line)? log,
   }) async {
     final http = await HttpServer.bind(address, port);
     final relay = RelayServer._(
@@ -116,6 +192,7 @@ class RelayServer {
       rosterInterval: rosterInterval,
       silentGrace: silentGrace,
       silentAfter: silentAfter,
+      log: log ?? _stdoutLog,
     );
     http.listen(relay._handle, onError: (_) {});
     relay._sweeper = Timer.periodic(
@@ -134,6 +211,7 @@ class RelayServer {
   static final _roomRe = RegExp(r'^[A-Za-z0-9_-]{1,32}$');
 
   Future<void> _handle(HttpRequest req) async {
+    RelayPeer? peer;
     try {
       final path = req.uri.path;
       if (!WebSocketTransformer.isUpgradeRequest(req)) {
@@ -146,24 +224,40 @@ class RelayServer {
         await req.response.close();
         return;
       }
+      peer = RelayPeer.of(req);
       if (path != '/ws' && path != '/') {
+        log('relay refuse reason="unknown path" status=404 ${peer.describe()}');
         req.response.statusCode = HttpStatus.notFound;
         await req.response.close();
         return;
       }
       final room = req.uri.queryParameters['ch'] ?? '1';
       if (!_roomRe.hasMatch(room)) {
+        log('relay refuse reason="bad room name" status=400 ${peer.describe()}');
         req.response.statusCode = HttpStatus.badRequest;
         await req.response.close();
         return;
       }
       final members = _rooms[room];
       if (members != null && members.length >= maxRoomSize) {
+        log(
+          'relay refuse reason="room full" status=503 '
+          'members=${members.length} max=$maxRoomSize ${peer.describe()}',
+        );
         req.response.statusCode = HttpStatus.serviceUnavailable;
         await req.response.close();
         return;
       }
-      final ws = await WebSocketTransformer.upgrade(req);
+      final WebSocket ws;
+      try {
+        ws = await WebSocketTransformer.upgrade(req);
+      } catch (e) {
+        log(
+          'relay refuse reason="upgrade failed" '
+          'error="${RelayPeer._clean('$e')}" ${peer.describe()}',
+        );
+        rethrow;
+      }
       ws.pingInterval = const Duration(seconds: 20);
       final q = req.uri.queryParameters;
       final id = q['id'] ?? '';
@@ -173,16 +267,33 @@ class RelayServer {
         this,
         id: RegExp(r'^[0-9a-fA-F]{1,16}$').hasMatch(id) ? id.toLowerCase() : '',
         roster: q['r'] == '1',
+        peer: peer,
       );
       _rooms.putIfAbsent(room, () => <_Client>{}).add(c);
       _rosterChanged(room);
+      log(
+        'relay open members=${_rooms[room]!.length} '
+        'ext="${RelayPeer._clean(ws.extensions)}" ${peer.describe()}',
+      );
       ws.listen(
         c.onMessage,
-        onDone: () => _leave(c),
-        onError: (_) => _leave(c),
+        onDone: () {
+          c.logClosed(null);
+          _leave(c);
+        },
+        onError: (Object e) {
+          c.logClosed(e);
+          _leave(c);
+        },
         cancelOnError: true,
       );
-    } catch (_) {
+    } catch (e) {
+      if (peer != null) {
+        log(
+          'relay refuse reason="error" error="${RelayPeer._clean('$e')}" '
+          '${peer.describe()}',
+        );
+      }
       try {
         await req.response.close();
       } catch (_) {}
@@ -294,7 +405,9 @@ class _Client {
     this.server, {
     this.id = '',
     this.roster = false,
-  })  : _msgTokens = server.maxMessagesPerSecond.toDouble(),
+    RelayPeer? peer,
+  })  : peer = peer ?? RelayPeer(remote: '-'),
+        _msgTokens = server.maxMessagesPerSecond.toDouble(),
         _byteTokens = server.maxBytesPerSecond.toDouble();
 
   final WebSocket ws;
@@ -307,6 +420,45 @@ class _Client {
 
   /// Asked for the room roster (`&r=1`, app 1.9.4+).
   final bool roster;
+
+  /// For the connection log (v1.4.1).
+  final RelayPeer peer;
+
+  /// Frames dropped by the rate limit / sent before the close (log only).
+  int limited = 0;
+  int received = 0;
+
+  /// Set when the relay itself closes the socket ([drop]).
+  String? dropReason;
+  bool _closeLogged = false;
+
+  String get _age =>
+      '${(DateTime.now().difference(connectedAt).inMilliseconds / 1000).toStringAsFixed(1)}s';
+
+  /// The socket ended: log who closed it and why (v1.4.1).
+  void logClosed(Object? error) {
+    if (_closeLogged) return;
+    _closeLogged = true;
+    final by = dropReason != null ? 'relay' : 'client';
+    final why = dropReason ??
+        (error != null
+            ? 'socket error'
+            : ws.closeCode == null ||
+                    ws.closeCode == 1005 ||
+                    ws.closeCode == 1006
+                ? 'connection dropped without a close frame'
+                : 'closed by client');
+    final b = StringBuffer(
+      'relay close by=$by reason="${RelayPeer._clean(why)}" '
+      'code=${ws.closeCode ?? '-'} '
+      'peer_reason="${RelayPeer._clean(ws.closeReason ?? '')}"',
+    );
+    if (error != null) b.write(' error="${RelayPeer._clean('$error')}"');
+    b.write(' after=$_age frames=$received limited=$limited');
+    b.write(' ${peer.describe()}');
+    server.log(b.toString());
+  }
+
   final DateTime connectedAt = DateTime.now();
 
   /// Last binary frame from this socket (null: none yet).
@@ -333,6 +485,7 @@ class _Client {
     if (_dropped) return;
     final now = DateTime.now();
     lastHeard = now;
+    received++;
     final size = data is String ? data.length : (data as List<int>).length;
     if (size > server.maxMessageBytes) {
       drop(1009, 'message too big');
@@ -349,7 +502,18 @@ class _Client {
       0,
       2.0 * server.maxBytesPerSecond,
     );
-    if (_msgTokens < 1 || _byteTokens < size) return; // over the limit: drop
+    if (_msgTokens < 1 || _byteTokens < size) {
+      // Over the limit: the frame is dropped (socket stays open). Logged on
+      // the first drop and then every 100th, so a flood cannot flood the log.
+      limited++;
+      if (limited == 1 || limited % 100 == 0) {
+        server.log(
+          'relay ratelimit dropped=$limited size=$size '
+          'after=$_age ${peer.describe()}',
+        );
+      }
+      return;
+    }
     _msgTokens -= 1;
     _byteTokens -= size;
     if (data is String) {
@@ -367,6 +531,11 @@ class _Client {
   void drop(int code, String reason) {
     if (_dropped) return;
     _dropped = true;
+    dropReason = reason;
+    server.log(
+      'relay drop reason="$reason" code=$code after=$_age '
+      'frames=$received limited=$limited ${peer.describe()}',
+    );
     server._leave(this);
     ws.close(code, reason).catchError((_) {});
   }

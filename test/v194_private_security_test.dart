@@ -70,12 +70,12 @@ void main() {
   group('relay 1.4.0 stays compatible with older apps', () {
     test('healthz says 1.4.0', () async {
       final s = await RelayServer.bind(address: '127.0.0.1', port: 0);
-      expect(relayVersion, '1.4.0');
+      expect(relayVersion, '1.4.1');
       final sock = await Socket.connect('127.0.0.1', s.port);
       sock.write('GET /healthz HTTP/1.0\r\nHost: x\r\n\r\n');
       final body = await utf8.decodeStream(sock);
       expect(body, contains('200'));
-      expect(body, contains('ok relay 1.4.0'));
+      expect(body, contains('ok relay 1.4.1'));
       sock.destroy();
       await s.close();
     });
