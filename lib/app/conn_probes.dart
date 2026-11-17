@@ -76,7 +76,12 @@ Future<RelayProbe> probeRelay({
         }
       },
       onDone: () {
-        if (!pong.isCompleted) pong.completeError('closed by the relay');
+        // Say what actually ended the socket (close code / network error
+        // from OkHttp or dart:io), not a guess: a proxy, the carrier or
+        // the phone can end it too, not only the relay.
+        if (!pong.isCompleted) {
+          pong.completeError(closedBeforePong(sock?.closeReason, connectMs));
+        }
       },
       onError: (Object e) {
         if (!pong.isCompleted) pong.completeError('$e');
@@ -115,4 +120,13 @@ Future<RelayProbe> probeRelay({
   } finally {
     unawaited(sock.close().catchError((_) {}));
   }
+}
+
+/// The probe's error when the socket ended before the pong (v2.6.17):
+/// the real close reason from the connector ("closed 1006",
+/// "unexpected end of stream", ...) and how long after connecting.
+String closedBeforePong(String? reason, int connectMs) {
+  final r = (reason ?? '').trim();
+  return 'connected in ${connectMs}ms, then closed before the ping answer'
+      '${r.isEmpty ? ' (no reason given)' : ': $r'}';
 }
